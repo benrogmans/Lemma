@@ -5,8 +5,14 @@ import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
-
-/** Result of {@link Engine#run}. */
+/**
+ * Response.
+ * @param spec spec
+ * @param effective effective
+ * @param specEffectiveFrom specEffectiveFrom
+ * @param specEffectiveTo specEffectiveTo
+ * @param results results
+ */
 public record Response(
     String spec,
     String effective,
@@ -14,6 +20,13 @@ public record Response(
     @Nullable String specEffectiveTo,
     Map<String, RuleResult> results) {
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static Response read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "Response");
     String spec = null;

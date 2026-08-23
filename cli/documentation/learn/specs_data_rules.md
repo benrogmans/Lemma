@@ -59,8 +59,8 @@ data status: text
   -> option "inactive"
 
 data amount: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
 ```
 
@@ -90,8 +90,8 @@ data rating: number
   -> maximum 100
 
 data amount: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
 
 rule max_amount: 100_000 eur

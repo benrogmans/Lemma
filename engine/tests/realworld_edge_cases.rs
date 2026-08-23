@@ -667,7 +667,7 @@ rule total: base_price + tax_amount
 
 spec custom
 uses c: config
-with c.tax_rate: 25%
+  -> with tax_rate: 25%
 rule custom_total: c.total
 "#
             .to_string(),

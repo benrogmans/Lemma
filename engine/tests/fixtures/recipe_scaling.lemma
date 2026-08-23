@@ -9,7 +9,7 @@ Measure a recipe up or down based on servings needed.
 uses lemma units
 
 data temperature: measure
-  -> unit celsius 1.0
+  -> unit celsius: 1.0
 
 data recipe: text
   -> option "chocolate_cake"

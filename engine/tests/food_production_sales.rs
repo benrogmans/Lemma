@@ -88,11 +88,11 @@ spec ingredient_costing
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
   -> decimals 2
 
 data unit_price: measure
-  -> unit eur_per_kg eur/kilogram
+  -> unit eur_per_kg: eur/kilogram
 
 data flour_bag_weight: 25 kilogram
 data flour_bag_price: 18.75 eur
@@ -460,9 +460,9 @@ fn multi_currency_pricing() {
 spec currency_pricing
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
-  -> unit gbp 1.17
+  -> unit eur: 1.00
+  -> unit usd: 0.91
+  -> unit gbp: 1.17
   -> decimals 2
 
 data base_price: 24.50 eur
@@ -586,10 +586,10 @@ spec cost_per_weight
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data cost_rate: measure
-  -> unit eur_per_kg eur/kilogram
+  -> unit eur_per_kg: eur/kilogram
 
 data shipment_weight: 340 kilogram
 data rate: cost_rate -> suggest 1.85 eur_per_kg

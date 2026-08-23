@@ -526,9 +526,9 @@ fn named_compound_measure_literal_explains_named_unit() {
 spec named_rate
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 rule out: 50 eur_per_hour
 "#,
     );
@@ -604,8 +604,8 @@ fn measure_as_unit_conversion_narrated_when_folded() {
 spec measure_as
 uses lemma units
 data mass: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
+  -> unit kilogram: 1
+  -> unit gram: 0.001
   -> suggest 2 kilogram
 rule out: mass as gram
 "#,

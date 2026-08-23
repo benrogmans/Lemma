@@ -186,8 +186,8 @@ fn measure_result_magnitude_decimal() {
     let code = r#"
 spec s
 data money: measure
-    -> unit eur 1
-    -> unit usd 0.84
+    -> unit eur: 1
+    -> unit usd: 0.84
 data amount: 100 usd
 rule converted: amount as eur
 "#;

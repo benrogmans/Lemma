@@ -10,7 +10,7 @@ fn source() -> lemma::SourceType {
 
 const MONEY_TYPEDEF: &str = r#"
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 "#;
 
 fn eval_literal(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {

@@ -51,18 +51,17 @@ data salary: 5000
 spec manager
 
 uses employee: base_employee
-
-with employee.name:   "Alice Smith"
-with employee.salary: 8000
+  -> with name: "Alice Smith"
+  -> with salary: 8000
 
 rule manager_bonus: employee.salary * 0.15
 ```
 
 `uses alias: target` imports a Spec under an explicit alias; a bare `uses target` defaults the alias to the last path segment. Read Data and Rules as `alias.field` or `alias.rule_name`.
 
-## Setting Data on an import (With)
+## Setting Data on an import (`uses` block)
 
-Uses registers an import; it does not set runtime values on the dependency. Use `with alias.field: …` to assign a literal or reference to a Data slot declared on the imported Spec:
+`uses` registers an import; it does not set runtime values on the dependency. Bind imported slots under the `uses` line with `-> with path: …` (path relative to the imported spec):
 
 ```lemma
 spec inner
@@ -74,18 +73,18 @@ data x: number
 spec outer
 
 uses i: inner
-with i.x: 42
+  -> with x: 42
 
 rule r: i.x
 ```
 
-- `with i.x: 42` sets Data `x` on `inner` to `42`.
-- `with i.x: i` is an error: `i` is a Spec reference, not a value.
-- `with copy: i.x` is a parse error: With must use an import path on the left (`with i.x: …`), not a local name.
+- `-> with x: 42` sets Data `x` on `inner` to `42`.
+- `-> with x: i` is an error: `i` is a Spec reference, not a value.
+- Standalone `with copy: i.x` is a parse error; bindings live under `uses`.
 
-The left-hand side of With must be an import path; local slots use Data. Runtime inputs to `run` can still override bound import paths (e.g. `i.x`) where planning allows.
+The binding path must be relative to the imported spec (`x`, not `i.x`). Local slots use `data`. Runtime inputs to `run` can still override bound import paths (e.g. `i.x`) where planning allows.
 
-See [Setting Data on an imported Spec](../reference/readme.md#setting-data-on-an-imported-spec-with).
+See [Setting data on an imported spec](../reference/readme.md#setting-data-on-an-imported-spec-uses-block).
 
 ## Temporal versions
 
@@ -156,14 +155,14 @@ A consumer with no effective date on its Spec line (origin) still gets slices wh
 spec finance
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 
 spec finance 2025-07-01
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
 
 
 spec shop 2025-01-01
@@ -265,7 +264,7 @@ spec invoicing
 uses @iso/countries alpha2
 
 data price: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data country: alpha2.code
 
@@ -311,7 +310,7 @@ Run-data-aware discovery of what a concrete `run` still needs comes from each ru
 | Lock a regulation / tariff / spec version at a known date | `uses dep 2025-06-01` |
 | Import an earlier row of the same Spec name | `uses prev: finance 2026-01-01` |
 | Reuse a Data shape from a library | `uses iso: @iso/countries alpha2` and `data x: iso.code` |
-| Set Data on an imported Spec | `with alias.field: value` |
+| Set Data on an imported Spec | `uses alias: spec` then `  -> with path: value` |
 | Read import Data in a Rule | `rule r: alias.field` |
 
 If planning fails, check whether the message is coverage, interface, self-reference, or cycle. Each remedy is different (see above).

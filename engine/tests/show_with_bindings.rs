@@ -38,13 +38,13 @@ spec bag
 uses lemma units
 
 data weight: measure
-  -> unit kg 1
+  -> unit kg: 1
 
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data price_per_weight: measure
-  -> unit eur_per_kg eur/kg
+  -> unit eur_per_kg: eur/kg
 
 data item_cost: price_per_weight
 data roasting: price_per_weight
@@ -54,8 +54,8 @@ rule total_price: weight * (item_cost + roasting + chocolatizing)
 
 spec calc
 uses bag
-with bag.item_cost: item_cost
-with bag.roasting: roasting
+  -> with item_cost: item_cost
+  -> with roasting: roasting
 
 data type_of_nut: text -> options "peanut" "cashew"
 
@@ -143,7 +143,7 @@ data v: number
 
 spec outer
 uses i: inner
-with i.v: 42
+  -> with v: 42
 rule r: i.v
 "#;
 
@@ -173,7 +173,7 @@ data b: number
 
 spec outer
 uses i: inner
-with i.a: i.b
+  -> with a: i.b
 data input: number
 rule r: i.a + input
 "#;
@@ -208,7 +208,7 @@ data v: number
 
 spec outer
 uses i: inner
-with i.v: 10
+  -> with v: 10
 rule r: i.v
 "#;
 
@@ -314,13 +314,13 @@ spec bag
 uses lemma units
 
 data weight: measure
-  -> unit kg 1
+  -> unit kg: 1
 
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data price_per_weight: measure
-  -> unit eur_per_kg eur/kg
+  -> unit eur_per_kg: eur/kg
 
 data item_cost: price_per_weight
 data roasting: price_per_weight
@@ -330,8 +330,8 @@ rule total_price: weight * (item_cost + roasting + chocolatizing)
 
 spec calc
 uses bag
-with bag.item_cost: item_cost
-with bag.roasting: roasting
+  -> with item_cost: item_cost
+  -> with roasting: roasting
 
 data type_of_nut: text -> options "peanut" "cashew"
 

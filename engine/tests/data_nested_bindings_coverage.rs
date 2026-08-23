@@ -60,7 +60,7 @@ data x: number
 
 spec outer
 uses i: inner
-with i.x: 42
+  -> with x: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -83,7 +83,7 @@ uses l: leaf
 
 spec outer
 uses m: middle
-with m.l.v: 7
+  -> with l.v: 7
 rule r: m.l.v
 "#;
     let mut engine = Engine::new();
@@ -108,8 +108,49 @@ rule r: x
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.contains("not a spec reference") || joined.contains("is not a spec reference"),
-        "binding through non-spec-ref first segment must be rejected, got: {joined}"
+        joined.contains("uses") || joined.contains("standalone"),
+        "standalone with must be rejected at parse, got: {joined}"
+    );
+}
+
+#[test]
+fn stdlib_units_with_missing_with_target_is_rejected() {
+    let code = r#"
+spec outer
+uses lemma units
+  -> with non_existing_data: 1
+rule r: 1
+"#;
+    let mut engine = Engine::new();
+    let joined = load_err_joined(&mut engine, code);
+    assert!(
+        joined.contains("`units` has no data field `non_existing_data`"),
+        "got:\n{joined}"
+    );
+    assert!(!joined.contains("Data binding"), "got:\n{joined}");
+    assert!(
+        !joined.contains("Did you mean"),
+        "no close field — should not suggest Did you mean, got:\n{joined}"
+    );
+}
+
+#[test]
+fn stdlib_units_with_typo_with_target_suggests_did_you_mean() {
+    let code = r#"
+spec outer
+uses lemma units
+  -> with durration: 1
+rule r: 1
+"#;
+    let mut engine = Engine::new();
+    let joined = load_err_joined(&mut engine, code);
+    assert!(
+        joined.contains("`units` has no data field `durration`"),
+        "got:\n{joined}"
+    );
+    assert!(
+        joined.contains("Did you mean `duration`?"),
+        "expected typo hint for durration → duration, got:\n{joined}"
     );
 }
 
@@ -121,7 +162,7 @@ data x: number
 
 spec outer
 uses i: inner
-with i.nonexistent: 42
+  -> with nonexistent: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -142,8 +183,8 @@ data x: number
 
 spec outer
 uses i: inner
-with i.x: 1
-with i.x: 2
+  -> with x: 1
+  -> with x: 2
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -172,7 +213,9 @@ rule r: i.x
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.contains("literal value")
+        joined.contains("dotted")
+            || joined.contains("uses")
+            || joined.contains("literal value")
             || joined.contains("data definition")
             || joined.contains("Binding paths")
             || joined.contains("`with`"),
@@ -192,8 +235,8 @@ data x: number
 
 spec outer
 uses i: inner
+  -> with x: spec other
 uses o: other
-with i.x: spec other
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -214,7 +257,7 @@ data x: number
 
 spec outer
 uses i: inner
-with i.x: 42
+  -> with x: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -243,7 +286,7 @@ uses l: leaf
 
 spec outer
 uses m: middle
-with m.l.v: 5
+  -> with l.v: 5
 rule r: m.l.v
 "#;
     let mut engine = Engine::new();

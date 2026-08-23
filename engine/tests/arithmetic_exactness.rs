@@ -183,10 +183,10 @@ fn hourly_rate_times_date_range_yields_eur_total() {
     let code = r#"spec wage
 uses lemma units
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 data rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 data hourly_rate: 50 eur_per_hour
 data period_start: 2026-01-01
 data period_end: 2026-01-02

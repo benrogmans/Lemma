@@ -1,4 +1,5 @@
 use crate::parsing::ast::{DataValue, WithRhs};
+
 use crate::parsing::parse;
 
 #[test]
@@ -20,9 +21,10 @@ uses contract: employment_contract"#;
         result[0].data[1].reference,
         crate::parsing::ast::Reference::local("contract".to_string())
     );
-    if let DataValue::Import(spec_ref) = &result[0].data[1].value {
+    if let DataValue::Import { spec_ref, bindings } = &result[0].data[1].value {
         assert_eq!(spec_ref.name, "employment_contract");
         assert!(spec_ref.repository.is_none());
+        assert!(bindings.is_empty());
     } else {
         panic!("Expected Import");
     }
@@ -32,9 +34,9 @@ uses contract: employment_contract"#;
 fn test_parse_with_and_data_bindings() {
     let input = r#"spec person
 uses contract: employment_contract
-with contract.start_date: 2024-02-01
+  -> with start_date: 2024-02-01
+  -> with employment_type: "contractor"
 data declaration_probe: date
-with contract.employment_type: "contractor"
 uses base: base_contract"#;
     let result = parse(
         input,
@@ -44,43 +46,44 @@ uses base: base_contract"#;
     .unwrap()
     .into_flattened_specs();
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].data.len(), 5);
+    assert_eq!(result[0].data.len(), 3);
 
     assert_eq!(
         result[0].data[0].reference,
         crate::parsing::ast::Reference::local("contract".to_string())
     );
-    if let DataValue::Import(spec_ref) = &result[0].data[0].value {
+    if let DataValue::Import { spec_ref, bindings } = &result[0].data[0].value {
         assert_eq!(spec_ref.name, "employment_contract");
         assert!(spec_ref.repository.is_none());
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].path.name, "start_date");
+        match &bindings[0].rhs {
+            WithRhs::Literal(lit) => {
+                assert!(
+                    matches!(lit, crate::parsing::ast::Value::Date(_)),
+                    "Expected Date literal in binding"
+                );
+            }
+            other => panic!("Expected literal rhs, got {:?}", other),
+        }
+        assert_eq!(bindings[1].path.name, "employment_type");
+        match &bindings[1].rhs {
+            WithRhs::Literal(crate::parsing::ast::Value::Text(s)) => {
+                assert_eq!(s, "contractor");
+            }
+            other => panic!("Expected text literal, got {:?}", other),
+        }
     } else {
         panic!("Expected Import");
     }
 
     assert_eq!(
         result[0].data[1].reference,
-        crate::parsing::ast::Reference::from_path(vec![
-            "contract".to_string(),
-            "start_date".to_string()
-        ])
-    );
-    match &result[0].data[1].value {
-        DataValue::With(WithRhs::Literal(lit)) => {
-            assert!(
-                matches!(lit, crate::parsing::ast::Value::Date(_)),
-                "Expected Date literal in with"
-            );
-        }
-        other => panic!("Expected with with date literal, got {:?}", other),
-    }
-
-    assert_eq!(
-        result[0].data[2].reference,
         crate::parsing::ast::Reference::local("declaration_probe".to_string())
     );
     assert!(
         matches!(
-            &result[0].data[2].value,
+            &result[0].data[1].value,
             DataValue::Definition {
                 base: Some(crate::parsing::ast::ParentType::Primitive {
                     primitive: crate::parsing::ast::PrimitiveKind::Date,
@@ -93,26 +96,13 @@ uses base: base_contract"#;
     );
 
     assert_eq!(
-        result[0].data[3].reference,
-        crate::parsing::ast::Reference::from_path(vec![
-            "contract".to_string(),
-            "employment_type".to_string()
-        ])
-    );
-    match &result[0].data[3].value {
-        DataValue::With(WithRhs::Literal(crate::parsing::ast::Value::Text(s))) => {
-            assert_eq!(s, "contractor");
-        }
-        other => panic!("Expected with with text literal, got {:?}", other),
-    }
-
-    assert_eq!(
-        result[0].data[4].reference,
+        result[0].data[2].reference,
         crate::parsing::ast::Reference::local("base".to_string())
     );
-    if let DataValue::Import(spec_ref) = &result[0].data[4].value {
+    if let DataValue::Import { spec_ref, bindings } = &result[0].data[2].value {
         assert_eq!(spec_ref.name, "base_contract");
         assert!(spec_ref.repository.is_none());
+        assert!(bindings.is_empty());
     } else {
         panic!("Expected Import");
     }

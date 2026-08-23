@@ -227,18 +227,21 @@ fn import_with_data_lines(formatted: &str, spec_name: &str) -> Vec<String> {
         .collect()
 }
 
-const GROUPED_USES_WITH_LINES: &[&str] =
-    &["uses x", "with x.name: \"Ben\"", "uses y", "with y.age: 15"];
+const GROUPED_USES_WITH_LINES: &[&str] = &[
+    "uses x",
+    "  -> with name: \"Ben\"",
+    "uses y",
+    "  -> with age: 15",
+];
 
 #[test]
 fn format_groups_with_under_each_uses() {
     let source = r#"spec test
 
 uses x
+  -> with name: "Ben"
 uses y
-
-with x.name: "Ben"
-with y.age: 15
+  -> with age: 15
 
 rule r: 1
 "#;
@@ -256,21 +259,27 @@ rule r: 1
 }
 
 #[test]
-fn format_groups_with_under_each_uses_scrambled_source() {
+fn format_preserves_uses_block_declaration_order() {
     let source = r#"spec test
 
-with x.name: "Ben"
-with y.age: 15
-uses x
 uses y
+  -> with age: 15
+uses x
+  -> with name: "Ben"
 
 rule r: 1
 "#;
+    let expected = [
+        "uses y",
+        "  -> with age: 15",
+        "uses x",
+        "  -> with name: \"Ben\"",
+    ];
     let formatted = format_source(source, lemma::SourceType::Volatile).unwrap();
     let lines = import_with_data_lines(&formatted, "test");
     assert_eq!(
-        lines, GROUPED_USES_WITH_LINES,
-        "scrambled source must canonicalize to grouped layout, got:\n{formatted}"
+        lines, expected,
+        "uses block order must be preserved, got:\n{formatted}"
     );
 }
 
@@ -375,7 +384,7 @@ fn format_repo_sections_idempotent_under_format_parse_result_roundtrip() {
 fn format_compound_unit_metre_per_second_idempotent() {
     let source = r#"spec test
 data velocity: measure
-  -> unit mps meter/second
+  -> unit mps: meter/second
 "#;
     let st = lemma::SourceType::Volatile;
     let once = format_source(source, st.clone()).expect("format");

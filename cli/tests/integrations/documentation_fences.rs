@@ -154,7 +154,16 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
     for (parsed_repo, specs) in &parsed.repositories {
         for spec in specs {
             ctx.insert_spec(Arc::clone(parsed_repo), spec.clone())
-                .unwrap_or_else(|e| panic!("insert spec for fence at {label} failed: {e}"));
+                .unwrap_or_else(|errors| {
+                    panic!(
+                        "insert spec for fence at {label} failed: {}",
+                        errors
+                            .iter()
+                            .map(|e| e.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                });
         }
     }
 

@@ -281,7 +281,7 @@ rule r: x
 fn date_unit_constraint_is_rejected() {
     let code = r#"
 spec s
-data d: date -> unit meter 1
+data d: date -> unit meter: 1
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -649,7 +649,7 @@ fn number_literal_over_max_fractional_digits_is_planning_error() {
 fn cross_spec_value_copy_reference_resolves() {
     let code = r#"
 spec lib
-data money: measure -> unit eur 1 -> unit usd 0.84
+data money: measure -> unit eur: 1 -> unit usd: 0.84
 
 spec app
 uses lib
@@ -669,11 +669,11 @@ rule r: price
 fn cross_spec_value_copy_unknown_data_is_rejected() {
     let code = r#"
 spec lib
-data money: measure -> unit eur 1
+data money: measure -> unit eur: 1
 
 spec app
 uses lib
-with lib.money: lib.nonexistent
+  -> with money: lib.nonexistent
 rule r: lib.money
 "#;
     let mut engine = Engine::new();
@@ -689,7 +689,7 @@ fn cross_spec_value_copy_to_unknown_spec_is_rejected() {
     let code = r#"
 spec app
 uses dep: nonexistent_spec
-with dep.money: 1
+  -> with money: 1
 rule r: dep.money
 "#;
     let mut engine = Engine::new();
@@ -709,8 +709,8 @@ data flag: boolean
 data n: number
 data n_band: number range
 data label: text
-data amount: measure -> unit eur 1
-data band: measure range -> unit eur 1
+data amount: measure -> unit eur: 1
+data band: measure range -> unit eur: 1
 data rate: ratio
 data rate_band: ratio range
 data when: date

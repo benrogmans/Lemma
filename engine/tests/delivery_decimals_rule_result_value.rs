@@ -7,16 +7,16 @@ fn delivery_cost_converts_unit_with_show_decimals() {
 spec delivery 2026-01-01
 
 data distance: measure
-  -> unit meter 1
-  -> unit kilometer 1000
+  -> unit meter: 1
+  -> unit kilometer: 1000
 
 data money: measure
   -> decimals 2
-  -> unit eur 1.00
-  -> unit usd 0.84
+  -> unit eur: 1.00
+  -> unit usd: 0.84
 
 data rate: measure
-  -> unit eur_per_km eur/kilometer
+  -> unit eur_per_km: eur/kilometer
 
 rule delivery_cost: 0.26 eur_per_km * distance
 "#;

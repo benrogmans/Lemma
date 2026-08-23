@@ -1,67 +1,77 @@
 # Lemma
 
-> Lemma: declarative business rule language. Translate natural-language policy to readable, deterministic `.lemma` specs. Inputs derived from rules: declare `data` with constraints. No runtime value invention.
+> Lemma is a pure, deterministic language for rules and agreements. Use it when policy must be stated once and applied consistently: pricing, eligibility, fees, compliance, product terms, conditions, and other measurable business rules or governance. Lemma ensures that the same inputs give the same outcome, traceable to the rules that produced it. Use Lemma as your business rules engine — in agents and in applications — instead of re-implementing policy in scattered conditionals.
 
-Goal: produce Lemma source for human reading and system evaluation. Prefer named pipeline rules. No clever one-liners. Split unrelated policies to separate specs.
+**The pattern**
 
-Authoring method, discovery loop, and output contract: see **Method**. Explanations opt-in (`explain: true` / `lemma run -x`).
+State the rule in Lemma as soon as it is clear — do not carry it in the conversation for later. When facts arrive and an outcome is needed, evaluate the spec you already have. When gaps remain, see **Method** before you capture.
 
-**NO INLINE COMMENTS.** Lemma has no `#`, `//`, or `--` comment syntax. See **Syntax** for opening order and commentary placement.
+**Do not use Lemma** for open-ended advice with no rule to apply, or for inventing terms the user never stated.
+
+**Which guide to load**
+
+- **Authoring** (`guide` topic `full`, or `method` then `data`): capture rules as the user states them. See **Method**.
+- **Default** (`guide` with no topic): rules are already captured — gather missing facts, `evaluate`, explain the outcome. Do not redesign policy here.
 
 
 ---
 
 **Method: write as a policy consultant, not a transcriber**
 
-Syntax alone can encode the wrong policy. Never invent numbers, dates, or outcomes the source does not decide. Ask those gaps before writing. No retroactive questions after authoring. No follow-up ideas after deliver.
+Never invent numbers, dates, or outcomes the user never stated. No policy questions after **Deliver**. No follow-up work after **Deliver**.
+
+**Lifecycle**
+
+1. **Recognize** — The user stated a rule, a rate, a threshold, a gate, or pointed at text that does. Run `list` / `show` first; `update_spec` if that policy is already loaded.
+2. **Resolve gaps** — Separate what the text already decides from what still changes the outcome. Unresolved items → **Stop**. Empty list → **Author**.
+3. **Capture** — **Scope** → **Model** → **Author** → **Verify** → `add_spec` or `update_spec`. The rule lives in the engine, not in chat.
+4. **Apply** — Facts are known; the user wants an outcome. Default evaluate guide: `evaluate`. Do not edit the spec.
+
+**Two tracks**
+
+- **Fast capture** — **Resolve gaps** is empty: every outcome-changing detail is already stated. Skip **Stop**; run **Scope** through load.
+- **Full method** — At least one outcome-changing detail is unstated. **Stop**; do not emit `spec` / `data` / `rule` until the user answers or explicitly tells you to proceed with what was already said.
 
 **Process**
 
-1. **Gather**: Collect sources (prose, statute, ticket, answers, field names). Inventory. Do not write Lemma yet.
-2. **Interpret**: Restate as questions the system must answer. Name actors, triggers, windows. One coherent policy → one `spec` (you decide).
-3. **Interrogate**: Ask only when the **source leaves a policy outcome undecided**. Phrase questions in plain language a non-Lemma author understands. Do not invent. Do not Author until answers or explicit acceptance.
-4. **Scope**: One `spec` per coherent policy; split / `uses` only when the source clearly mixes unrelated domains; `@…` catalogs; temporal date only when the author confirms a start date. Never guess.
-5. **Model**: Public `data` API and named `rule` pipeline (you choose field shape; do not ask the author). Domain-principle `unless` defaults (see **Rules**). Denial = `false`/`no`; unanswerable = veto (see **Veto**). Prefer raw inputs over precomputed numbers. Encode rule gates the source states; omit advisory how-to that is not a gate. Name booleans for the fact you mean; prefer the natural predicate with `-> suggest` for the usual case (`data item_damaged: boolean -> suggest false`). Do not invent awkward opposites (`item_undamaged`) or negated names (`not_*`, `no_*`, `has_no_*`).
-6. **Author**: After questions resolved. Commentary after `spec`, `meta` for provenance; no inline comments (see **Syntax**). Spec is the only documentation.
-7. **Verify**: `check`, `show`, `evaluate` at boundaries (half-open ranges). Result text must match conditions. Then `add_spec` / `update_spec` to load.
-8. **Deliver**: Always paste the full Lemma source in chat so the user can verify what was saved or loaded (use `source` if you need the loaded text). Confirm loaded. Close with a statement, not a question: e.g. tell them to say if anything requires adjustment. No pitch for more work. Stop.
+1. **Gather** — Utterances, messages, documents, tickets, field names. The conversation counts as source. Do not write Lemma yet.
+2. **Interpret** — What questions must this spec answer? What inputs decide the answer? One coherent policy → one `spec`.
+3. **Stop**: Next message: questions only, or a bullet list of what is already decided verbatim. Emitting `spec` / `data` / `rule` in that message is a bug. Ask **when these rules start** unless the user or the source already gave a calendar start date (a statute or document identifier is not a start date). Do not **Author** until answers or explicit proceed.
+4. **Scope** — One `spec` per policy. `uses` / split only when the text mixes unrelated policies. Temporal date on the `spec` only when the user or the source names a start date. Never guess.
+5. **Model** — You choose `data` and `rule` names and types by default. Representation questions follow **What to ask**. **Spoken question** on each `data` field (see **Data**). Domain-principle `unless` defaults (see **Rules**). Denial → `false` / `no`. Unanswerable → veto (see **Veto**). Encode stated gates; omit tips and how-to unless they are gates.
+6. **Author** — Write Lemma after **Stop** completes. Commentary after `spec`; `meta` for provenance. No inline comments (see **Syntax**).
+7. **Verify** — `check`, `show`, `evaluate` at bounds and representative inputs. Result wording must match the policy. Then `add_spec` or `update_spec`.
+8. **Deliver** — When the user should read what was captured. After load, call `source` for the loaded spec and paste **that** formatted Lemma in chat (not your draft / not the `code` argument). Confirm loaded. Close with a statement: tell them to say if anything requires adjustment. Not a yes/no question. Stop.
 
 **What to ask (and what not to)**
 
-Ask when the source does not decide a **policy outcome**, e.g. a threshold boundary ("above €50" vs "€50 or more"), or whether rules start on a specific date.
+Ask only when neither the user nor the source already gave a clear answer. Do not ask because another reading is theoretically possible. The list below is kinds of unanswered gap, not a checklist.
+
+- Boundary: inclusive or exclusive at a limit.
+- Timing, optionally: since when have the rules been enacted or when will they take effect?
+- Combination: whether two stated rules stack, override, or are alternatives.
+- Lookup: what outcome applies for a case the text names but does not map to a value.
+- Representation: which fact to collect when more than one input shape is reasonable and the choice changes the question you ask or how the rule applies.
 
 Do **not** ask:
 
-- Modeling shape (`data` field count, option vs boolean, one input vs two)
-- Spec packaging (one vs split) when the source is one coherent policy
-- Whether advisory prose (tips, how-to steps, "contact support") is "in scope": encode gates; omit advice
-- Edge cases the source never mentions
+- What the user or the source already answered clearly.
+- Packaging or syntax you can decide without changing outcomes (field count, internal names, closed option lists implied by the text).
+- One `spec` vs two when the policy is one topic.
+- Whether tips, how-to, or "contact support" are rules (omit unless stated as gates).
+- Hypotheticals the user never raised.
 
-Plain language: "Is this policy effective from a specific date, or have these rules always been in effect?", not "Effective date: pin a date on the spec, or leave undated?"
+Use the user's domain words. Ask about facts and policy meaning, not Lemma keywords.
 
 **Output contract (mandatory)**
 
-- **Before Author**: Ask the few real gaps (if any). Wait. Do not invent.
-- **At Deliver**: Full Lemma source in chat for user verify + loaded confirmation + assumptions the author confirmed. No new policy questions. No pitch for more work. Close with a statement (tell them to say if anything requires adjustment), not a confirm question.
+- **Before Author** — Ask every open item from **Resolve gaps**. Wait. Do not invent. A `spec` in the same turn as the first policy questions is a bug.
+- **At Deliver** — Call `source`. Paste its formatted output in a lemma code fence. Do not paste the unformatted draft. No new policy questions. Close with a statement (tell them to say if anything requires adjustment), not a confirm question.
 
-**Principles**
+**After capture**
 
-- Spec is the only documentation: `-> help`, commentary, `meta` (see **Syntax**).
-- `data` names are a public API. Prefer `-> option` for closed text sets.
-- Decomposition is output quality: named intermediates, not mega-rules.
-
-**Worked example**
-
-Source: *"Standard shipping is €4.95. Free shipping when the order is €50 or more."*
-
-Ask before writing (real gaps only):
-
-1. At exactly €50: free shipping or €4.95?
-2. Is this shipping policy effective from a specific date, or have these rules always been in effect?
-
-WRONG to ask: one `shipping` spec or split; how many `data` fields for destination; express vs economy when the source never mentions them; whether packing tips are hard rules.
-
-After answers: Model / Author / Verify / `add_spec`. Fee rule uses domain-principle default (usual fee, free when threshold met). If author says free at €50 or more → `order_total >= 50 eur`. Paste source, deliver and stop.
+- User gives facts and wants a result → default evaluate guide (`evaluate`, verify, stop).
+- User changes the rule → `update_spec`, **Verify** again.
 
 
 ---
@@ -71,12 +81,13 @@ After answers: Model / Author / Verify / `add_spec`. Fee rule uses domain-princi
 ```
 spec <name> [<effective>]
 [""" commentary: optional, but if present must be HERE """]
+meta ...
 uses ...
 data ...
 rule ...
 ```
 
-Commentary after `uses` or `data` is invalid. No `#`, `//`, `--` comments. Use descriptive names. Put user explanations outside code fences, never inside ` ```lemma ` blocks.
+Commentary after `uses` or `data` is invalid. Optional `meta key: value` after commentary (provenance, not policy). `rule name:` with the body on the next indented line. No `#`, `//`, `--` comments. Use descriptive names. Put user explanations outside code fences, never inside ` ```lemma ` blocks.
 
 **Gotchas (parse errors)**
 
@@ -94,71 +105,54 @@ Default: one file, one implicit repo. No `repo` blocks unless multi-namespace wo
 Hierarchical names: `spec employee/contract`. Effective date for temporal changes: `spec pricing 2026-01-01`.
 Commentary placement: see **Syntax**.
 
-**Example A: minimal single-spec file**
-
-```lemma
-spec pricing 2026-01-01
-"""
-Pricing rules for bulk and member discounts.
-"""
-
-data qty:        number
-data base_price: 100
-data is_member:  false
-
-rule vat_amount: base_price * 21%
-rule price_with_vat: base_price + vat_amount
-
-rule bulk_discount:
-  qty >= 100 and price_with_vat > 500
-
-rule discount: 0%
-  unless qty >= 10     then 10%
-  unless bulk_discount then 15%
-  unless is_member     then 20%
-
-rule discount_amount: base_price * discount
-rule price_with_discount: base_price - discount_amount
-```
-
-**Example B: multi-spec composition (same file)**
+**Example: multi-spec composition (same file)**
 
 ```lemma
 spec base_config
 
-data standard_discount: 5%
 data tax_rate:          21%
-data base_price:        number -> minimum 0 -> suggest 100
+data standard_discount: 5%
 
-rule tax_amount:       base_price * tax_rate
-rule price_with_tax:   base_price + tax_amount
-rule discount_amount:  base_price * standard_discount
-rule discounted_price: base_price - discount_amount
-rule final_price:      discounted_price * (100% + tax_rate)
+data price: measure
+  -> unit eur: 1.00
+  -> decimals 2
+
+rule tax_amount:
+  price * tax_rate
+
+rule price_with_tax:
+  price + tax_amount
+
+rule discount_amount:
+  price * standard_discount
+
+rule discounted_price:
+  price - discount_amount
+
+rule final_price:
+  discounted_price * (100% + tax_rate)
 
 
 spec line_item
 
-data qty: number -> minimum 0 -> suggest 10
-
 uses pricing: base_config
+  -> with price: 10 eur
 
-rule line_total:   pricing.final_price * qty
-rule has_discount: pricing.standard_discount > 0%
+data qty: number
+  -> minimum 0
+  -> suggest 10
 
 
-spec simple_order
+rule line_total:
+  pricing.final_price * qty
 
-uses line: line_item
-with line.qty: 100
-
-rule order_total:          line.line_total
-rule effective_unit_price: order_total / line.qty
+rule has_discount:
+  pricing.standard_discount > 0%
 ```
 
 - `uses alias: target_spec`: imports spec in same file.
 - Reference members: `alias.field` or `alias.rule_name`.
-- `with alias.field: value`: sets imported data. Do not use `data alias.field`. Local `with name: …` invalid: use `data name: …`.
+- Under `uses`, `  -> with path: value` sets imported data (path relative to imported spec). Do not use `data alias.field`. Standalone `with alias.field: …` is deprecated (still parses; `quality` recommends block form). Local slots use `data`.
 
 **LemmaBase: shared specs from the registry**
 
@@ -166,23 +160,23 @@ Specs on [LemmaBase.com](https://lemmabase.com) imported with `@` repo qualifier
 
 ```lemma
 spec invoicing
-"""
-Invoice lines using ISO country codes from LemmaBase.
-"""
 
 uses lemma units
 
 uses iso: @iso/countries alpha2 2026-01-01
 
 data price: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data country: iso.code
 
-rule tariff: 0 eur
+
+rule tariff:
+  0 eur
   unless country is "NL" then price * 5%
 
-rule total: price + tariff
+rule total:
+  price + tariff
 ```
 
 Forms:
@@ -190,174 +184,132 @@ Forms:
 - `uses alias: @user/repo spec_name`: import with alias (`iso.field`)
 - `uses @user/repo spec_name 2026-01-01`: pin effective date
 
-Reference imported members: `iso.code`. Detail: [Registry](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/registry.md).
+Reference imported members: `iso.code`. Detail: [LemmaBase Registry](https://lemma.run/reference/registry).
 
-`repo` blocks namespace specs across contexts (e.g., `repo accounting`). Skip unless asked. Details: [Composing specs](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/composing_specs.md).
-
-
----
-
-**Natural language → Lemma**
-
-Request: *"Library charges €0.25/day for regular books, €0.50 for reference, €1 for new releases. First offense gets 50% off. Grace period 3 day except new releases. Block checkout if fee exceeds €10."*
-
-Map logic:
-- Book types → `data book_type` with `-> option` constraints
-- Due and return dates → `data` input slots; overdue days derived by a rule
-- First offense → `data` input slot
-- Per-day rates → `rule daily_fee` with unless branches
-- Grace period → `rule is_in_grace_period`
-- Fee pipeline → `rule total_fee`, `rule final_fee`
-- Checkout block → `rule can_checkout: yes` with `unless final_fee > 10 eur then no` (boolean, not veto)
-
-**Example C: library fees (full spec)**
-
-```lemma
-spec library_fees
-uses lemma units
-
-data money: measure
-  -> decimals 2
-  -> unit eur 1.00
-  -> minimum 0 eur
-
-data book_kind: text
-  -> option "regular"
-  -> option "reference"
-  -> option "new_release"
-
-data book_type:        book_kind
-data is_first_offense: boolean
-data due_date:         date
-data return_date:      date
-
-rule days_overdue: (due_date...return_date) as day as number
-
-rule daily_fee: 0 eur
-  unless book_type is "regular"     then 0.25 eur
-  unless book_type is "reference"   then 0.5 eur
-  unless book_type is "new_release" then 1 eur
-
-rule is_in_grace_period: days_overdue <= 3
-  unless book_type is "new_release" then no
-
-rule total_fee: days_overdue * daily_fee
-
-rule final_fee: total_fee
-  unless is_first_offense   then total_fee * 50%
-  unless is_in_grace_period then 0 eur
-
-rule can_checkout: yes
-  unless final_fee > 10 eur then no
-```
+`repo` blocks namespace specs across contexts (e.g., `repo accounting`). Skip unless asked. Details: [Composing specs](https://lemma.run/learn/composing_specs).
 
 
 ---
 
-**Data: constraint definitions, not placeholders**
+**Data: spoken question, not precomputed answer**
 
 `data` declares variables. Constraints define validity. Type-only `data` (no value) is an input slot. Use real domain values. Never `"TODO"` or dummy placeholders.
 
-For which inputs a rule still needs at runtime, call MCP `guide` with no topic (evaluate guide): `list` → `show` once → `evaluate` → ask one `missing_data` field → repeat. Load `guide` topic `full` only when authoring new specs. `show` is the static catalog, not a required-input checklist. `-> help` is the literal CS ask string; do not replace the question with a different one.
+**Spoken question**
 
-**Example D: typed data (coffee order)**
+Each `data` field's `-> help` is the sentence you would say to a person about their situation. If that sentence requires counting, converting, applying a legal threshold, or interpreting the policy, the field is wrong: those are `rule`s. Dates, amounts, and yes/no facts of the situation stay as `data`.
 
+WRONG (elapsed time as a bare number; unit baked into the name):
+```lemma-skip
+data days_overdue: number
+  -> help "How many days late is the book?"
+```
+
+RIGHT (facts of the situation; duration keeps its unit):
 ```lemma
-spec coffee_order
+spec library_return
+
+uses lemma units
+
+data due_date: date
+  -> help "When was the book due?"
+
+data return_date: date
+  -> help "When was the book returned?"
+
+
+rule overdue:
+  due_date...return_date as day
+```
+
+Name the concept; keep the unit on the value, not in the field name (`see **Units**`).
+
+WRONG (policy threshold already applied):
+```lemma-skip
+data qualifies_for_free_shipping: boolean
+  -> help "Is the order €50 or more?"
+```
+
+RIGHT:
+```lemma
+spec shipping_threshold
 
 data money: measure
+  -> unit eur: 1.00
   -> decimals 2
-  -> unit eur 1.00
-  -> unit gbp 1.17
-  -> unit usd 0.84
+
+data order_total: money
+  -> help "What is the order total?"
+
+
+rule free_shipping:
+  order_total >= 50 eur
+```
+
+Age-in-years can stay when that is what you would actually ask (e.g. senior discount). A birthday gate wants a birth date.
+
+**Measure**
+
+Use `measure` when the fact carries a unit: money, mass, distance, duration, rates, energy, and other dimensional quantities. Use `number` only when the value is truly dimensionless (counts, scores, IDs). Use `ratio` for proportions (`15%`, `50 permille`), not for currency amounts.
+
+Declare a **named measure parent** once, then extend it on input slots:
+
+```lemma
+spec invoice
+data money: measure
+  -> unit eur: 1.00
+  -> decimals 2
   -> minimum 0 eur
 
-data product: text
-  -> option "espresso"
-  -> option "latte"
-  -> option "cappuccino"
-  -> option "mocha"
-
-data size: text
-  -> option "small"
-  -> option "medium"
-  -> option "large"
-
-data age: number
-  -> maximum 100
-  -> minimum 0
-
-data number_of_cups: number
-  -> maximum 10
-
-data has_loyalty_card: boolean
+data invoice_total: money
+  -> help "What is the invoice total?"
 ```
 
-- `age`, `number_of_cups`: input slots (type-only + bounds)
-- `money`: custom measure type with units, decimals, minimum
-- `product`, `size`: text enumeration via `-> option` (prefer over veto for static sets)
+`-> unit` rows define which units the type accepts; literals and comparisons use those units (`50 eur`, not a bare `50`). Name the concept (`invoice_total`, `package_weight`), not the unit in the field name (`price_eur`, `weight_kg`).
 
-**Example E: data patterns**
+For physical quantities and time, import the standard library (`uses lemma units`) and prefer `units.mass`, `units.duration`, `units.length` over redefining SI units. Duration literals (`8 hour`, `25 year`), conversion (`as <unit>`), compound units (`eur/hour`), measure ranges, and calendar intervals are all covered in **Units**.
 
-Input slot:
-```lemma
-spec intake
+**Boolean naming**
 
-data customer_age: number -> minimum 0 -> maximum 120
-```
+Name booleans for the fact you mean; prefer the natural predicate with `-> suggest` for the usual case (`data item_damaged: boolean -> suggest false`). Do not invent awkward opposites (`item_undamaged`) or negated names (`not_*`, `no_*`, `has_no_*`).
 
-Fixed policy constant:
-```lemma
-spec fiscal_policy
+**Constraints**
 
-data tax_rate: 21%
-```
+**Types**
 
-Text enumeration:
-```lemma
-spec membership
+Primitives: `boolean`, `number`, `text`, `measure`, `ratio`, `date`, `time`, and `number range`, `measure range`, `date range`, `time range`, `ratio range`. Named parents (`data money: measure`) inherit constraints; see [Reference](https://lemma.run/reference#extending-data).
 
-data status: text
-  -> option "active"
-  -> option "inactive"
-```
+**Data commands by type**
 
-Typed alias:
-```lemma
-spec accounts
+| Type | `->` commands |
+|------|----------------|
+| `boolean` | `help`, `suggest` |
+| `number` | `decimals`, `minimum`, `maximum`, `help`, `suggest` |
+| `measure` | `unit`, `decimals`, `minimum`, `maximum`, `help`, `suggest` (see **Measure**, **Units**) |
+| `ratio` | `unit`, `minimum`, `maximum`, `help`, `suggest` |
+| `text` | `option`, `options`, `length`, `help`, `suggest` |
+| `date`, `time` | `minimum`, `maximum`, `help`, `suggest` |
+| `number range`, `date range`, `time range`, `ratio range` | `lower`, `upper`, `minimum`, `maximum`, `help`, `suggest` |
+| `measure range` | above + `unit` |
 
-data money: measure -> unit eur 1.00
+On range types, `lower` / `upper` bound endpoints; `minimum` / `maximum` bound **span width**, not endpoints.
 
-data wallet: money -> minimum 0 eur
-```
+**Usage**
 
-With help text (literal CS ask string):
-```lemma
-spec payroll
-
-data pay_period: text
-  -> option "month"
-  -> option "week"
-  -> help "How often you are paid."
-```
-
-Boolean with usual-case suggest:
-```lemma
-spec returns
-
-data item_damaged: boolean
-  -> suggest false
-  -> help "Item damaged?"
-```
-
-Constraints chain: `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, etc. Details in Reference.
+- Chain `->` rows on `data` only (rules have no constraints; see **Syntax**).
+- `-> help` = spoken question (CS ask string).
+- `-> suggest` = UI hint; does not prefill or commit.
+- Prefer `-> option` for closed text sets.
+- Bounded domain on constraints (`-> minimum 0`), not veto (see **Veto**).
+- Examples: type catalog [01_coffee_order.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/01_coffee_order.lemma); fee policy [02_library_fees.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/02_library_fees.lemma).
+- Edge cases (compound units, qualifying units, calendar ranges): **Units** and [Reference](https://lemma.run/reference#data-commands).
 
 
 ---
 
 **Standard library: `uses lemma units`**
 
-Lemma embeds SI bases, derived compounds (force, pressure, energy, power, frequency, electrical), imperial, area/volume, and information (`bit`/`byte`) in `repo lemma` / `spec units`. Import: `uses lemma units`. Reference types: `units.mass`, `units.duration`, `units.length`, `units.force`. Unit names: **singular only** (`8 hour`). Length uses American `meter`. Durations (`hour`, `day`, `week`) require `units.duration`. No Celsius/Fahrenheit (kelvin only).
+Lemma embeds SI bases, derived compounds (force, pressure, energy, power, frequency, electrical), imperial, area/volume, and information (`bit`/`byte`) in `repo lemma` / `spec units`. Import: `uses lemma units`. Reference types: `units.mass`, `units.duration`, `units.length`, `units.force`. Unit names: **singular only** (`8 hour`). Length uses American `meter`. After `uses lemma units`, duration literals (`hour`, `day`, `week`) work; `units.duration` is the type name when you declare a duration slot. No Celsius/Fahrenheit (kelvin only).
 
 ```lemma
 spec logistics
@@ -371,105 +323,63 @@ data package_weight: 12 kilogram
 data shift_length:   8 hour
 data route_distance: 45 kilometer
 
-rule weight_grams:  package_weight as gram
-rule shift_hours:   shift_length as hour
-rule distance_km:   route_distance as kilometer
 
-rule is_heavy:      package_weight > 20 kilogram
-rule is_long_shift: shift_length >= 8 hour
+rule is_heavy:
+  package_weight > 20 kilogram
+
+rule is_long_shift:
+  shift_length >= 8 hour
 ```
 
-Prefer `units.mass`, `units.duration`, `units.length` over redefining units. Convert in family: `as <unit>`. Strip unit: `amount as eur as number`. Cross-family relabel: `5 eur as kg` -> `5 kg`.
+Prefer `units.mass`, `units.duration`, `units.length` over redefining units. Convert in family: `as <unit>`. Strip unit: `amount as eur as number`. Cross-family relabel: `5 eur as kg` -> `5 kg`. Name the concept, not the unit (see **Anti-patterns**).
 
 **Ranges: half-open intervals**
 
-Ranges: lower bound inclusive, upper bound exclusive (`lo...hi`). Test with `in`. Width: `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>`). Bare `as number` on date/measure ranges fails. Typedefs: `number range`, `date range`, `measure range`, `ratio range`. Month/year intervals: `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar range`.
+Ranges: lower bound inclusive, upper bound exclusive (`lo...hi`). Test with `in`. Width: `lo...hi as <unit>` (duration/measure). Add `as number` only when a bare number is required. Bare `as number` on date/measure ranges fails. Typedefs: `number range`, `date range`, `measure range`, `ratio range`. Month/year intervals: `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar range`.
 
+The snippet below is a syntax sample, not one policy.
+
+Working age (calendar range):
 ```lemma
-spec eligibility
+spec working_age
+
 uses lemma units
 
-data employee_age:       42 year
-data performance_score:  75
-data package_weight:     45 kilogram
-data hire_date:          2024-01-15
-data review_date:        2024-06-30
-data discount_rate:      15%
-
+data employee_age: 42 year
 data eligible_band: units.calendar range
   -> suggest 18 year...67 year
 
-data score_band: number range
-  -> suggest 0...100
 
-rule is_working_age: employee_age in eligible_band
-
-rule is_top_score: performance_score in 90...100
-
-rule is_heavy: package_weight in 30 kilogram...80 kilogram
-
-rule in_discount_band: discount_rate in 0%...50%
-
-rule in_q2: hire_date in 2024-04-01...2024-07-01
-
-rule review_days: (hire_date...review_date) as day
-
-rule span_years: (1990-05-20...2024-06-15) as year
+rule is_working_age:
+  employee_age in eligible_band
 ```
 
-Upper bound exclusive: `67 year` is NOT inside `18 year...67 year` (returns false). Declare range slots on `data` for reuse, inline `value in lo...hi` for one-off.
+Upper bound exclusive: `67 year` is NOT inside `18 year...67 year`.
 
-Range over custom measure type (no SI import needed):
-
-```lemma
-spec freight
-
-data weight: measure
-  -> unit gram 1
-  -> unit kilogram 1000
-
-data load_band: weight range
-  -> suggest 30 kilogram...80 kilogram
-
-rule inside_band: 45 kilogram in load_band
-
-rule band_width: (30 kilogram...80 kilogram) as kilogram
-```
+Custom measure types can declare their own `measure range` without importing SI; see Reference.
 
 **Derived measures: compound units**
 
-Build compound units with `/`, `*`, `^`. Name derived unit, then give compound expression. Prior measure types must declare referenced base units (`eur`, `hour`, `employee`, `results`). Import `uses lemma units` if using time (`eur/hour`).
+Build compound units with `/`, `*`, `^`. Name derived unit, then give compound expression. Prior measure types must declare referenced base units. Import `uses lemma units` if using time (`eur/hour`).
 
 ```lemma
 spec contractor
+
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
-
-data headcount: measure
-  -> unit employee 1
-
-data outcome: measure
-  -> unit results 1
+  -> unit eur: 1.00
 
 data wage_rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
-
-data productivity: measure
-  -> unit result_per_employee results/eur/hour/employee
-
-data premium_per_head: measure
-  -> unit eur_hour_per_employee eur_per_hour/employee
+  -> unit eur_per_hour: eur/hour
 
 data time_worked: 120 hour
-data wage: wage_rate -> suggest 85 eur_per_hour
-data yield_rate: productivity -> suggest 3 result_per_employee
+data wage: wage_rate
+  -> suggest 85 eur_per_hour
 
-rule total: wage * time_worked
 
-rule is_high_yield: yield_rate >= 2 result_per_employee
+rule total:
+  wage * time_worked
 ```
 
 Layer compound units: `eur_per_hour` builds on `eur` and `hour`. Dimensional checks run at plan time.
@@ -489,10 +399,18 @@ Layer compound units: `eur_per_hour` builds on `eur` and `hour`. Dimensional che
 
 ```lemma
 spec recency
+
 uses lemma units
+
 data event_date: date
-rule recent: event_date in past 7 day
-rule this_year: event_date in calendar year
+  -> help "When did the event happen?"
+
+
+rule recent:
+  event_date in past 7 day
+
+rule this_year:
+  event_date in calendar year
 ```
 
 
@@ -508,259 +426,176 @@ Default is not "prefer yes/no." It is the answer **in principle for this rule's 
 
 1. Name the question (`can_ship` → "Can we ship this order?").
 2. Before special cases, what is true in principle? That is the default: from *this* rule's domain, not optimism or "start true and subtract failures."
-3. What positive facts change the answer? Those are `unless` conditions, not `… is false then flip`.
+3. What positive facts change the answer? Those are `unless` conditions, not negated flips (`unless not ready then no`).
 4. Write `rule name: <principle> unless <positive conditions> then <exception>`.
 
 Examples by domain: shipping often earned (`no` unless grant); discount often `0%`; fees use the policy's usual fee, not "free unless expensive."
 
-Forbidden: double denial (`yes` / `unless … is false then no`); fail-each-check cascades; invented `*_compliant` default-yes helpers.
+Forbidden: double denial (`yes` / `unless not … then no`); fail-each-check cascades; invented `*_compliant` default-yes helpers; a single `no` / `unless … then yes` when the condition is the whole answer (see **Anti-patterns**). In `and` chains, do not mix a bare name with `not` / `is false` (WRONG: `x and not y`); use parallel probes (`not x and y is true`, or `x is false and y is true`) or parentheses. Unary `not x` alone is fine.
 
-```lemma-skip
-rule can_ship: no
-  unless in_stock
-    and address_complete
-    then yes
-```
-
-**Example F: overlapping unless (last wins)**
+**Overlapping unless (last wins)**
 
 ```lemma
 spec vip_discount
 
 data qty: number
-data is_vip:   boolean
+  -> minimum 0
+  -> help "How many items?"
 
-rule discount: 0%
-  unless qty >= 10  then 10%
-  unless qty >= 50  then 20%
-  unless is_vip          then 25%
+data is_vip: boolean
+  -> suggest false
+  -> help "Is the customer a VIP?"
+
+
+rule discount:
+  0%
+  unless qty >= 10 then 10%
+  unless qty >= 50 then 20%
+  unless is_vip    then 25%
 ```
 
 VIP ordering 75 items gets **25%** (not 20%): both `qty >= 50` and `is_vip` match; bottommost wins.
-
-**Example G: progressive unless chain**
-
-```lemma
-spec rules_and_unless
-
-data is_premium: yes
-data base_price: number -> minimum 0
-data qty:        number -> minimum 0
-
-rule total_before_discount: base_price * qty
-
-rule discount_percentage: 0%
-  unless qty >= 10 then 10%
-  unless qty >= 20 then 15%
-  unless is_premium then 20%
-
-rule discount_amount:      total_before_discount * discount_percentage
-rule total_after_discount: total_before_discount - discount_amount
-
-rule shipping_cost: 15
-  unless total_after_discount >= 100 then 10
-  unless total_after_discount >= 200 then 0
-
-rule final_total: total_after_discount + shipping_cost
-```
-
-**Example H: short pipeline sketch**
-
-```lemma
-spec shipping_fees
-uses lemma units
-
-data item_weight: units.mass
-data order_total: number -> minimum 0
-
-rule base_rate: 22
-rule weight_surcharge: 0
-  unless item_weight > 5 kilogram then 7.5
-
-rule final_shipping: base_rate + weight_surcharge
-  unless order_total >= 100 then 0
-```
 
 
 ---
 
 **Veto: impossible to answer, not `false`**
 
-Veto is like Rust's `Err`: rule has **no value** and propagates to dependents. Use veto when answer is impossible, not when business answer is false.
+Veto is like Rust's `Err`: rule has **no value** and propagates to dependents. Use veto when the question has no answer, not when the business answer is false, and not for out-of-range inputs.
 
 | Situation | Use |
 |-----------|-----|
-| Invalid/out-of-domain input | `unless ... then veto "reason"` |
-| Unmapped choice / no rule applies | default `veto` + unless arm per choice |
+| Out-of-range (negative score, age above 120) | `-> minimum` / `-> maximum` on `data` |
+| Closed choice list | `-> option` on `data` |
 | Normal business "no" | `false` or `no` |
+| Lookup / no mapped result | default `veto` + `unless` arm per known case |
 | Test veto without propagating | `x is veto` (returns boolean) |
 
-**Litmus test:** Can the question be answered? If yes, even when the answer is negative, use `true`/`false`. If the question itself is unanswerable for this input, use veto. "Is the customer eligible?" is always answerable (`true` or `false`). "What is the price of this coffee?" when the product is not on the menu is unanswerable (veto).
+**Litmus test:** Can the question be answered? If yes, even when the answer is negative, use `true`/`false`. If the question itself is unanswerable for this input, use veto. "Is the customer eligible?" is always answerable. "What is the price of this product?" when it is not on the list is unanswerable (veto). Out-of-range age is `-> maximum 120`, not veto.
 
 A vetoed rule is not `false`. `x is false` does not match a vetoed `x`. To test whether a rule vetoed, use `x is veto`.
 
-Place veto unless clauses **last** to override other branches.
+**Lookup default vs unless veto**
 
-**Example I: enumeration with default veto**
+Lookup: the default expression is `veto "…"`; each `unless` arm maps a known case. `-> option` is the intake set; default `veto` is the mapping when a listed value has no price arm.
 
-```lemma
-spec choice_mapping
+An `unless … then veto` arm (business denial, not lookup) follows last-wins like any other `unless` (see **Rules**).
 
-data choice_field: number
-
-rule selected: veto
-  unless choice_field is 1 then true
-  unless choice_field is 2 then false
-  unless choice_field is 3 then true
-```
-
-Default `veto` if unlisted. Each `unless` maps known choice. `false` is valid answer for choice 2.
-
-**Example J: veto lookup + propagation**
+**Lookup (normal)**
 
 ```lemma
 spec coffee_pricing
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
   -> decimals 2
 
 data product: text
-data size:    text
+  -> option "espresso"
+  -> option "latte"
+  -> option "cappuccino"
+  -> option "mocha"
 
-rule base_price: veto "Unknown type of coffee"
+
+rule base_price:
+  veto "Unknown type of coffee"
   unless product is "espresso"   then 2.5 eur
   unless product is "latte"      then 3.5 eur
   unless product is "cappuccino" then 3.5 eur
   unless product is "mocha"      then 4 eur
-
-rule size_multiplier: veto "Unknown size of coffee"
-  unless size is "small"  then 80%
-  unless size is "medium" then 100%
-  unless size is "large"  then 120%
-
-rule price_per_cup: base_price * size_multiplier
 ```
 
-If `base_price` vetoes, `price_per_cup` vetoes automatically (propagates).
+If `base_price` vetoes, dependents that need its value veto too (propagates). Full example: [01_coffee_order.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/01_coffee_order.lemma).
 
-Partial eval still walks later `and` / arithmetic siblings after `MissingData` or a definitive veto so nested control can record. `missing_data` lists unbound keys only when some completion can still yield a **value** (`missing_flag and (base > 0)` with unbound `missing_flag` awaits `missing_flag`; product with a definitive factor settles). `is veto` remains a boolean probe.
+**Veto vs boolean vs constraint**
 
-**Example K: veto vs boolean**
-
-WRONG: veto for business decision:
+WRONG: veto for business denial or range check:
 ```lemma-skip
-rule can_checkout: veto
-  unless fee <= 10 eur then true
+rule is_eligible:
+  true
+  unless customer_age < 18  then veto "Must be 18+"
+  unless customer_age > 120 then veto "Invalid age"
 ```
 
-RIGHT: veto for invalid input, boolean for business logic:
+RIGHT: bounds on data; boolean for business no:
 ```lemma
-spec checkout_policy
-
-data money: measure
-  -> unit eur 1.00
-  -> decimals 2
+spec age_gate
 
 data customer_age: number
-data fee:          money
+  -> minimum 0
+  -> maximum 120
+  -> help "How old is the customer?"
 
-rule age_validation:
-  true
-  unless customer_age < 18  then veto "Customer must be 18 or older"
-  unless customer_age > 120 then veto "Invalid age"
 
-rule can_checkout: yes
-  unless customer_age < 18 then no
-  unless fee > 10 eur then no
+rule is_adult:
+  customer_age >= 18
 ```
-
-**Example L: veto propagation with unless fallback**
-
-```lemma
-spec scoring
-
-data score:       number
-data use_default: boolean
-
-rule validated_score: score
-  unless score < 0 then veto "Invalid score"
-
-rule result: validated_score
-  unless use_default then 50
-```
-
-If `validated_score` vetoes but `use_default` is true, `result` is 50. Unless branch avoids needing vetoed value.
-
-**Workflow checklist**
-
-1. **Scope**: one spec per coherent policy; compose with `uses`; skip `repo` unless needed.
-2. **Inputs**: every user-supplied fact is `data` with constraints.
-3. **Outputs**: every answerable question is a `rule`.
-4. **Factor**: intermediate calculations as named rules.
-5. **Unless**: default first, general to specific, vetoes last.
-6. **Validate**: `check`, then `show`, then `evaluate` (MCP `guide` with no topic for `missing_data` intake; topic `full` only when authoring).
-7. **Advanced**: `uses lemma units`, ranges, compound units when needed.
 
 
 ---
 
 **Anti-patterns**
 
-Inline comments (WRONG: `#` fails to parse):
-```lemma-skip
-data customer_age: number -> minimum 0  # input
-rule discount: 0%  # default
-```
+Inline comments (WRONG: `#` fails to parse): `data customer_age: number -> minimum 0  # input`, `rule discount: 0%  # default`.
+RIGHT: no inline comments; commentary after `spec` only (see **Syntax**).
 
 Commentary after `uses` (WRONG). RIGHT: commentary immediately after `spec` (see **Syntax**).
 
-Mega-rule (WRONG):
-```lemma-skip
-rule final_total:
-  base_price * qty
-  - base_price * qty * (0% unless qty >= 10 then 10% unless is_premium then 20%)
-  + (15 unless base_price * qty >= 100 then 10 unless base_price * qty >= 200 then 0)
-```
-
-Decomposed pipeline (RIGHT):
-```lemma
-spec order_pricing
-
-data base_price: number -> minimum 0
-data qty:        number -> minimum 0
-
-rule subtotal:             base_price * qty
-rule discount_percentage:  0% unless qty >= 10 then 10%
-rule discount_amount:      subtotal * discount_percentage
-rule total_after_discount: subtotal - discount_amount
-rule shipping_cost:        15 unless total_after_discount >= 100 then 10
-rule final_total:          total_after_discount + shipping_cost
-```
+Mega-rule (WRONG): opaque nested `unless` inside one expression. RIGHT: named pipeline rules (see **Rules**).
 
 Hardcoded input (WRONG): `rule discount: 10 * 0.1`
 RIGHT: `data qty: number` then `rule discount: qty * 0.1`
 
 Wrong unless order (WRONG: VIP gets 20% not 25%):
 ```lemma-skip
-rule discount: 0%
-  unless is_vip then 25%
+rule discount:
+  0%
+  unless is_vip    then 25%
   unless qty >= 50 then 20%
 ```
-RIGHT: specific override last (`qty` tiers first, `is_vip` last).
+RIGHT: specific override last (`qty` tiers first, `is_vip` last; see **Rules**).
 
 Placeholder (WRONG): `data customer_name: "TODO"`
 RIGHT: `data customer_name: text`
 
-Error vs Veto: `5 and "text"` = planning Error. `unless age > 120 then veto "…"` = runtime Veto.
+Elapsed time / pre-interpreted threshold as data (WRONG):
+```lemma-skip
+data days_overdue:                number
+data qualifies_for_free_shipping: boolean
+```
+RIGHT: dates and amounts as data; duration/threshold rules without unit names (see **Data**).
+
+Unit in the name (WRONG — common agent failure):
+```lemma-skip
+rule days_overdue:
+  due_date...return_date as day as number
+
+rule weight_kg:
+  package_weight as kilogram
+
+rule price_eur:
+  total
+```
+RIGHT: name the concept; keep the unit on the value (see **Data**, **Units**).
+
+Veto for bounds (WRONG):
+```lemma-skip
+rule validated_score:
+  score
+  unless score < 0 then veto "Invalid score"
+```
+RIGHT: `data score: number -> minimum 0`. Veto is unanswerable, not out-of-range (see **Veto**).
+
+Error vs Veto: `5 and "text"` = planning Error. Unmapped product with default `veto "…"` = runtime Veto.
 
 Veto-as-rejection (WRONG: denial is answerable; see **Veto**):
 ```lemma-skip
-rule is_eligible: true
-  unless age < 18 then veto "Must be 18+"
-  unless has_id is false then veto "ID required"
+rule is_eligible:
+  true
+  unless age < 18   then veto "Must be 18+"
+  unless not has_id then veto "ID required"
 ```
-RIGHT: boolean rules composed with `and` (`is_old_enough and has_valid_id`).
+RIGHT: boolean rules (`is_adult` and `has_valid_id`).
 
 Unnecessary `repo` (WRONG). RIGHT: single-file `spec` without `repo`.
 
@@ -770,24 +605,34 @@ Constraints on rules (WRONG): `rule discount: 10% -> help "…"`. `->` is data-o
 
 Domain-blind polarity / double denial (WRONG):
 ```lemma-skip
-rule can_ship: yes
-  unless in_stock is false then no
-  unless address_complete is false then no
+rule can_ship:
+  yes
+  unless not in_stock         then no
+  unless not address_complete then no
 ```
-RIGHT: domain principle + positive grant (see **Rules**):
+RIGHT: domain principle + positive grant (see **Rules**).
+
+Useless default/unless for boolean rules (WRONG):
 ```lemma-skip
-rule can_ship: no
+rule can_ship:
+  no
   unless in_stock and address_complete then yes
 ```
-
+RIGHT: `rule can_ship: in_stock and address_complete`. When one `unless … then yes` is the whole answer, write the condition directly; `unless` is for exceptions, not a boolean wrapper.
 
 ---
 
 ## See also
 
-- [Learn guide](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md)
-- [Reference](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/readme.md)
+- [Learn guide](https://lemma.run/learn)
+- [Reference](https://lemma.run/reference)
 - [LemmaBase search](https://lemmabase.com/search?q=)
-- [Examples](https://github.com/lemma/lemma/tree/main/cli/documentation/examples)
+- [Examples](https://github.com/lemma/lemma/tree/main/engine/documentation/examples)
+  - [01_coffee_order.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/01_coffee_order.lemma)
+  - [02_library_fees.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/02_library_fees.lemma)
+  - [03_recipe_scaling.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/03_recipe_scaling.lemma)
+  - [04_membership_benefits.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/04_membership_benefits.lemma)
+  - [05_weather_clothing.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/05_weather_clothing.lemma)
+  - [nl/tax/net_salary.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/nl/tax/net_salary.lemma)
 
-Decimals at JSON boundaries: pass as strings. Detail: [Numeric precision](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/precision.md).
+Decimals at JSON boundaries: pass as strings. Detail: [Numeric precision](https://lemma.run/learn/precision).

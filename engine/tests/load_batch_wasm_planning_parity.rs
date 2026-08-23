@@ -65,7 +65,7 @@ data code: text
 
 spec cashier
 uses C: alpha2
-with C.code: "NL"
+  -> with code: "NL"
 rule country: C.code
 "#;
     engine

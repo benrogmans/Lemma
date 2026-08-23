@@ -9,11 +9,19 @@ import org.jspecify.annotations.Nullable;
 
 /** Lemma rules engine. Thread-safe. All methods acquire an internal lock; concurrent calls from multiple threads are safe. */
 public final class Engine implements AutoCloseable {
+  /** Cleaner for native handle teardown when {@link Engine} is unreachable. */
   private static final Cleaner CLEANER = Cleaner.create();
 
+  /** Shared native state guarded by {@link NativeState#lock}. */
   private final NativeState state;
+  /** Deregisters {@link DestroyAction} after explicit {@link #close()}. */
   private final Cleaner.Cleanable cleanable;
 
+  /**
+   * Creates an engine from an already-allocated native handle.
+   *
+   * @param handle native engine handle from JNI
+   */
   private Engine(long handle) {
     if (handle == 0L) {
       throw new LemmaBugError("BUG: native engine create returned null handle");
@@ -22,15 +30,31 @@ public final class Engine implements AutoCloseable {
     this.cleanable = CLEANER.register(this, new DestroyAction(state));
   }
 
+  /**
+   * Creates an engine with default resource limits.
+   *
+   * @return new engine instance
+   */
   public static Engine create() {
     return new Engine(Native.create());
   }
 
+  /**
+   * Creates an engine with explicit resource limits.
+   *
+   * @param limits limits applied at creation
+   * @return new engine instance
+   */
   public static Engine create(ResourceLimits limits) {
     Objects.requireNonNull(limits, "limits");
     return new Engine(Native.createWithLimits(JsonSupport.limitsToJson(limits)));
   }
 
+  /**
+   * Loads Lemma source into the engine.
+   *
+   * @param code Lemma source text
+   */
   public void load(String code) {
     Objects.requireNonNull(code, "code");
     state.lock.lock();
@@ -41,6 +65,11 @@ public final class Engine implements AutoCloseable {
     }
   }
 
+  /**
+   * Loads labeled sources (label to source text).
+   *
+   * @param sources map from source label to Lemma text
+   */
   public void load(Map<String, String> sources) {
     Objects.requireNonNull(sources, "sources");
     String[] labels = sources.keySet().toArray(String[]::new);
@@ -56,6 +85,11 @@ public final class Engine implements AutoCloseable {
     }
   }
 
+  /**
+   * Lists specs currently loaded in the engine.
+   *
+   * @return listed repositories and specs
+   */
   public List<ResolvedRepository> list() {
     String json;
     state.lock.lock();
@@ -67,6 +101,14 @@ public final class Engine implements AutoCloseable {
     return JsonSupport.parseList(json);
   }
 
+  /**
+   * Returns structured show metadata for one spec slice.
+   *
+   * @param repository repository handle; {@code null} for default
+   * @param spec spec name
+   * @param effective effective date; {@code null} for latest
+   * @return show metadata
+   */
   public Show show(@Nullable String repository, String spec, @Nullable String effective) {
     Objects.requireNonNull(spec, "spec");
     String json;
@@ -79,6 +121,14 @@ public final class Engine implements AutoCloseable {
     return JsonSupport.parseShow(json);
   }
 
+  /**
+   * Returns raw Lemma source for one spec slice.
+   *
+   * @param repository repository handle; {@code null} for default
+   * @param spec spec name; {@code null} when returning whole repository source
+   * @param effective effective date; {@code null} for latest
+   * @return Lemma source text
+   */
   public String source(
       @Nullable String repository, @Nullable String spec, @Nullable String effective) {
     state.lock.lock();
@@ -89,6 +139,12 @@ public final class Engine implements AutoCloseable {
     }
   }
 
+  /**
+   * Evaluates rules for one spec slice.
+   *
+   * @param request run parameters and input data
+   * @return evaluation response
+   */
   public Response run(RunRequest request) {
     Objects.requireNonNull(request, "request");
     Map<String, String> data = RunDataValues.toEngineStrings(request.data());
@@ -118,6 +174,13 @@ public final class Engine implements AutoCloseable {
     return JsonSupport.parseResponse(json);
   }
 
+  /**
+   * Removes one loaded spec slice.
+   *
+   * @param repository repository handle; {@code null} for default
+   * @param spec spec name
+   * @param effective effective date; {@code null} for latest
+   */
   public void remove(@Nullable String repository, String spec, @Nullable String effective) {
     Objects.requireNonNull(spec, "spec");
     state.lock.lock();
@@ -131,6 +194,10 @@ public final class Engine implements AutoCloseable {
   /**
    * Replace a temporal spec slice with new source (atomic remove + load).
    *
+   * @param repository repository handle; {@code null} for default
+   * @param spec spec name
+   * @param effective effective date; {@code null} for latest
+   * @param code replacement Lemma source
    * @param attribute source label (path or {@code @owner/repo}); {@code null} for volatile
    */
   public void update(
@@ -149,6 +216,10 @@ public final class Engine implements AutoCloseable {
     }
   }
 
+  /** Returns active resource limits.
+   *
+   * @return current limits
+   */
   public ResourceLimits limits() {
     String json;
     state.lock.lock();
@@ -160,7 +231,10 @@ public final class Engine implements AutoCloseable {
     return JsonSupport.parseLimits(json);
   }
 
-  /** Structural quality recommendations across loaded specs. Advisory only. */
+  /** Structural quality recommendations across loaded specs. Advisory only.
+   *
+   * @return quality recommendations
+   */
   public List<Recommendation> quality() {
     String json;
     state.lock.lock();
@@ -172,6 +246,7 @@ public final class Engine implements AutoCloseable {
     return JsonSupport.parseRecommendations(json);
   }
 
+  /** Releases native resources. */
   @Override
   public void close() {
     state.lock.lock();
@@ -190,13 +265,24 @@ public final class Engine implements AutoCloseable {
    * means destroyed. All reads/writes happen under {@link #lock}.
    */
   private static final class NativeState {
+    /** Mutex for {@link #handle} reads and writes. */
     final ReentrantLock lock = new ReentrantLock();
+    /** Native engine handle; zero after destroy. */
     private long handle;
 
+    /**
+     * Creates state wrapping a live native handle.
+     *
+     * @param handle native engine handle
+     */
     NativeState(long handle) {
       this.handle = handle;
     }
 
+    /** Returns the live handle or throws if closed.
+     *
+     * @return native engine handle
+     */
     long requireHandle() {
       if (handle == 0L) {
         throw new LemmaBugError("BUG: Engine used after close");
@@ -204,6 +290,7 @@ public final class Engine implements AutoCloseable {
       return handle;
     }
 
+    /** Destroys the native handle if not already destroyed. */
     void destroy() {
       if (handle == 0L) {
         return;
@@ -214,13 +301,21 @@ public final class Engine implements AutoCloseable {
     }
   }
 
+  /** {@link Cleaner} action that destroys {@link NativeState} when the engine is unreachable. */
   private static final class DestroyAction implements Runnable {
+    /** State to destroy on cleanup. */
     private final NativeState state;
 
+    /**
+     * Registers cleanup for {@code state}.
+     *
+     * @param state native state to destroy
+     */
     DestroyAction(NativeState state) {
       this.state = state;
     }
 
+    /** Destroys the native engine handle. */
     @Override
     public void run() {
       state.lock.lock();

@@ -70,8 +70,8 @@ rule weeks_billed: ceil (storage_duration as week)"#;
 fn warehousing_storage_cost_with_ceil_weeks() {
     let code = r#"spec warehousing
 uses lemma units
-data money: measure -> unit eur 1
-data rate: measure -> unit eur_per_week eur/week
+data money: measure -> unit eur: 1
+data rate: measure -> unit eur_per_week: eur/week
 data storage_per_pallet_per_week: 10 eur_per_week
 data storage_duration: 10 day
 rule storage_cost_per_pallet:
@@ -93,7 +93,7 @@ rule storage_cost_per_pallet:
 fn floor_round_abs_on_measure() {
     let code = r#"spec mass_math
 uses lemma units
-data mass: measure -> unit kilogram 1
+data mass: measure -> unit kilogram: 1
 data weight: 2.6 kilogram
 rule floored: floor weight
 rule rounded: round weight

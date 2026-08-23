@@ -180,7 +180,7 @@ final class EngineContractTest {
           """
           spec shipping
           data weight: measure
-            -> unit kilogram 1
+            -> unit kilogram: 1
           rule heavy: weight > 10 kilogram
           """);
       Response response =

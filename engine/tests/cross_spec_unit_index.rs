@@ -8,7 +8,7 @@ const UNITS_SPEC: &str = r#"
 spec units
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> decimals 2
 "#;
 

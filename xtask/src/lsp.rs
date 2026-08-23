@@ -13,10 +13,10 @@ fn cargo_bin() -> String {
 }
 
 fn run_npm(vscode_dir: &Path, args: &[&str]) -> Result<(), String> {
-    let status = Command::new("npm")
+    let output = Command::new("npm")
         .current_dir(vscode_dir)
         .args(args)
-        .status()
+        .output()
         .map_err(|e| {
             format!(
                 "failed to run npm {} in {}: {e}",
@@ -24,24 +24,23 @@ fn run_npm(vscode_dir: &Path, args: &[&str]) -> Result<(), String> {
                 vscode_dir.display()
             )
         })?;
-    if !status.success() {
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{combined}");
+    let label = format!("npm {}", args.join(" "));
+    if !output.status.success() {
         return Err(format!(
-            "npm {} exited with status {:?}",
-            args.join(" "),
-            status.code()
+            "{label} exited with status {:?}",
+            output.status.code()
         ));
     }
+    crate::warnings::reject_warnings_in_output(&label, &combined)?;
     Ok(())
 }
 
-fn line_is_warning(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed.starts_with("WARNING")
-        || trimmed.starts_with("npm warn")
-        || trimmed.starts_with("npm WARN")
-}
-
-/// Run a locked local bin via `npm exec --no` (no network install). Warnings are errors.
 fn run_npm_exec_capture(vscode_dir: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd_args = vec!["exec", "--no", "--", bin];
     cmd_args.extend_from_slice(args);
@@ -69,13 +68,7 @@ fn run_npm_exec_capture(vscode_dir: &Path, bin: &str, args: &[&str]) -> Result<S
             output.status.code()
         ));
     }
-    for line in combined.lines() {
-        if line_is_warning(line) {
-            return Err(format!(
-                "{label} emitted warning (warnings are errors): {line}"
-            ));
-        }
-    }
+    crate::warnings::reject_warnings_in_output(&label, &combined)?;
     Ok(combined)
 }
 
@@ -98,7 +91,7 @@ fn prepare_extension(root: &Path, vscode_dir: &Path) -> Result<(), String> {
     eprintln!("xtask: cargo build --release -p lemma");
     build_release_lemma(root)?;
     eprintln!("xtask: npm ci (vscode extension)");
-    run_npm(vscode_dir, &["ci"])?;
+    run_npm(vscode_dir, &["ci", "--omit=optional"])?;
     eprintln!("xtask: npm run compile (vscode extension)");
     run_npm(vscode_dir, &["run", "compile"])?;
     Ok(())
@@ -122,7 +115,7 @@ fn package_vsix(vscode_dir: &Path) -> Result<(), String> {
 /// `npm ci` + compile + package `.vsix` (no lemma binary build). Used by precommit and release.
 pub fn ci_compile_package(vscode_dir: &Path) -> Result<(), String> {
     eprintln!("xtask: npm ci (vscode extension)");
-    run_npm(vscode_dir, &["ci"])?;
+    run_npm(vscode_dir, &["ci", "--omit=optional"])?;
     eprintln!("xtask: npm run compile (vscode extension)");
     run_npm(vscode_dir, &["run", "compile"])?;
     package_vsix(vscode_dir)
@@ -321,21 +314,5 @@ mod tests {
         assert!(run(Path::new("/tmp"), &["not-a-command".to_string()])
             .unwrap_err()
             .contains("unknown"));
-    }
-
-    #[test]
-    fn warning_gate_rejects_npm_warn_and_warning() {
-        assert!(line_is_warning(
-            "npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes"
-        ));
-        assert!(line_is_warning(
-            "npm WARN deprecated prebuild-install@7.1.3"
-        ));
-        assert!(line_is_warning("WARNING Something went wrong"));
-        assert!(line_is_warning("  npm warn indented"));
-        assert!(!line_is_warning(
-            " DONE  Packaged: /tmp/lemma-language-0.9.4.vsix"
-        ));
-        assert!(!line_is_warning("INFO  Files included in the VSIX:"));
     }
 }

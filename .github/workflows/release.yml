@@ -438,7 +438,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.11.0"
           registry-url: "https://registry.npmjs.org"
 
       - name: Build WASM
@@ -513,7 +513,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.11.0"
           registry-url: "https://registry.npmjs.org"
 
       - name: Download CLI binaries from release
@@ -587,7 +587,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.11.0"
 
       - name: Package extension
         run: cargo run -p xtask -- lsp package

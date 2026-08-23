@@ -333,7 +333,7 @@ data v: number -> suggest 1
 
 spec outer
 uses i: inner
-with i.v: 42
+  -> with v: 42
 rule r: i.v
 "#;
     let mut engine = Engine::new();
@@ -366,7 +366,7 @@ data v: number
 
 spec outer
 uses i: inner
-with i.n: i.v
+  -> with n: i.v
 rule r: i.n
 "#;
     let mut engine = Engine::new();

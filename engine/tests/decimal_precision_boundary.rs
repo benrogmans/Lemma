@@ -157,8 +157,8 @@ fn accepted_measure_data_plans_and_evaluates_without_decimal_limit_rejection() {
     let code = r#"
 spec weight
 data money: measure
-  -> unit eur 1
-  -> unit milli 0.001
+  -> unit eur: 1
+  -> unit milli: 0.001
   -> minimum 1000 eur
 rule r: money
 "#;
@@ -243,7 +243,7 @@ fn overlay_measure_decimals_constraint_uses_declared_unit() {
         &mut engine,
         r#"
 spec delivery
-data cost: measure -> decimals 2 -> unit eur 1
+data cost: measure -> decimals 2 -> unit eur: 1
 rule r: cost
 "#,
     );

@@ -28,55 +28,8 @@ pub use run_data::{RunData, RunDataValue};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Nearest ignored input key for a MissingData typo hint, if within edit distance.
-/// Comparison is case-insensitive; returned spelling is the caller's original key.
 fn closest_ignored_key(needed: &str, ignored: &[String]) -> Option<String> {
-    let max_distance = if needed.len() <= 3 { 1 } else { 2 };
-    let needed_lower = needed.to_ascii_lowercase();
-    let mut best: Option<(usize, String, &String)> = None;
-    for candidate in ignored {
-        let candidate_lower = candidate.to_ascii_lowercase();
-        let distance = levenshtein(&needed_lower, &candidate_lower);
-        if distance == 0 || distance > max_distance {
-            continue;
-        }
-        let dominated = best
-            .as_ref()
-            .map(|(best_distance, best_lower, _)| {
-                distance < *best_distance
-                    || (distance == *best_distance && candidate_lower < *best_lower)
-            })
-            .unwrap_or(true);
-        if dominated {
-            best = Some((distance, candidate_lower, candidate));
-        }
-    }
-    best.map(|(_, _, key)| key.clone())
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    let left_chars: Vec<char> = left.chars().collect();
-    let right_chars: Vec<char> = right.chars().collect();
-    let (left_len, right_len) = (left_chars.len(), right_chars.len());
-    if left_len == 0 {
-        return right_len;
-    }
-    if right_len == 0 {
-        return left_len;
-    }
-    let mut previous: Vec<usize> = (0..=right_len).collect();
-    let mut current = vec![0; right_len + 1];
-    for (i, left_char) in left_chars.iter().enumerate() {
-        current[0] = i + 1;
-        for (j, right_char) in right_chars.iter().enumerate() {
-            let substitution = usize::from(left_char != right_char);
-            current[j + 1] = (previous[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(previous[j] + substitution);
-        }
-        std::mem::swap(&mut previous, &mut current);
-    }
-    previous[right_len]
+    crate::string_distance::closest_name(needed, ignored)
 }
 
 /// Request-local mutable state for one plan run (run data, control decisions, explain caches).
@@ -367,8 +320,8 @@ data v: 5
 
 spec outer
 uses i: inner
+  -> with slot: src.v
 uses src: source_spec
-with i.slot: src.v
 rule r: i.slot
 "#;
         let mut engine = Engine::new();

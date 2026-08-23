@@ -6,8 +6,8 @@
 
 use crate::parsing::ast::{
     arithmetic_associativity, expression_precedence, operand_needs_parentheses, AsLemmaSource,
-    Constraint, DataValue, Expression, ExpressionKind, LemmaData, LemmaRule, LemmaSpec,
-    OperandSide,
+    Associativity, Constraint, DataValue, Expression, ExpressionKind, LemmaData, LemmaRule,
+    LemmaSpec, OperandSide,
 };
 use crate::parsing::{parse, ParseResult};
 use crate::{Error, ResourceLimits};
@@ -124,7 +124,11 @@ pub(crate) fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
     }
 
     if !spec.rules.is_empty() {
-        out.push('\n');
+        if !spec.data.is_empty() {
+            out.push_str("\n\n");
+        } else {
+            out.push('\n');
+        }
         for (index, rule) in spec.rules.iter().enumerate() {
             if index > 0 {
                 out.push('\n');
@@ -154,8 +158,14 @@ fn data_constraints_nonempty(constraints: &Option<Vec<Constraint>>) -> bool {
 fn data_value_has_arrow_constraints(value: &DataValue) -> bool {
     match value {
         DataValue::Definition { constraints, .. } => data_constraints_nonempty(constraints),
-        DataValue::With(_) => false,
-        _ => false,
+        DataValue::Import { .. } => false,
+    }
+}
+
+fn format_with_rhs(rhs: &crate::parsing::ast::WithRhs) -> String {
+    match rhs {
+        crate::parsing::ast::WithRhs::Literal(v) => format!("{}", AsLemmaSource(v)),
+        crate::parsing::ast::WithRhs::Reference { target } => target.to_string(),
     }
 }
 
@@ -181,23 +191,25 @@ fn data_value_rhs_for_spec_body(value: &DataValue, continuation_prefix: &str) ->
                 }
             };
             let mut out = head;
-            for (cmd, args) in cs {
+            for row in cs {
                 out.push('\n');
                 out.push_str(continuation_prefix);
                 out.push_str("-> ");
-                out.push_str(&crate::parsing::ast::format_constraint_as_source(cmd, args));
+                out.push_str(&crate::parsing::ast::format_constraint_as_source(
+                    &row.command,
+                    &row.args,
+                ));
             }
             out
         }
-        DataValue::With(crate::parsing::ast::WithRhs::Reference { target }) => target.to_string(),
-        _ => format!("{}", AsLemmaSource(value)),
+        DataValue::Definition { .. } => format!("{}", AsLemmaSource(value)),
+        DataValue::Import { .. } => unreachable!("BUG: format_data called on Import row"),
     }
 }
 
 fn data_declaration_keyword(data: &LemmaData) -> &'static str {
     match &data.value {
-        DataValue::Import(_) => unreachable!("BUG: format_data called on Import row"),
-        DataValue::With(_) => "with",
+        DataValue::Import { .. } => unreachable!("BUG: format_data called on Import row"),
         DataValue::Definition { .. } => "data",
     }
 }
@@ -285,35 +297,49 @@ fn emit_data_row_group(rows: &[&LemmaData], line_prefix: &str, out: &mut String)
     }
 }
 
-fn format_import_row(data: &LemmaData) -> String {
+fn format_import_header(data: &LemmaData) -> String {
     let alias = &data.reference.name;
-    if let DataValue::Import(spec_ref) = &data.value {
-        let spec_name = &spec_ref.name;
-        let last_segment = spec_name.rsplit('/').next().unwrap_or(spec_name);
-        if alias == last_segment {
-            format!("uses {}", spec_ref)
-        } else {
-            format!("uses {}: {}", alias, spec_ref)
-        }
+    let DataValue::Import { spec_ref, .. } = &data.value else {
+        unreachable!("BUG: format_import_header called on non-Import data");
+    };
+    let spec_name = &spec_ref.name;
+    let last_segment = spec_name.rsplit('/').next().unwrap_or(spec_name);
+    if alias == last_segment {
+        format!("uses {}", spec_ref)
     } else {
-        unreachable!("BUG: format_import_row called on non-Import data")
+        format!("uses {}: {}", alias, spec_ref)
     }
+}
+
+fn format_uses_block(data: &LemmaData, line_prefix: &str) -> String {
+    let mut out = format_import_header(data);
+    let DataValue::Import { bindings, .. } = &data.value else {
+        unreachable!("BUG: format_uses_block called on non-Import data");
+    };
+    for binding in bindings {
+        out.push('\n');
+        out.push_str(line_prefix);
+        out.push_str(DATA_CONSTRAINT_INDENT);
+        out.push_str("-> ");
+        out.push_str(&crate::parsing::ast::format_assignment_continuation(
+            "with",
+            &format!("{}", binding.path),
+            &format_with_rhs(&binding.rhs),
+        ));
+    }
+    out
 }
 
 /// Group data into sections separated by blank lines:
 ///
-/// 1. Imports (`uses`), each followed by their literal bindings — original order within this block
-/// 2. Regular data (literals, type declarations, references) — original order
-/// 3. Qualified overrides that did not attach to any import — original order
+/// 1. Imports (`uses`) with `-> with` bindings — declaration order
+/// 2. Regular local `data` — declaration order
 fn format_sorted_data(data: &[LemmaData], out: &mut String, line_prefix: &str) {
     let mut regular: Vec<&LemmaData> = Vec::new();
     let mut imports: Vec<&LemmaData> = Vec::new();
-    let mut overrides: Vec<&LemmaData> = Vec::new();
 
     for data in data {
-        if !data.reference.is_local() {
-            overrides.push(data);
-        } else if matches!(&data.value, DataValue::Import(_)) {
+        if matches!(&data.value, DataValue::Import { .. }) {
             imports.push(data);
         } else {
             regular.push(data);
@@ -331,42 +357,14 @@ fn format_sorted_data(data: &[LemmaData], out: &mut String, line_prefix: &str) {
                 out.push('\n');
             }
             out.push_str(line_prefix);
-            out.push_str(&format_import_row(row));
+            out.push_str(&format_uses_block(row, line_prefix));
             out.push('\n');
-            let ref_name = &row.reference.name;
-            let binding_overrides: Vec<&LemmaData> = overrides
-                .iter()
-                .filter(|o| {
-                    o.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str())
-                })
-                .copied()
-                .collect();
-            if !binding_overrides.is_empty() {
-                emit_data_row_group(&binding_overrides, line_prefix, out);
-            }
         }
     }
 
     if !regular.is_empty() {
         out.push('\n');
         emit_group(&regular, out);
-    }
-
-    let matched_prefixes: Vec<&str> = imports.iter().map(|f| f.reference.name.as_str()).collect();
-    let unmatched: Vec<&LemmaData> = overrides
-        .iter()
-        .filter(|o| {
-            o.reference
-                .segments
-                .first()
-                .map(|s| !matched_prefixes.contains(&s.as_str()))
-                .unwrap_or(true)
-        })
-        .copied()
-        .collect();
-    if !unmatched.is_empty() {
-        out.push('\n');
-        emit_group(&unmatched, out);
     }
 }
 
@@ -376,100 +374,102 @@ fn format_sorted_data(data: &[LemmaData], out: &mut String, line_prefix: &str) {
 
 const UNLESS_LINE_PREFIX: &str = "  unless ";
 
-/// Logical line length for `max_cols` checks (no extra spec-level indent).
-#[inline]
-fn spec_line_len(line: &str) -> usize {
-    line.len()
-}
-
-/// Default expression stays on the `rule name:` line when it fits under `max_cols`.
+/// Rule body always starts on the line after `rule name:`.
 ///
-/// Single-line `unless … then …` clauses align `then` when every such line still fits under
-/// `max_cols` after alignment. Any clause that splits across lines (expression wraps, or one line
-/// would exceed `max_cols`) uses a fixed `then` indent — no column alignment with shorter sisters.
+/// When every `unless` clause fits on one line under `max_cols`, `then` columns align across
+/// sisters. If any clause needs split `then` (wrapped condition, wrapped result, or oversize
+/// flat line), every clause on the rule uses split `then` at a fixed 4-space indent.
 fn format_rule(rule: &LemmaRule, max_cols: usize) -> String {
     let expr_indent = "  ";
     let body = format_expr_wrapped(&rule.expression, max_cols, expr_indent, 10);
     let mut out = String::new();
     out.push_str("rule ");
     out.push_str(&rule.name);
-    let body_single_line = !body.contains('\n');
-    let header_fits_on_one_line =
-        body_single_line && spec_line_len(&format!("rule {}: {}", rule.name, body)) <= max_cols;
-    if header_fits_on_one_line {
-        out.push_str(": ");
-        out.push_str(&body);
-    } else {
-        out.push_str(":\n");
-        out.push_str(expr_indent);
-        out.push_str(&body);
-    }
+    out.push_str(":\n");
+    out.push_str(expr_indent);
+    out.push_str(&body);
 
     let pl = UNLESS_LINE_PREFIX.len();
     let naive_single_len = |cond: &str, res: &str| pl + cond.len() + 6 + res.len();
     let aligned_single_len = |res: &str, max_end: usize| max_end + 6 + res.len();
+    let unless_condition_budget = max_cols.saturating_sub(pl);
 
-    let mut clauses: Vec<(String, String, bool)> = Vec::new();
+    let mut clauses: Vec<(String, String)> = Vec::new();
     for unless_clause in &rule.unless_clauses {
-        let condition = format_expr_wrapped(&unless_clause.condition, max_cols, "    ", 10);
+        let condition = format_expr_wrapped(
+            &unless_clause.condition,
+            unless_condition_budget,
+            "    ",
+            10,
+        );
         let result = format_expr_wrapped(&unless_clause.result, max_cols, "    ", 10);
-        let multiline = condition.contains('\n') || result.contains('\n');
-        clauses.push((condition, result, multiline));
+        clauses.push((condition, result));
     }
 
-    let mut singles: Vec<usize> = clauses
-        .iter()
-        .enumerate()
-        .filter(|(_, (c, r, m))| !*m && naive_single_len(c, r) <= max_cols)
-        .map(|(i, _)| i)
-        .collect();
+    let clause_needs_split_then = |condition: &str, result: &str| {
+        condition.contains('\n')
+            || result.contains('\n')
+            || naive_single_len(condition, result) > max_cols
+    };
 
-    loop {
-        if singles.is_empty() {
-            break;
-        }
-        let max_end = singles
-            .iter()
-            .map(|&i| pl + clauses[i].0.len())
-            .max()
-            .expect("BUG: singles non-empty");
-        let before = singles.len();
-        singles.retain(|&i| aligned_single_len(&clauses[i].1, max_end) <= max_cols);
-        if singles.len() == before {
-            break;
-        }
-    }
+    let any_split = clauses.iter().any(|(c, r)| clause_needs_split_then(c, r));
 
-    let align_max_end = singles.iter().map(|&i| pl + clauses[i].0.len()).max();
     const SPLIT_THEN_INDENT_SPACES: usize = 4;
 
-    for (i, (condition, result, multiline)) in clauses.iter().enumerate() {
-        if *multiline {
+    if any_split {
+        for (condition, result) in &clauses {
             out.push_str("\n  unless ");
             out.push_str(condition);
             out.push('\n');
             out.push_str(&" ".repeat(SPLIT_THEN_INDENT_SPACES));
             out.push_str("then ");
             out.push_str(result);
-            continue;
         }
-        if singles.contains(&i) {
-            let max_end = align_max_end.expect("BUG: singles.contains but align_max_end empty");
-            let gap = 1 + max_end.saturating_sub(pl + condition.len());
-            out.push('\n');
-            out.push_str(UNLESS_LINE_PREFIX);
-            out.push_str(condition);
-            out.push_str(&" ".repeat(gap));
-            out.push_str("then ");
-            out.push_str(result);
-            continue;
+    } else {
+        let mut singles: Vec<usize> = clauses
+            .iter()
+            .enumerate()
+            .filter(|(_, (c, r))| naive_single_len(c, r) <= max_cols)
+            .map(|(i, _)| i)
+            .collect();
+
+        loop {
+            if singles.is_empty() {
+                break;
+            }
+            let max_end = singles
+                .iter()
+                .map(|&i| pl + clauses[i].0.len())
+                .max()
+                .expect("BUG: singles non-empty");
+            let before = singles.len();
+            singles.retain(|&i| aligned_single_len(&clauses[i].1, max_end) <= max_cols);
+            if singles.len() == before {
+                break;
+            }
         }
-        out.push_str("\n  unless ");
-        out.push_str(condition);
-        out.push('\n');
-        out.push_str(&" ".repeat(SPLIT_THEN_INDENT_SPACES));
-        out.push_str("then ");
-        out.push_str(result);
+
+        let align_max_end = singles.iter().map(|&i| pl + clauses[i].0.len()).max();
+
+        for (i, (condition, result)) in clauses.iter().enumerate() {
+            if singles.contains(&i) {
+                let max_end = align_max_end.expect("BUG: singles.contains but align_max_end empty");
+                let gap = 1 + max_end.saturating_sub(pl + condition.len());
+                out.push('\n');
+                out.push_str(UNLESS_LINE_PREFIX);
+                out.push_str(condition);
+                out.push_str(&" ".repeat(gap));
+                out.push_str("then ");
+                out.push_str(result);
+            } else {
+                out.push_str("\n  unless ");
+                out.push_str(condition);
+                out.push('\n');
+                out.push_str(&" ".repeat(SPLIT_THEN_INDENT_SPACES));
+                out.push_str("then ");
+                out.push_str(result);
+            }
+        }
     }
     out.push('\n');
     out
@@ -499,9 +499,68 @@ fn indent_after_first_line(s: &str, indent: &str) -> String {
     out
 }
 
-/// Format an expression with optional wrapping at arithmetic operators when over max_cols.
+struct BinaryWrapContext<'a> {
+    max_cols: usize,
+    indent: &'a str,
+    parent_prec: u8,
+    my_prec: u8,
+    assoc: Option<Associativity>,
+}
+
+fn format_binary_expr_wrapped(
+    left: &Expression,
+    op: &str,
+    right: &Expression,
+    ctx: BinaryWrapContext<'_>,
+) -> String {
+    let BinaryWrapContext {
+        max_cols,
+        indent,
+        parent_prec,
+        my_prec,
+        assoc,
+    } = ctx;
+    let left_inner = format_expr_wrapped(left, max_cols, indent, 10);
+    let right_inner = format_expr_wrapped(right, max_cols, indent, 10);
+    let left_str = if operand_needs_parentheses(
+        expression_precedence(&left.kind),
+        my_prec,
+        OperandSide::Left,
+        assoc,
+    ) {
+        format!("({})", left_inner)
+    } else {
+        left_inner
+    };
+    let right_str = if operand_needs_parentheses(
+        expression_precedence(&right.kind),
+        my_prec,
+        OperandSide::Right,
+        assoc,
+    ) {
+        format!("({})", right_inner)
+    } else {
+        right_inner
+    };
+    let single_line = format!("{} {} {}", left_str, op, right_str);
+    let body = if single_line.len() <= max_cols && !single_line.contains('\n') {
+        single_line
+    } else {
+        let continued_right = indent_after_first_line(&right_str, indent);
+        let continuation = format!("{}{} {}", indent, op, continued_right);
+        format!("{}\n{}", left_str, continuation)
+    };
+    if parent_prec < 10 && operand_needs_parentheses(my_prec, parent_prec, OperandSide::Left, None)
+    {
+        format!("({})", body)
+    } else {
+        body
+    }
+}
+
+/// Format an expression with optional wrapping at arithmetic and `and` operators when over max_cols.
 ///
-/// Arithmetic children use the same parenthesis policy as [`Expression`] display
+/// Binary children use the same parenthesis policy as [`Expression`] display
 /// ([`operand_needs_parentheses`]). Pass `10` for top-level (no outer wrap).
 fn format_expr_wrapped(
     expr: &Expression,
@@ -512,47 +571,30 @@ fn format_expr_wrapped(
     let my_prec = expression_precedence(&expr.kind);
 
     match &expr.kind {
-        ExpressionKind::Arithmetic(left, op, right) => {
-            let assoc = Some(arithmetic_associativity(op));
-            // Children formatted as top-level; this node applies paren policy.
-            let left_inner = format_expr_wrapped(left.as_ref(), max_cols, indent, 10);
-            let right_inner = format_expr_wrapped(right.as_ref(), max_cols, indent, 10);
-            let left_str = if operand_needs_parentheses(
-                expression_precedence(&left.kind),
+        ExpressionKind::Arithmetic(left, op, right) => format_binary_expr_wrapped(
+            left,
+            &op.to_string(),
+            right,
+            BinaryWrapContext {
+                max_cols,
+                indent,
+                parent_prec,
                 my_prec,
-                OperandSide::Left,
-                assoc,
-            ) {
-                format!("({})", left_inner)
-            } else {
-                left_inner
-            };
-            let right_str = if operand_needs_parentheses(
-                expression_precedence(&right.kind),
+                assoc: Some(arithmetic_associativity(op)),
+            },
+        ),
+        ExpressionKind::LogicalAnd(left, right) => format_binary_expr_wrapped(
+            left,
+            "and",
+            right,
+            BinaryWrapContext {
+                max_cols,
+                indent,
+                parent_prec,
                 my_prec,
-                OperandSide::Right,
-                assoc,
-            ) {
-                format!("({})", right_inner)
-            } else {
-                right_inner
-            };
-            let single_line = format!("{} {} {}", left_str, op, right_str);
-            let body = if single_line.len() <= max_cols && !single_line.contains('\n') {
-                single_line
-            } else {
-                let continued_right = indent_after_first_line(&right_str, indent);
-                let continuation = format!("{}{} {}", indent, op, continued_right);
-                format!("{}\n{}", left_str, continuation)
-            };
-            if parent_prec < 10
-                && operand_needs_parentheses(my_prec, parent_prec, OperandSide::Left, None)
-            {
-                format!("({})", body)
-            } else {
-                body
-            }
-        }
+                assoc: Some(Associativity::Left),
+            },
+        ),
         _ => {
             let s = expr.to_string();
             if parent_prec < 10
@@ -839,10 +881,10 @@ rule total: income
     fn test_format_groups_spec_refs_with_overrides() {
         let source = r#"spec test
 
-with retail.quantity: 5
 uses order wholesale
+  -> with quantity: 100
 uses order retail
-with wholesale.quantity: 100
+  -> with quantity: 5
 data base_price: 50
 
 rule total: base_price
@@ -858,9 +900,9 @@ rule total: base_price
             .unwrap();
         let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lines[0], "uses order wholesale");
-        assert_eq!(lines[1], "with wholesale.quantity: 100");
+        assert_eq!(lines[1], "  -> with quantity: 100");
         assert_eq!(lines[2], "uses order retail");
-        assert_eq!(lines[3], "with retail.quantity: 5");
+        assert_eq!(lines[3], "  -> with quantity: 5");
         assert_eq!(lines[4], "data base_price: 50");
     }
 
@@ -869,10 +911,9 @@ rule total: base_price
         let source = r#"spec test
 
 uses x
+  -> with name: "Ben"
 uses y
-
-with x.name: "Ben"
-with y.age: 15
+  -> with age: 15
 
 rule r: 1
 "#;
@@ -887,9 +928,9 @@ rule r: 1
             .unwrap();
         let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lines[0], "uses x");
-        assert_eq!(lines[1], "with x.name: \"Ben\"");
+        assert_eq!(lines[1], "  -> with name: \"Ben\"");
         assert_eq!(lines[2], "uses y");
-        assert_eq!(lines[3], "with y.age: 15");
+        assert_eq!(lines[3], "  -> with age: 15");
     }
 
     #[test]
@@ -976,8 +1017,8 @@ rule total: quantity
         let source = r#"spec test
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
   -> minimum 0
 
@@ -988,7 +1029,7 @@ rule total: price
         let formatted =
             format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
         assert!(
-            formatted.contains("unit eur 1.00"),
+            formatted.contains("unit eur: 1.00"),
             "measure unit should not be quoted, got: {}",
             formatted
         );
@@ -997,6 +1038,62 @@ rule total: price
         assert!(
             reparsed.is_ok(),
             "formatted output should re-parse, got: {:?}",
+            reparsed
+        );
+    }
+
+    #[test]
+    fn format_deprecated_unit_space_emits_assignment_colon() {
+        let source = r#"spec test
+uses lemma units
+
+data money: measure
+  -> unit eur: 1.00
+
+data rate: measure
+  -> unit eur_per_hour: eur/hour
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains("unit eur: 1.00"),
+            "formatter must emit assignment colon for unit, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("unit eur_per_hour: eur/hour"),
+            "formatter must emit assignment colon for compound unit, got: {}",
+            formatted
+        );
+        assert!(
+            !formatted.contains("unit eur 1.00"),
+            "formatter must not emit deprecated space unit syntax, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn format_canonical_unit_colon_round_trips() {
+        let source = r#"spec test
+uses lemma units
+
+data money: measure
+  -> unit eur: 1.00
+
+data rate: measure
+  -> unit eur_per_hour: eur/hour
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains("unit eur: 1.00"),
+            "canonical unit syntax must survive format, got: {}",
+            formatted
+        );
+        let reparsed = format_source(&formatted, crate::parsing::source::SourceType::Volatile);
+        assert!(
+            reparsed.is_ok(),
+            "formatted canonical unit syntax should re-parse, got: {:?}",
             reparsed
         );
     }
@@ -1028,11 +1125,11 @@ rule window: past length
         let formatted =
             format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
         assert!(
-            formatted.contains("rule valid: start in past length"),
+            formatted.contains("rule valid:\n  start in past length"),
             "RangeContainment+PastFutureRange must not emit duplicate 'in', got:\n{formatted}"
         );
         assert!(
-            formatted.contains("rule window: past length"),
+            formatted.contains("rule window:\n  past length"),
             "bare PastFutureRange must print 'past' not 'in past', got:\n{formatted}"
         );
         assert!(
@@ -1042,13 +1139,24 @@ rule window: past length
     }
 
     #[test]
-    fn test_format_rule_default_on_same_line_when_fits() {
+    fn test_format_rule_body_on_next_line() {
         let source = "spec test\nrule r: 1\n";
         let formatted =
             format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
         assert!(
-            formatted.contains("rule r: 1\n"),
-            "default expr should stay on rule line when under MAX_COLS, got:\n{formatted}"
+            formatted.contains("rule r:\n  1\n"),
+            "rule body must start on next line, got:\n{formatted}"
+        );
+    }
+
+    #[test]
+    fn test_format_blank_line_between_data_and_rules() {
+        let source = "spec test\ndata x: 1\nrule r: x\n";
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains("data x: 1\n\n\nrule r:\n"),
+            "two blank lines required between data block and rules block, got:\n{formatted:?}"
         );
     }
 
@@ -1069,5 +1177,112 @@ rule r: no
                 && formatted.contains("unless b     then yes"),
             "unless stays on one line when under MAX_COLS, got:\n{formatted}"
         );
+    }
+
+    #[test]
+    fn test_format_rule_unless_child_premium_applies_inline_aligned() {
+        let source = r#"spec child_premium_applies
+data child_age_years: number
+data is_male: boolean
+data child_has_own_children: boolean
+data child_is_oldest_insured: boolean
+
+rule child_premium_applies:
+  yes
+  unless child_age_years >= 25 and is_male then no
+  unless child_has_own_children then no
+  unless child_is_oldest_insured then no
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains("unless child_age_years >= 25 and is_male then no")
+                && formatted.contains("unless child_has_own_children            then no")
+                && formatted.contains("unless child_is_oldest_insured           then no"),
+            "all-single unless clauses align then, got:\n{formatted}"
+        );
+        let twice =
+            format_source(&formatted, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert_eq!(formatted, twice);
+    }
+
+    #[test]
+    fn test_format_rule_unless_can_request_reinstatement_and_wrap() {
+        let source = r#"spec can_request_reinstatement
+data days_since_policy_stopped: number
+data arrears_paid: boolean
+data surrender_value_repaid: boolean
+data all_insured_persons_alive: boolean
+
+rule can_request_reinstatement:
+  no
+  unless days_since_policy_stopped <= 365 and arrears_paid and surrender_value_repaid and all_insured_persons_alive then yes
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains(
+                "unless days_since_policy_stopped <= 365\n    and arrears_paid\n    and surrender_value_repaid\n    and all_insured_persons_alive\n    then yes"
+            ),
+            "long and chain wraps one operand per line, got:\n{formatted}"
+        );
+        let twice =
+            format_source(&formatted, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert_eq!(formatted, twice);
+    }
+
+    #[test]
+    fn test_format_rule_unless_foreign_transport_uniform_split_then() {
+        let source = r#"spec foreign_transport_covered
+data death_location: text
+data trip_duration_months: number
+data negative_travel_advisory_at_departure: boolean
+data left_area_asap_after_advisory: boolean
+
+rule foreign_transport_covered:
+  yes
+  unless death_location is "abroad" then no
+  unless death_location is "abroad" and trip_duration_months <= 2 then yes
+  unless death_location is "abroad" and trip_duration_months <= 2 and negative_travel_advisory_at_departure then no
+  unless death_location is "abroad" and trip_duration_months <= 2 and negative_travel_advisory_at_departure and left_area_asap_after_advisory then yes
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains("unless death_location is \"abroad\"\n    then no"),
+            "short sister uses split then when any clause needs it, got:\n{formatted}"
+        );
+        assert!(
+            formatted.contains(
+                "unless death_location is \"abroad\"\n    and trip_duration_months <= 2\n    then yes"
+            ),
+            "wrapped and chain with split then, got:\n{formatted}"
+        );
+        let twice =
+            format_source(&formatted, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert_eq!(formatted, twice);
+    }
+
+    #[test]
+    fn test_format_rule_unless_child_auto_covered_service_only() {
+        let source = r#"spec child_auto_covered_service_only
+data days_since_birth: number
+data birth_reported_within_60_days: boolean
+
+rule child_auto_covered_service_only:
+  yes
+  unless days_since_birth >= 60 and not birth_reported_within_60_days then no
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains(
+                "unless days_since_birth >= 60\n    and not birth_reported_within_60_days\n    then no"
+            ),
+            "multiline unless condition with split then, got:\n{formatted}"
+        );
+        let twice =
+            format_source(&formatted, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert_eq!(formatted, twice);
     }
 }

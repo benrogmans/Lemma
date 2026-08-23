@@ -239,7 +239,7 @@ fn planning_duration_trait_allows_extra_custom_units() {
 uses lemma units
 data duration: units.duration
 data travel_duration: duration
-  -> unit fortnight 1209600
+  -> unit fortnight: 1209600
 data trip: 1 fortnight
 rule value: trip as day as number"#;
     let value = eval_rule(code, "test", "value");
@@ -264,8 +264,8 @@ data elapsed: duration"#;
 fn planning_trait_duration_requires_second_factor_one() {
     let code = r#"spec test
 data duration: measure
-  -> unit second 2
-  -> unit hour 3600
+  -> unit second: 2
+  -> unit hour: 3600
   -> trait duration"#;
     expect_plan_error(code, "second 1");
 }
@@ -274,7 +274,7 @@ data duration: measure
 fn planning_trait_duration_requires_second_unit() {
     let code = r#"spec test
 data duration: measure
-  -> unit hour 3600
+  -> unit hour: 3600
   -> trait duration"#;
     expect_plan_error(code, "second");
 }
@@ -283,7 +283,7 @@ data duration: measure
 fn planning_duplicate_trait_duration_rejected() {
     let code = r#"spec test
 data duration: measure
-  -> unit second 1
+  -> unit second: 1
   -> trait duration
   -> trait duration"#;
     expect_plan_error(code, "duplicate");
@@ -293,7 +293,7 @@ data duration: measure
 fn planning_unknown_trait_rejected() {
     let code = r#"spec test
 data duration: measure
-  -> unit second 1
+  -> unit second: 1
   -> trait temporal"#;
     expect_plan_error(code, "trait");
 }

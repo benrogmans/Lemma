@@ -547,8 +547,8 @@ fn test_cli_explain_scalar_conversion_format() {
         r#"
 spec test_cli_conversion_explain
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> suggest 2 kilogram
 rule result: mass as gram
 "#,
@@ -638,8 +638,8 @@ fn test_cli_explain_conversion_nested_operand() {
         r#"
 spec test_cli_nested_conversion_explain
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> suggest 2 kilogram
 rule result: (mass * 2) as gram
 "#,
@@ -682,8 +682,8 @@ fn test_cli_run_measure_rule_result_includes_all_units_json() {
         r#"
 spec money
 data price: measure
-    -> unit eur 1
-    -> unit usd 0.91
+    -> unit eur: 1
+    -> unit usd: 0.91
     -> suggest 100 eur
 rule total: price
 "#,
@@ -714,7 +714,7 @@ fn test_cli_explain_shows_multiply_trace_for_measure_product() {
         r#"
 spec product_explanation
 data price: measure
-    -> unit eur 1
+    -> unit eur: 1
     -> suggest 10 eur
 data quantity: number -> suggest 3
 rule product: price * quantity
@@ -754,8 +754,8 @@ fn test_cli_explain_with_measure_product_preserves_multiply_trace() {
         r#"
 spec product_as_explanation
 data price: measure
-    -> unit eur 1
-    -> unit usd 0.91
+    -> unit eur: 1
+    -> unit usd: 0.91
     -> suggest 10 eur
 data quantity: number -> suggest 3
 rule product: price * quantity
@@ -797,7 +797,7 @@ spec calc
 
 data money: measure
   -> decimals 2
-  -> unit eur 1
+  -> unit eur: 1
 
 data hourly_rate: 85.00 eur
 data hours_worked: 37.5

@@ -129,8 +129,8 @@ rule total: price * quantity
     let derived_spec = r#"
 spec derived
 uses config: base
-with config.price: 200
-with config.quantity: 3
+  -> with price: 200
+  -> with quantity: 3
 rule derived_total: config.total
 "#;
 
@@ -293,8 +293,8 @@ data z: 30
     let derived_spec = r#"
 spec derived
 uses b: base
-with b.x: 100
-with b.y: 200
+  -> with x: 100
+  -> with y: 200
 rule sum: b.x + b.y + b.z
 "#;
 
@@ -334,8 +334,8 @@ data quantity: 5
     let derived_spec = r#"
 spec derived
 uses config: base
-with config.price: 200
-with config.quantity: 3
+  -> with price: 200
+  -> with quantity: 3
 rule total: config.price * config.quantity
 "#;
 
@@ -383,7 +383,7 @@ uses base: example2
 rule total1: base.base.total
 
 uses base2: example2
-with base2.base.price: 79
+  -> with base.price: 79
 rule total2: base2.base.total
 "#;
 

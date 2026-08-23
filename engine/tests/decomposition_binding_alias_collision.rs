@@ -38,11 +38,11 @@ fn eval_display(code: &str, spec_name: &str, rule_name: &str) -> String {
 const PURCHASE_COST_SPEC: &str = r#"spec units
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data mass: measure
-  -> unit kg 1
+  -> unit kg: 1
 data price_per_weight: measure
-  -> unit eur_per_kg eur/kg
+  -> unit eur_per_kg: eur/kg
 
 spec purchase_cost
 uses u: units

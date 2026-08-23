@@ -704,9 +704,9 @@ pub struct UnitFactor {
 /// The argument to a `-> unit <name> ...` command, either a plain numeric
 /// conversion factor or a compound unit expression.
 ///
-/// - `Factor(v)` — simple unit: `-> unit meter 1`, `-> unit kilometer 1000`
-/// - `Expr(prefix, factors)` — compound unit: `-> unit mps meter/second`,
-///   `-> unit kmh 3.6 meter/second`
+/// - `Factor(v)` — simple unit: `-> unit meter: 1`, `-> unit kilometer: 1000`
+/// - `Expr(prefix, factors)` — compound unit: `-> unit mps: meter/second`,
+///   `-> unit kmh: 3.6 meter/second`
 ///   The `prefix` is an additional scalar multiplier beyond what the unit
 ///   factor references contribute; it defaults to `1` when omitted.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -855,15 +855,110 @@ pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintComman
     }
 }
 
-/// A single constraint command and its typed arguments.
-pub type Constraint = (TypeConstraintCommand, Vec<CommandArg>);
+/// Whether a `->` continuation uses assignment shape (`key: value`) or space-separated args.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationShape {
+    Assignment,
+    SpaceSeparated,
+}
 
-/// Right-hand side of a `with` statement: literal value or reference to copy.
+impl TypeConstraintCommand {
+    #[must_use]
+    pub fn continuation_shape(self) -> ContinuationShape {
+        match self {
+            TypeConstraintCommand::Unit => ContinuationShape::Assignment,
+            TypeConstraintCommand::Help
+            | TypeConstraintCommand::Suggest
+            | TypeConstraintCommand::Trait
+            | TypeConstraintCommand::Minimum
+            | TypeConstraintCommand::Maximum
+            | TypeConstraintCommand::Lower
+            | TypeConstraintCommand::Upper
+            | TypeConstraintCommand::Decimals
+            | TypeConstraintCommand::Option
+            | TypeConstraintCommand::Options
+            | TypeConstraintCommand::Length => ContinuationShape::SpaceSeparated,
+        }
+    }
+}
+
+/// One `-> command …` row on a [`DataValue::Definition`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Constraint {
+    pub command: TypeConstraintCommand,
+    pub args: Vec<CommandArg>,
+    pub source_location: crate::parsing::source::Source,
+    /// Parsed from deprecated `unit name value` without colon (removed in a future release).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deprecated_without_colon: bool,
+}
+
+impl Constraint {
+    #[must_use]
+    pub fn new(
+        command: TypeConstraintCommand,
+        args: Vec<CommandArg>,
+        source_location: crate::parsing::source::Source,
+    ) -> Self {
+        Self {
+            command,
+            args,
+            source_location,
+            deprecated_without_colon: false,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_constraint(command: TypeConstraintCommand, args: Vec<CommandArg>) -> Constraint {
+    Constraint::new(
+        command,
+        args,
+        crate::parsing::source::Source::new(
+            crate::parsing::source::SourceType::Volatile,
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+        ),
+    )
+}
+
+/// Right-hand side of a `uses` block `-> with` binding: literal value or reference to copy.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WithRhs {
     Literal(Value),
     Reference { target: Reference },
+}
+
+/// One `-> with path: value` row under a [`DataValue::Import`] block.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UsesBinding {
+    /// Path relative to the imported spec (no import alias prefix).
+    pub path: Reference,
+    pub rhs: WithRhs,
+    pub source_location: Source,
+    /// Parsed from deprecated standalone `with alias.path: …` (removed in a future release).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deprecated_standalone_with: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Prefix import alias onto a relative binding path (`pricing.tax_rate` under alias `line` → `line.pricing.tax_rate`).
+#[must_use]
+pub fn prefix_reference(alias: &str, relative: &Reference) -> Reference {
+    let mut segments = vec![ascii_lowercase_logical_name(alias.to_string())];
+    segments.extend(relative.segments.iter().cloned());
+    Reference {
+        segments,
+        name: relative.name.clone(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -885,16 +980,21 @@ pub enum DataValue {
         value: Option<Value>,
     },
     /// Import from another spec (surface syntax is `uses`; alias is [`LemmaData::reference`]).
-    Import(SpecRef),
-    /// Value assignment into an existing data slot (surface syntax is `with`). Planning folds
-    /// this into resolved slot values; it does not declare a new type row.
-    ///
-    /// `data x: someident` (LHS without segments, RHS without dots) uses [`DataValue::Definition`]
-    /// with `someident` as the parent type name. See parser [`crate::parsing::parser::Parser::parse_data_value`].
-    With(WithRhs),
+    Import {
+        spec_ref: SpecRef,
+        bindings: Vec<UsesBinding>,
+    },
 }
 
 impl DataValue {
+    #[must_use]
+    pub fn import(spec_ref: SpecRef) -> Self {
+        Self::Import {
+            spec_ref,
+            bindings: Vec::new(),
+        }
+    }
+
     /// Whether this is only a literal RHS (`data x: 3.14`), valid as a binding value.
     #[must_use]
     pub fn is_definition_literal_only(&self) -> bool {
@@ -922,25 +1022,17 @@ impl DataValue {
                 constraints: None,
                 value: Some(v),
             } => !matches!(v, Value::NumberWithUnit(_, _)),
-            DataValue::Import(_) | DataValue::With(_) | DataValue::Definition { .. } => false,
+            DataValue::Import { .. } | DataValue::Definition { .. } => false,
         }
     }
 }
 
 /// Render a chain of `-> command args ...` constraints for display purposes.
-/// Shared between [`DataValue::Definition`] and [`DataValue::With`] reference payloads.
+/// Shared between [`DataValue::Definition`] constraint chains.
 fn format_constraint_chain(constraints: &[Constraint]) -> String {
     constraints
         .iter()
-        .map(|(cmd, args)| {
-            let args_str: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            let joined = args_str.join(" ");
-            if joined.is_empty() {
-                format!("{}", cmd)
-            } else {
-                format!("{} {}", cmd, joined)
-            }
-        })
+        .map(|row| format_constraint_as_source(&row.command, &row.args))
         .collect::<Vec<_>>()
         .join(" -> ")
 }
@@ -979,13 +1071,12 @@ impl fmt::Display for DataValue {
                     write!(f, "{base_str}")
                 }
             }
-            DataValue::Import(spec_ref) => {
-                write!(f, "with {}", spec_ref)
+            DataValue::Import {
+                spec_ref,
+                bindings: _,
+            } => {
+                write!(f, "uses {}", spec_ref)
             }
-            DataValue::With(with_rhs) => match with_rhs {
-                WithRhs::Literal(v) => write!(f, "{v}"),
-                WithRhs::Reference { target } => write!(f, "{target}"),
-            },
         }
     }
 }
@@ -1527,11 +1618,30 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
     }
 }
 
+/// Format `command key: value` for assignment continuations (`unit`, `with`).
+pub(crate) fn format_assignment_continuation(
+    command: &str,
+    key: &str,
+    value: &impl fmt::Display,
+) -> String {
+    format!("{} {}: {}", command, key, value)
+}
+
 /// Format a single constraint command and its args as valid Lemma source.
 pub(crate) fn format_constraint_as_source(
     cmd: &TypeConstraintCommand,
     args: &[CommandArg],
 ) -> String {
+    if *cmd == TypeConstraintCommand::Unit {
+        let Some(CommandArg::Label(name)) = args.first() else {
+            return cmd.to_string();
+        };
+        let Some(CommandArg::UnitExpr(unit_arg)) = args.get(1) else {
+            return format!("{} {}", cmd, name);
+        };
+        return format_assignment_continuation("unit", name, unit_arg);
+    }
+
     if args.is_empty() {
         cmd.to_string()
     } else {
@@ -1548,7 +1658,7 @@ pub(crate) fn format_constraint_as_source(
 fn format_constraints_as_source(constraints: &[Constraint], separator: &str) -> String {
     constraints
         .iter()
-        .map(|(cmd, args)| format_constraint_as_source(cmd, args))
+        .map(|row| format_constraint_as_source(&row.command, &row.args))
         .collect::<Vec<_>>()
         .join(separator)
 }
@@ -1653,13 +1763,12 @@ impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
                     write!(f, "{}", base_str)
                 }
             }
-            DataValue::Import(spec_ref) => {
-                write!(f, "with {}", spec_ref)
+            DataValue::Import {
+                spec_ref,
+                bindings: _,
+            } => {
+                write!(f, "uses {}", spec_ref)
             }
-            DataValue::With(with_rhs) => match with_rhs {
-                WithRhs::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-                WithRhs::Reference { target } => write!(f, "{target}"),
-            },
         }
     }
 }
@@ -1723,8 +1832,8 @@ pub(crate) fn canonicalize_command_arg(command_arg: &mut CommandArg) {
 }
 
 pub(crate) fn canonicalize_constraints(constraints: &mut [Constraint]) {
-    for (_, args) in constraints {
-        for arg in args {
+    for row in constraints {
+        for arg in &mut row.args {
             canonicalize_command_arg(arg);
         }
     }
@@ -1802,11 +1911,16 @@ pub(crate) fn canonicalize_data_value(data_value: &mut DataValue) {
                 canonicalize_value(value);
             }
         }
-        DataValue::Import(spec_ref) => canonicalize_spec_ref(spec_ref),
-        DataValue::With(with_rhs) => match with_rhs {
-            WithRhs::Literal(value) => canonicalize_value(value),
-            WithRhs::Reference { target } => canonicalize_reference(target),
-        },
+        DataValue::Import { spec_ref, bindings } => {
+            canonicalize_spec_ref(spec_ref);
+            for binding in bindings {
+                canonicalize_reference(&mut binding.path);
+                match &mut binding.rhs {
+                    WithRhs::Literal(value) => canonicalize_value(value),
+                    WithRhs::Reference { target } => canonicalize_reference(target),
+                }
+            }
+        }
     }
 }
 
@@ -2021,7 +2135,7 @@ mod tests {
             base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Suggest,
                 vec![text_arg("single")],
             )]),
@@ -2039,7 +2153,7 @@ mod tests {
             base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Number,
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Suggest,
                 vec![number_arg("10")],
             )]),
@@ -2054,7 +2168,7 @@ mod tests {
             base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Number,
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Help,
                 vec![text_arg("Enter a measure")],
             )]),
@@ -2073,8 +2187,8 @@ mod tests {
                 primitive: PrimitiveKind::Text,
             }),
             constraints: Some(vec![
-                (TypeConstraintCommand::Option, vec![text_arg("active")]),
-                (TypeConstraintCommand::Option, vec![text_arg("inactive")]),
+                test_constraint(TypeConstraintCommand::Option, vec![text_arg("active")]),
+                test_constraint(TypeConstraintCommand::Option, vec![text_arg("inactive")]),
             ]),
             value: None,
         };
@@ -2091,20 +2205,26 @@ mod tests {
                 primitive: PrimitiveKind::Measure,
             }),
             constraints: Some(vec![
-                (
+                test_constraint(
                     TypeConstraintCommand::Unit,
-                    vec![CommandArg::Label("eur".to_string()), number_arg("1.00")],
+                    vec![
+                        CommandArg::Label("eur".to_string()),
+                        CommandArg::UnitExpr(UnitArg::Factor(decimal("1.00"))),
+                    ],
                 ),
-                (
+                test_constraint(
                     TypeConstraintCommand::Unit,
-                    vec![CommandArg::Label("usd".to_string()), number_arg("0.91")],
+                    vec![
+                        CommandArg::Label("usd".to_string()),
+                        CommandArg::UnitExpr(UnitArg::Factor(decimal("0.91"))),
+                    ],
                 ),
             ]),
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "measure -> unit eur 1.00 -> unit usd 0.91"
+            "measure -> unit eur: 1.00 -> unit usd: 0.91"
         );
     }
 
@@ -2114,7 +2234,7 @@ mod tests {
             base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Measure,
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Minimum,
                 vec![measure_arg("0", "eur")],
             )]),
@@ -2132,7 +2252,7 @@ mod tests {
             base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Boolean,
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Suggest,
                 vec![boolean_arg(BooleanValue::True)],
             )]),
@@ -2147,7 +2267,7 @@ mod tests {
             base: Some(ParentType::Custom {
                 name: "duration".to_string(),
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Suggest,
                 vec![duration_arg("40", "hour")],
             )]),
@@ -2167,7 +2287,7 @@ mod tests {
             base: Some(ParentType::Custom {
                 name: "filing_status_type".to_string(),
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Suggest,
                 vec![text_arg("single")],
             )]),
@@ -2185,7 +2305,7 @@ mod tests {
             base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
             }),
-            constraints: Some(vec![(
+            constraints: Some(vec![test_constraint(
                 TypeConstraintCommand::Help,
                 vec![text_arg("say \"hello\"")],
             )]),
@@ -2250,5 +2370,79 @@ mod tests {
     fn unit_arg_display_kg_meter_per_second_squared() {
         let arg = unit_arg_expr(Decimal::ONE, &[("kg", 1), ("meter", 1), ("second", -2)]);
         assert_eq!(format!("{arg}"), "kg * meter/second^2");
+    }
+
+    // ─── Assignment continuation formatting (red until formatter lands) ───────
+
+    #[test]
+    fn format_constraint_as_source_unit_factor_uses_assignment_colon() {
+        let args = vec![
+            CommandArg::Label("eur".to_string()),
+            CommandArg::UnitExpr(UnitArg::Factor(decimal("1"))),
+        ];
+        assert_eq!(
+            format_constraint_as_source(&TypeConstraintCommand::Unit, &args),
+            "unit eur: 1"
+        );
+    }
+
+    #[test]
+    fn format_constraint_as_source_unit_compound_uses_assignment_colon() {
+        let arg = unit_arg_expr(decimal("3.6"), &[("meter", 1), ("second", -1)]);
+        let args = vec![
+            CommandArg::Label("kmh".to_string()),
+            CommandArg::UnitExpr(arg),
+        ];
+        assert_eq!(
+            format_constraint_as_source(&TypeConstraintCommand::Unit, &args),
+            "unit kmh: 3.6 meter/second"
+        );
+    }
+
+    #[test]
+    fn format_constraint_as_source_unit_factor_one_decimal_uses_assignment_colon() {
+        let args = vec![
+            CommandArg::Label("eur".to_string()),
+            CommandArg::UnitExpr(UnitArg::Factor(decimal("1.00"))),
+        ];
+        assert_eq!(
+            format_constraint_as_source(&TypeConstraintCommand::Unit, &args),
+            "unit eur: 1.00"
+        );
+    }
+
+    #[test]
+    fn as_lemma_source_measure_unit_uses_assignment_colon() {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
+                primitive: PrimitiveKind::Measure,
+            }),
+            constraints: Some(vec![
+                test_constraint(
+                    TypeConstraintCommand::Unit,
+                    vec![
+                        CommandArg::Label("eur".to_string()),
+                        CommandArg::UnitExpr(UnitArg::Factor(decimal("1.00"))),
+                    ],
+                ),
+                test_constraint(
+                    TypeConstraintCommand::Unit,
+                    vec![
+                        CommandArg::Label("usd".to_string()),
+                        CommandArg::UnitExpr(UnitArg::Factor(decimal("0.91"))),
+                    ],
+                ),
+            ]),
+            value: None,
+        };
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "measure -> unit eur: 1.00 -> unit usd: 0.91"
+        );
+    }
+
+    fn decimal(value: &str) -> rust_decimal::Decimal {
+        use std::str::FromStr;
+        rust_decimal::Decimal::from_str(value).expect("decimal literal in test")
     }
 }

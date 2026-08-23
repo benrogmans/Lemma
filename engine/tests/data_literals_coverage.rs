@@ -662,8 +662,8 @@ fn measure_literal_with_defined_unit() {
     let code = r#"
 spec s
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.84
+  -> unit eur: 1
+  -> unit usd: 0.84
 data price: 10 eur
 rule r: price
 "#;
@@ -678,7 +678,7 @@ fn measure_literal_with_unknown_unit_is_rejected() {
     // No measure type defines `banana` as a unit; the literal must fail.
     let code = r#"
 spec s
-data money: measure -> unit eur 1
+data money: measure -> unit eur: 1
 data price: 10 banana
 rule r: price
 "#;
@@ -697,8 +697,8 @@ fn measure_literal_conversion_to_defined_unit() {
     let code = r#"
 spec s
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.84
+  -> unit eur: 1
+  -> unit usd: 0.84
 data price: 10 usd
 rule r: price
 "#;

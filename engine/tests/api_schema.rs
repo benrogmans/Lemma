@@ -34,7 +34,7 @@ spec sample 2024-01-01
 meta title: "t"
 data amount: number -> suggest 1
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> suggest 10 eur
 rule ok: amount
 "#

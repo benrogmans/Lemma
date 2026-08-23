@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.9.5"
+lemma-engine = "0.9.6"
 ```
 
 ### Minimal example
@@ -232,7 +232,7 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.5</version>
+  <version>0.9.6</version>
 </dependency>
 ```
 
@@ -242,7 +242,7 @@ Build/test: `cargo build -p lemma_jni` then `./mvnw verify` under `engine/packag
 
 - Learn guide: <https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md>
 - API documentation: <https://docs.rs/lemma-engine>
-- Examples: <https://github.com/lemma/lemma/tree/main/cli/documentation/examples>
+- Examples: <https://github.com/lemma/lemma/tree/main/engine/documentation/examples>
 - CLI usage: <https://github.com/lemma/lemma/blob/main/cli/documentation/reference/cli.md>
 
 ## Use cases

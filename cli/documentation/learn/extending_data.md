@@ -15,15 +15,15 @@ Declare a primitive or parent Data name on the right-hand side, then chain `->` 
 spec warehouse_types
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
   -> minimum 0 eur
 
 data mass: measure
-  -> unit kilogram 1.0
-  -> unit gram 0.001
-  -> unit pound 0.453592
+  -> unit kilogram: 1.0
+  -> unit gram: 0.001
+  -> unit pound: 0.453592
 
 data price:  100 eur
 data weight: 75 kilogram

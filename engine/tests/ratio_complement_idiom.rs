@@ -82,7 +82,7 @@ rule result: base * (100% + markup)"#;
 fn complement_discount_measure() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data discount: 10%
 rule result: price * (100% - discount)"#;
@@ -217,7 +217,7 @@ rule result: r % n"#;
 fn ratio_divide_measure_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data r: 50%
 rule bad: r / price"#;
@@ -228,7 +228,7 @@ rule bad: r / price"#;
 fn ratio_modulo_measure_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data r: 50%
 rule bad: r % price"#;

@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { ExtensionContext, window, workspace } from "vscode";
@@ -14,20 +15,49 @@ interface ServerCommand {
   args: string[];
 }
 
-function resolveServerCommand(raw: string): ServerCommand {
+function lemmaBinaryVersion(command: string): string | null {
+  try {
+    const out = execFileSync(command, ["--version"], {
+      encoding: "utf8",
+      timeout: 3_000,
+    });
+    const line = out.trim().split("\n")[0] ?? "";
+    const parts = line.split(/\s+/);
+    return parts[parts.length - 1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkspaceLemmaBinary(
+  folder: string,
+  extensionVersion: string
+): string | null {
+  const release = path.join(folder, "target", "release", "lemma");
+  const debug = path.join(folder, "target", "debug", "lemma");
+  const candidates = [release, debug].filter((p) => fs.existsSync(p));
+  const matching = candidates.find(
+    (p) => lemmaBinaryVersion(p) === extensionVersion
+  );
+  if (matching) {
+    return matching;
+  }
+  return candidates[0] ?? null;
+}
+
+function resolveServerCommand(
+  raw: string,
+  extensionVersion: string
+): ServerCommand {
   const folder = workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   const expanded = raw.replace(/\$\{workspaceFolder\}/g, folder);
   if (expanded !== "lemma") {
     return { command: expanded, args: ["lsp"] };
   }
   if (folder) {
-    const release = path.join(folder, "target", "release", "lemma");
-    if (fs.existsSync(release)) {
-      return { command: release, args: ["lsp"] };
-    }
-    const debug = path.join(folder, "target", "debug", "lemma");
-    if (fs.existsSync(debug)) {
-      return { command: debug, args: ["lsp"] };
+    const workspaceBinary = resolveWorkspaceLemmaBinary(folder, extensionVersion);
+    if (workspaceBinary) {
+      return { command: workspaceBinary, args: ["lsp"] };
     }
   }
   return { command: "lemma", args: ["lsp"] };
@@ -36,7 +66,9 @@ function resolveServerCommand(raw: string): ServerCommand {
 export function activate(context: ExtensionContext): void {
   const config = workspace.getConfiguration("lemma");
   const rawPath: string = config.get<string>("lspServerPath", "lemma");
-  const server = resolveServerCommand(rawPath);
+  const extensionVersion: string =
+    context.extension.packageJSON.version ?? "0.0.0";
+  const server = resolveServerCommand(rawPath, extensionVersion);
 
   // Omit transport: TransportKind.stdio — languageclient appends `--stdio` when set,
   // which older/unpatched CLIs reject. Undefined transport still uses stdio pipes.

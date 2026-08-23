@@ -33,7 +33,7 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 const INNER_SPEC: &str = r#"spec product_structure
 data primary_weight: measure
-  -> unit kilogram 1
+  -> unit kilogram: 1
   -> minimum 0 kilogram
 "#;
 
@@ -43,7 +43,7 @@ fn fill_bare_number_into_measure_slot_returns_planning_error() {
         r#"{INNER_SPEC}
 spec almonds
 uses product_structure
-with product_structure.primary_weight: 10
+  -> with primary_weight: 10
 "#
     );
     let mut engine = Engine::new();
@@ -60,7 +60,7 @@ fn fill_text_into_measure_slot_returns_planning_error() {
         r#"{INNER_SPEC}
 spec almonds
 uses product_structure
-with product_structure.primary_weight: "hello"
+  -> with primary_weight: "hello"
 "#
     );
     let mut engine = Engine::new();
@@ -78,7 +78,7 @@ data flag: boolean
 
 spec outer
 uses inner
-with inner.flag: 10
+  -> with flag: 10
 "#;
     let mut engine = Engine::new();
     let err = load_err_joined(&mut engine, code);
@@ -94,7 +94,7 @@ fn fill_measure_with_unit_succeeds() {
         r#"{INNER_SPEC}
 spec almonds
 uses product_structure
-with product_structure.primary_weight: 10 kilogram
+  -> with primary_weight: 10 kilogram
 "#
     );
     let mut engine = Engine::new();

@@ -1259,11 +1259,11 @@ mod tests {
     fn q_times_q_signature_hit_emits_named_lemma_type() {
         let code = r#"spec t
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data hour: measure
-  -> unit hour 1
+  -> unit hour: 1
 data r: 30 eur_per_hour
 data h: 2 hour
 rule pay: r * h
@@ -1289,11 +1289,11 @@ rule pay: r * h
     fn q_times_q_signature_miss_emits_anonymous_lemma_type() {
         let code = r#"spec t
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_minute: eur/minute
 data hour: measure
-  -> unit hour 1
+  -> unit hour: 1
 data r: 40 eur_per_minute
 data h: 2 hour
 rule weird: r * h
@@ -1321,7 +1321,7 @@ rule weird: r * h
     fn q_plus_q_same_signature() {
         let code = r#"spec t
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data a: 100 eur
 data b: 50 eur
 rule total: a + b
@@ -1344,10 +1344,10 @@ rule total: a + b
         let code = r#"spec t
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_minute: eur/minute
 data a: 10 eur_per_second
 data b: 20 eur_per_minute
 rule total_rate: (a + b) as eur_per_second
@@ -1376,9 +1376,9 @@ rule total_rate: (a + b) as eur_per_second
     fn number_divided_by_q_reciprocates_signature() {
         let code = r#"spec t
 data duration_t: measure
-  -> unit second 1
+  -> unit second: 1
 data freq: measure
-  -> unit per_second second^-1
+  -> unit per_second: second^-1
 data d: 2 second
 rule f: 1 / d
 "#;

@@ -1102,8 +1102,10 @@ fn apply_constraints_to_spec(
     let mut seen_unit_names: std::collections::HashSet<String> = Default::default();
     let mut seen_singleton_commands: std::collections::HashSet<TypeConstraintCommand> =
         Default::default();
-    for (command, args) in constraints.iter() {
-        if *command == TypeConstraintCommand::Unit {
+    for row in constraints.iter() {
+        let command = row.command;
+        let args = &row.args;
+        if command == TypeConstraintCommand::Unit {
             if let Some(CommandArg::Label(name)) = args.first() {
                 if !seen_unit_names.insert(name.clone()) {
                     errors.push(Error::validation_with_context(
@@ -1120,12 +1122,12 @@ fn apply_constraints_to_spec(
             }
         }
         if matches!(
-            *command,
+            command,
             TypeConstraintCommand::Minimum
                 | TypeConstraintCommand::Maximum
                 | TypeConstraintCommand::Decimals
                 | TypeConstraintCommand::Suggest
-        ) && !seen_singleton_commands.insert(*command)
+        ) && !seen_singleton_commands.insert(command)
         {
             errors.push(Error::validation_with_context(
                 format!(
@@ -1164,20 +1166,24 @@ fn apply_constraints_to_spec(
         }
     };
 
-    for (command, args) in constraints {
+    for row in constraints {
+        let command = row.command;
+        let args = &row.args;
         if matches!(
             command,
             TypeConstraintCommand::Unit | TypeConstraintCommand::Trait
         ) {
-            apply_one(&mut specs, *command, args, declared_suggestion);
+            apply_one(&mut specs, command, args, declared_suggestion);
         }
     }
-    for (command, args) in constraints {
+    for row in constraints {
+        let command = row.command;
+        let args = &row.args;
         if !matches!(
             command,
             TypeConstraintCommand::Unit | TypeConstraintCommand::Trait
         ) {
-            apply_one(&mut specs, *command, args, declared_suggestion);
+            apply_one(&mut specs, command, args, declared_suggestion);
         }
     }
     if !errors.is_empty() {
@@ -1401,12 +1407,12 @@ impl<'a> Graph<'a> {
     }
 }
 
-fn uses_import_surface_syntax(alias: &str, target_spec: &str) -> String {
-    if alias == target_spec {
-        format!("uses {alias}")
-    } else {
-        format!("uses {alias}: {target_spec}")
-    }
+fn local_data_field_names(spec: &LemmaSpec) -> Vec<String> {
+    spec.data
+        .iter()
+        .filter(|d| d.reference.is_local())
+        .map(|d| d.reference.name.clone())
+        .collect()
 }
 
 fn is_uses_vs_data_clash(existing: &DataDefinition, incoming: &ParsedDataValue) -> bool {
@@ -1420,7 +1426,7 @@ fn is_uses_vs_data_clash(existing: &DataDefinition, incoming: &ParsedDataValue) 
         (existing, incoming),
         (
             DataDefinition::TypeDeclaration { .. } | DataDefinition::Value { .. },
-            ParsedDataValue::Import(_)
+            ParsedDataValue::Import { .. }
         )
     )
 }
@@ -1439,31 +1445,55 @@ fn qualified_type_name_from_definition(incoming: &ParsedDataValue) -> Option<&st
     }
 }
 
-fn uses_vs_data_duplicate_message(
-    name: &str,
+fn import_spec_ref_for_clash<'a>(
+    consumer_spec: &'a LemmaSpec,
+    incoming: &'a LemmaData,
     existing: &DataDefinition,
-    incoming: &ParsedDataValue,
-) -> (String, Option<String>) {
-    let (alias, target_spec) = match (existing, incoming) {
-        (DataDefinition::Import { target_name, .. }, ParsedDataValue::Definition { .. }) => {
-            (name, target_name.as_str())
+) -> std::borrow::Cow<'a, ast::SpecRef> {
+    if let ParsedDataValue::Import { spec_ref, .. } = &incoming.value {
+        return std::borrow::Cow::Borrowed(spec_ref);
+    }
+    let alias = &incoming.reference.name;
+    for row in &consumer_spec.data {
+        if !row.reference.is_local() || row.reference.name != *alias {
+            continue;
         }
-        (
+        let ParsedDataValue::Import { spec_ref, .. } = &row.value else {
+            continue;
+        };
+        return std::borrow::Cow::Borrowed(spec_ref);
+    }
+    let DataDefinition::Import { target_name, .. } = existing else {
+        unreachable!("BUG: uses vs data clash but no Import side with recoverable spec_ref");
+    };
+    std::borrow::Cow::Owned(ast::SpecRef::same_repository(target_name.clone()))
+}
+
+fn uses_vs_data_duplicate_message(
+    consumer_spec: &LemmaSpec,
+    incoming: &LemmaData,
+    existing: &DataDefinition,
+) -> (String, Option<String>) {
+    match (existing, &incoming.value) {
+        (DataDefinition::Import { .. }, ParsedDataValue::Definition { .. })
+        | (
             DataDefinition::TypeDeclaration { .. } | DataDefinition::Value { .. },
-            ParsedDataValue::Import(spec_ref),
-        ) => (name, spec_ref.name.as_str()),
+            ParsedDataValue::Import { .. },
+        ) => {}
         _ => unreachable!("uses_vs_data_duplicate_message requires a uses vs data clash"),
     };
-    let uses_syntax = uses_import_surface_syntax(alias, target_spec);
+    let alias = &incoming.reference.name;
+    let spec_ref = import_spec_ref_for_clash(consumer_spec, incoming, existing);
+    let target_label = spec_ref.to_string();
     let import_alias = format!("{alias}_spec");
     let message = format!(
-        "You used the name `{alias}` in both `{uses_syntax}` and `data {alias}`. A `uses` import and a `data` definition can't share the same name.",
+        "You used the name `{alias}` for both a `uses` import (target {target_label}) and a `data` definition.",
     );
-    let suggestion = match qualified_type_name_from_definition(incoming) {
+    let suggestion = match qualified_type_name_from_definition(&incoming.value) {
         Some(type_name) => format!(
-            "Try `uses {import_alias}: {target_spec}` and `data {alias}: {import_alias}.{type_name}`."
+            "Rename the `uses` import alias to `{import_alias}`. The qualified type path must use `{import_alias}.{type_name}`."
         ),
-        _ => format!("Try `uses {import_alias}: {target_spec}` with a different name than `{alias}`."),
+        _ => format!("Rename the `uses` import alias to `{import_alias}`."),
     };
     (message, Some(suggestion))
 }
@@ -1570,118 +1600,35 @@ impl<'a> GraphBuilder<'a> {
         )
     }
 
-    /// Validate a data binding path by walking through spec references, and
-    /// convert the binding's right-hand side into a [`BindingValue`] that the
-    /// nested spec can interpret without access to the outer spec.
-    ///
-    /// The binding key (full path as data names from root) uses data names only
-    /// (no spec names) so that spec ref bindings don't cause mismatches.
-    fn resolve_data_binding(
+    fn push_missing_with_data_field_error(
         &mut self,
-        data: &LemmaData,
-        current_segment_names: &[String],
-        parent_spec: &'a LemmaSpec,
-        effective: &EffectiveDate,
-    ) -> Option<(Vec<String>, BindingValue, Source)> {
-        let binding_path_display = format!("{}", data.reference);
-
-        let mut walk_spec = parent_spec;
-
-        for segment in &data.reference.segments {
-            let Some(seg_data) = walk_spec
-                .data
-                .iter()
-                .find(|f| f.reference.segments.is_empty() && f.reference.name == *segment)
-            else {
-                self.errors.push(self.engine_error(
-                    format!(
-                        "Data binding path '{}': data '{}' not found in spec '{}'",
-                        binding_path_display, segment, walk_spec.name
-                    ),
-                    &data.source_location,
-                ));
-                return None;
-            };
-
-            let spec_ref = match &seg_data.value {
-                ParsedDataValue::Import(sr) => sr,
-                _ => {
-                    self.errors.push(self.engine_error(
-                        format!(
-                            "Data binding path '{}': '{}' in spec '{}' is not a spec reference",
-                            binding_path_display, segment, walk_spec.name
-                        ),
-                        &data.source_location,
-                    ));
-                    return None;
-                }
-            };
-
-            let walk_repository = discovery::lookup_owning_repository(self.context, walk_spec)
-                .unwrap_or_else(|| Arc::clone(&self.main_repository));
-            walk_spec =
-                match self.resolve_spec_ref(spec_ref, effective, walk_spec, &walk_repository) {
-                    Ok((_, arc)) => arc,
-                    Err(e) => {
-                        self.errors.push(e);
-                        return None;
-                    }
-                };
-        }
-
-        if !walk_spec
-            .data
-            .iter()
-            .any(|d| d.reference.segments.is_empty() && d.reference.name == data.reference.name)
-        {
-            self.errors.push(self.engine_error(
-                format!(
-                    "Data binding path '{}': data '{}' not found in spec '{}'",
-                    binding_path_display, data.reference.name, walk_spec.name
-                ),
-                &data.source_location,
-            ));
-            return None;
-        }
-
-        // Build the binding key: current_segment_names ++ data.reference.segments ++ [data.reference.name]
-        let mut binding_key: Vec<String> = current_segment_names.to_vec();
-        binding_key.extend(data.reference.segments.iter().cloned());
-        binding_key.push(data.reference.name.clone());
-
-        let binding_value = match &data.value {
-            ParsedDataValue::With(WithRhs::Literal(v)) => BindingValue::Literal(v.clone()),
-            ParsedDataValue::With(WithRhs::Reference { target }) => {
-                let resolved_target = self.resolve_reference_target_in_spec(
-                    target,
-                    &data.source_location,
-                    parent_spec,
-                    current_segment_names,
-                    effective,
-                )?;
-                BindingValue::Reference {
-                    target: resolved_target,
-                    constraints: None,
-                }
-            }
-            ParsedDataValue::Definition { value: Some(v), .. }
-                if data.value.is_definition_literal_only() =>
-            {
-                BindingValue::Literal(v.clone())
-            }
-            ParsedDataValue::Import(_) => {
-                unreachable!(
-                    "BUG: build_data_bindings must reject Import bindings before calling resolve_data_binding"
-                );
-            }
-            ParsedDataValue::Definition { .. } => {
-                unreachable!(
-                    "BUG: build_data_bindings must reject non-literal Definition bindings before calling resolve_data_binding"
-                );
-            }
+        import_row: &LemmaData,
+        binding: &ast::UsesBinding,
+        walk_spec: &LemmaSpec,
+        field_name: &str,
+    ) {
+        let ParsedDataValue::Import { spec_ref, .. } = &import_row.value else {
+            unreachable!("BUG: push_missing_with_data_field_error called on non-Import LemmaData");
         };
-
-        Some((binding_key, binding_value, data.source_location.clone()))
+        let import_alias = &import_row.reference.name;
+        let target_label = spec_ref.to_string();
+        let did_you_mean =
+            crate::string_distance::closest_name(field_name, &local_data_field_names(walk_spec));
+        let message = format!("`{}` has no data field `{}`", walk_spec.name, field_name);
+        let mut suggestion = format!(
+            "`-> with` on import `{import_alias}` (target {target_label}) must name a data field on `{spec}`",
+            spec = walk_spec.name,
+        );
+        if let Some(name) = did_you_mean {
+            suggestion = format!("{suggestion}. Did you mean `{name}`?");
+        }
+        self.errors.push(Error::validation_with_context(
+            message,
+            Some(binding.source_location.clone()),
+            Some(suggestion),
+            Some(self.main_spec),
+            None,
+        ));
     }
 
     /// Resolve a parsed [`ast::Reference`] appearing on the RHS of a `data x: ref`
@@ -1807,11 +1754,7 @@ impl<'a> GraphBuilder<'a> {
         None
     }
 
-    /// Build the data bindings declared in a spec.
-    ///
-    /// For each cross-spec data (reference.segments is non-empty), validate the path
-    /// and collect into a DataBindings map. Rejects non-literal Definition binding values and
-    /// duplicate bindings targeting the same path.
+    /// Collect `uses` block bindings (`-> with`) declared on import rows in `spec`.
     fn build_data_bindings(
         &mut self,
         spec: &'a LemmaSpec,
@@ -1821,42 +1764,114 @@ impl<'a> GraphBuilder<'a> {
         let mut bindings: DataBindings = HashMap::new();
         let mut errors: Vec<Error> = Vec::new();
 
-        for data in &spec.data {
-            if data.reference.segments.is_empty() {
+        for import_row in &spec.data {
+            if !import_row.reference.is_local() {
                 continue;
             }
-
-            let binding_path_display = format!("{}", data.reference);
-
-            // Reject spec reference as binding value — spec injection is not supported
-            if matches!(&data.value, ParsedDataValue::Import(_)) {
-                errors.push(self.engine_error(
-                    format!(
-                        "Data binding '{}' cannot override a spec reference — only literal values can be bound to nested data",
-                        binding_path_display
-                    ),
-                    &data.source_location,
-                ));
+            let ParsedDataValue::Import {
+                bindings: uses_bindings,
+                ..
+            } = &import_row.value
+            else {
                 continue;
-            }
+            };
+            for binding in uses_bindings {
+                let binding_reference =
+                    ast::prefix_reference(&import_row.reference.name, &binding.path);
+                let mut walk_spec = spec;
+                let mut binding_resolved = true;
 
-            // Reject non-literal Definition as binding value (explicit types / imports / constrained defs).
-            if let ParsedDataValue::Definition { .. } = &data.value {
-                if !data.value.is_definition_literal_only() {
-                    errors.push(self.engine_error(
-                        format!(
-                            "Data binding '{}' must provide a literal value, not a data definition",
-                            binding_path_display
-                        ),
-                        &data.source_location,
-                    ));
+                for segment in &binding_reference.segments {
+                    let Some(seg_data) = walk_spec.data.iter().find(|field| {
+                        field.reference.segments.is_empty() && field.reference.name == *segment
+                    }) else {
+                        self.push_missing_with_data_field_error(
+                            import_row, binding, walk_spec, segment,
+                        );
+                        binding_resolved = false;
+                        break;
+                    };
+
+                    let spec_ref = match &seg_data.value {
+                        ParsedDataValue::Import { spec_ref, .. } => spec_ref,
+                        _ => {
+                            self.errors.push(Error::validation_with_context(
+                                format!(
+                                    "`{segment}` in `{spec}` is not an imported spec — `-> with` paths step through data fields that hold a `uses` import.",
+                                    spec = walk_spec.name
+                                ),
+                                Some(binding.source_location.clone()),
+                                Some(format!(
+                                    "`-> with` on import `{alias}` must step through import data fields",
+                                    alias = import_row.reference.name,
+                                )),
+                                Some(self.main_spec),
+                                None,
+                            ));
+                            binding_resolved = false;
+                            break;
+                        }
+                    };
+
+                    let walk_repository =
+                        discovery::lookup_owning_repository(self.context, walk_spec)
+                            .unwrap_or_else(|| Arc::clone(&self.main_repository));
+                    walk_spec = match self.resolve_spec_ref(
+                        spec_ref,
+                        effective,
+                        walk_spec,
+                        &walk_repository,
+                    ) {
+                        Ok((_, arc)) => arc,
+                        Err(error) => {
+                            self.errors.push(error);
+                            binding_resolved = false;
+                            break;
+                        }
+                    };
+                }
+
+                if !binding_resolved {
                     continue;
                 }
-            }
 
-            if let Some((binding_key, binding_value, source)) =
-                self.resolve_data_binding(data, current_segment_names, spec, effective)
-            {
+                if !walk_spec.data.iter().any(|field| {
+                    field.reference.segments.is_empty()
+                        && field.reference.name == binding_reference.name
+                }) {
+                    self.push_missing_with_data_field_error(
+                        import_row,
+                        binding,
+                        walk_spec,
+                        &binding_reference.name,
+                    );
+                    continue;
+                }
+
+                let mut binding_key: Vec<String> = current_segment_names.to_vec();
+                binding_key.extend(binding_reference.segments.iter().cloned());
+                binding_key.push(binding_reference.name.clone());
+
+                let binding_value = match &binding.rhs {
+                    WithRhs::Literal(value) => BindingValue::Literal(value.clone()),
+                    WithRhs::Reference { target } => {
+                        let Some(resolved_target) = self.resolve_reference_target_in_spec(
+                            target,
+                            &binding.source_location,
+                            spec,
+                            current_segment_names,
+                            effective,
+                        ) else {
+                            continue;
+                        };
+                        BindingValue::Reference {
+                            target: resolved_target,
+                            constraints: None,
+                        }
+                    }
+                };
+
+                let source = binding.source_location.clone();
                 if let Some((_, existing_source)) = bindings.get(&binding_key) {
                     errors.push(self.engine_error(
                         format!(
@@ -1865,13 +1880,12 @@ impl<'a> GraphBuilder<'a> {
                             existing_source.source_type,
                             existing_source.span.line
                         ),
-                        &data.source_location,
+                        &binding.source_location,
                     ));
                 } else {
                     bindings.insert(binding_key, (binding_value, source));
                 }
             }
-            // resolve_data_binding failures are pushed into self.errors already.
         }
 
         if !errors.is_empty() {
@@ -1903,7 +1917,7 @@ impl<'a> GraphBuilder<'a> {
         // Check for duplicates
         if let Some(existing) = self.data.get(&data_path) {
             let (message, suggestion) = if is_uses_vs_data_clash(existing, &data.value) {
-                uses_vs_data_duplicate_message(&data_path.data, existing, &data.value)
+                uses_vs_data_duplicate_message(current_spec, data, existing)
             } else {
                 (
                     format!(
@@ -2115,7 +2129,7 @@ impl<'a> GraphBuilder<'a> {
                     },
                 );
             }
-            ParsedDataValue::Import(spec_ref) => {
+            ParsedDataValue::Import { spec_ref, .. } => {
                 let consumer_repository =
                     discovery::lookup_owning_repository(self.context, current_spec)
                         .unwrap_or_else(|| Arc::clone(&self.main_repository));
@@ -2138,11 +2152,6 @@ impl<'a> GraphBuilder<'a> {
                         target_name: effective_spec.name.clone(),
                         source: effective_source,
                     },
-                );
-            }
-            ParsedDataValue::With(_) => {
-                unreachable!(
-                    "BUG: local with is rejected at parse; binding with rows must not reach add_data"
                 );
             }
         }
@@ -2345,12 +2354,12 @@ impl<'a> GraphBuilder<'a> {
                     }
                 };
 
-            if let ParsedDataValue::Import(original_spec_ref) = &data_ref.value {
+            if let ParsedDataValue::Import { spec_ref, .. } = &data_ref.value {
                 let context_repository =
                     discovery::lookup_owning_repository(self.context, spec_context)
                         .unwrap_or_else(|| Arc::clone(&self.main_repository));
                 let arc = match self.resolve_spec_ref(
-                    original_spec_ref,
+                    spec_ref,
                     effective,
                     spec_context,
                     &context_repository,
@@ -2419,7 +2428,7 @@ impl<'a> GraphBuilder<'a> {
         }
         for data in &spec.data {
             match &data.value {
-                ParsedDataValue::Import(spec_ref) => {
+                ParsedDataValue::Import { spec_ref, .. } => {
                     let import_effective = spec_ref.at(effective);
                     match self.resolve_spec_ref(spec_ref, &import_effective, spec, spec_repository)
                     {
@@ -2534,13 +2543,10 @@ impl<'a> GraphBuilder<'a> {
         // Step 4: Add local data using effective bindings (caller + this spec)
         let mut used_binding_keys: HashSet<Vec<String>> = HashSet::new();
         for data in &spec.data {
-            if !data.reference.segments.is_empty() {
-                continue; // Skip binding data (processed in step 2)
+            if !data.reference.is_local() {
+                continue;
             }
-            if matches!(&data.value, ParsedDataValue::With(_)) {
-                continue; // With rows apply only through data_bindings
-            }
-            if matches!(&data.value, ParsedDataValue::Import(_)) {
+            if matches!(&data.value, ParsedDataValue::Import { .. }) {
                 continue;
             }
             self.add_data(
@@ -2557,7 +2563,7 @@ impl<'a> GraphBuilder<'a> {
             if !data.reference.segments.is_empty() {
                 continue;
             }
-            if let ParsedDataValue::Import(spec_ref) = &data.value {
+            if let ParsedDataValue::Import { spec_ref, .. } = &data.value {
                 let nested_effective = spec_ref.at(effective);
                 let (nested_repo, nested_arc) =
                     match self.resolve_spec_ref(spec_ref, effective, spec, spec_repository) {
@@ -7009,9 +7015,7 @@ mod tests {
         let mut ctx = Context::new();
         let repository = ctx.workspace();
         for s in all_specs {
-            if let Err(e) = ctx.insert_spec(Arc::clone(&repository), s.clone()) {
-                return Err(vec![e]);
-            }
+            ctx.insert_spec(Arc::clone(&repository), s.clone())?;
         }
         let effective = EffectiveDate::from_option(main_spec.effective_from().cloned());
         let ctx = Box::leak(Box::new(ctx));
@@ -7069,15 +7073,11 @@ mod tests {
     }
 
     #[test]
-    fn should_reject_data_binding_into_non_spec_data() {
-        // Higher-standard language rule:
-        // if `x` is a literal (not a spec reference), `x.y = ...` must be rejected.
-        //
-        // This is currently expected to FAIL until graph building enforces it consistently.
+    fn dotted_data_definition_rows_are_not_bindings() {
+        // Bindings live on `uses` blocks only; dotted `LemmaData` rows are not binding paths.
         let mut spec = create_test_spec("test");
         spec = spec.add_data(create_literal_data("x", Value::Number(1.into())));
 
-        // Bind x.y, but x is not a spec reference.
         spec = spec.add_data(LemmaData {
             reference: Reference::from_path(vec!["x".to_string(), "y".to_string()]),
             value: ParsedDataValue::Definition {
@@ -7090,8 +7090,8 @@ mod tests {
 
         let result = build_graph(&spec, &[spec.clone()]);
         assert!(
-            result.is_err(),
-            "Overriding x.y must fail when x is not a spec reference"
+            result.is_ok(),
+            "dotted definition rows are ignored by binding collection"
         );
     }
 
@@ -7367,7 +7367,7 @@ rule landed_cost_per_kg:
                 segments: Vec::new(),
                 name: "contract".to_string(),
             },
-            value: ParsedDataValue::Import(crate::parsing::ast::SpecRef::same_repository(
+            value: ParsedDataValue::import(crate::parsing::ast::SpecRef::same_repository(
                 "nonexistent",
             )),
             source_location: test_source(),
@@ -7540,7 +7540,7 @@ rule landed_cost_per_kg:
             .with_source_type(crate::parsing::source::SourceType::Volatile)
             .add_data(LemmaData {
                 reference: Reference::local("dep".to_string()),
-                value: DataValue::Import(SpecRef::same_repository("spec_b")),
+                value: DataValue::import(SpecRef::same_repository("spec_b")),
                 source_location: type_source.clone(),
             })
             .add_data(LemmaData {
@@ -7873,17 +7873,35 @@ rule r: i.x
                     primitive: PrimitiveKind::Number,
                 },
                 constraints: Some(vec![
-                    (
+                    Constraint::new(
                         TypeConstraintCommand::Minimum,
                         vec![CommandArg::Literal(crate::literals::Value::Number(
                             Decimal::ZERO,
                         ))],
+                        crate::parsing::source::Source::new(
+                            crate::parsing::source::SourceType::Volatile,
+                            crate::parsing::ast::Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                        ),
                     ),
-                    (
+                    Constraint::new(
                         TypeConstraintCommand::Maximum,
                         vec![CommandArg::Literal(crate::literals::Value::Number(
                             Decimal::from(150),
                         ))],
+                        crate::parsing::source::Source::new(
+                            crate::parsing::source::SourceType::Volatile,
+                            crate::parsing::ast::Span {
+                                start: 0,
+                                end: 0,
+                                line: 1,
+                                col: 0,
+                            },
+                        ),
                     ),
                 ]),
                 source: crate::parsing::source::Source::new(
@@ -7972,9 +7990,9 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data length: measure
-      -> unit meter 1
+      -> unit meter: 1
     data road_length: length
-      -> unit kilometer 1000"#,
+      -> unit kilometer: 1000"#,
             );
 
             let resolved_types = resolver
@@ -8022,7 +8040,7 @@ rule r: i.x
         fn test_type_definition_with_multiple_commands() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
-    data money: measure -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
+    data money: measure -> decimals 2 -> unit eur: 1.0 -> unit usd: 1.18"#,
             );
 
             let resolved_types = resolver
@@ -8090,7 +8108,7 @@ rule r: i.x
         fn test_measure_type_decimals_only() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
-    data weight: measure -> unit kg 1 -> decimals 3"#,
+    data weight: measure -> unit kg: 1 -> decimals 3"#,
             );
 
             let resolved_types = resolver
@@ -8134,7 +8152,7 @@ rule r: i.x
         fn typedef_default_inherits_through_extension_chain() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
-    data money: measure -> unit eur 1 -> suggest 4 eur
+    data money: measure -> unit eur: 1 -> suggest 4 eur
     data price: money
     data final_price: price"#,
             );
@@ -8200,8 +8218,8 @@ rule r: i.x
         fn test_measure_extension_chain_same_family_units_allowed() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
-    data money: measure -> unit eur 1
-    data money2: money -> unit usd 1.24"#,
+    data money: measure -> unit eur: 1
+    data money2: money -> unit usd: 1.24"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8279,9 +8297,9 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money: measure
-      -> unit eur 1
+      -> unit eur: 1
     data money2: money
-      -> unit eur 1.10"#,
+      -> unit eur: 1.10"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8310,9 +8328,9 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money: measure
-      -> unit eur 1
+      -> unit eur: 1
     data money2: money
-      -> unit eur 1"#,
+      -> unit eur: 1"#,
             );
 
             let resolved = resolver
@@ -8337,9 +8355,9 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money: measure
-      -> unit eur 1
+      -> unit eur: 1
     data money2: money
-      -> unit usd 1.24"#,
+      -> unit usd: 1.24"#,
             );
 
             let resolved = resolver
@@ -8378,14 +8396,14 @@ rule r: i.x
         fn find_unique_reports_multiple_families_with_same_decomposition() {
             let code = r#"spec units
     data money: measure
-      -> unit eur 1
-      -> unit usd 0.86
+      -> unit eur: 1
+      -> unit usd: 0.86
     data mass: measure
-      -> unit kg 1
+      -> unit kg: 1
     data price_eur_per_kg: measure
-      -> unit eur_per_kg eur/kg
+      -> unit eur_per_kg: eur/kg
     data price_usd_per_kg: measure
-      -> unit usd_per_kg usd/kg
+      -> unit usd_per_kg: usd/kg
     "#;
             let (resolver, spec_arcs) = resolver_for_code(code);
             let units_arc = spec_arcs
@@ -8422,11 +8440,11 @@ rule r: i.x
         fn unit_index_maps_family_root_not_binding_alias() {
             let code = r#"spec units
     data money: measure
-      -> unit eur 1
+      -> unit eur: 1
     data mass: measure
-      -> unit kg 1
+      -> unit kg: 1
     data price_per_weight: measure
-      -> unit eur_per_kg eur/kg
+      -> unit eur_per_kg: eur/kg
 
     spec consumer
     uses u: units
@@ -8493,15 +8511,15 @@ rule r: i.x
         fn import_merge_skips_locally_owned_family_root() {
             let code = r#"spec std_units
     data mass: measure
-      -> unit kilogram 1
-      -> unit kilograms 1
-      -> unit gram 0.001
+      -> unit kilogram: 1
+      -> unit kilograms: 1
+      -> unit gram: 0.001
 
     spec s
     uses u: std_units
     data mass: measure
-      -> unit kg 1
-      -> unit tonne 1000
+      -> unit kg: 1
+      -> unit tonne: 1000
     rule smoke: true
     "#;
             let (resolver, spec_arcs) = resolver_for_code(code);
@@ -8571,7 +8589,7 @@ rule r: i.x
         fn same_family_same_unit_same_factor_is_idempotent() {
             let code = r#"spec units_a
     data duration: measure
-      -> unit hour 1
+      -> unit hour: 1
 
     spec consumer
     uses a: units_a
@@ -8612,11 +8630,11 @@ rule r: i.x
         fn same_family_same_unit_different_factor_errors() {
             let code = r#"spec units_a
     data duration: measure
-      -> unit hour 1
+      -> unit hour: 1
 
     spec units_b
     data duration: measure
-      -> unit hour 60
+      -> unit hour: 60
 
     spec consumer
     uses a: units_a
@@ -8676,18 +8694,18 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money_a: measure
-      -> unit eur 1.00
-      -> unit usd 0.84
+      -> unit eur: 1.00
+      -> unit usd: 0.84
 
     data money_b: measure
-      -> unit eur 1.00
-      -> unit usd 1.20
+      -> unit eur: 1.00
+      -> unit usd: 1.20
 
     data length_a: measure
-      -> unit meter 1.0
+      -> unit meter: 1.0
 
     data length_b: measure
-      -> unit meter 1.0"#,
+      -> unit meter: 1.0"#,
             );
 
             let resolved = resolver
@@ -8710,10 +8728,10 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data q: measure
-      -> unit foo 1
+      -> unit foo: 1
 
     data r: ratio
-      -> unit foo 100"#,
+      -> unit foo: 100"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8739,10 +8757,10 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data spread_a: ratio
-      -> unit basis_points 10000
+      -> unit basis_points: 10000
 
     data spread_b: ratio
-      -> unit basis_points 10000"#,
+      -> unit basis_points: 10000"#,
             );
 
             resolver
@@ -8755,10 +8773,10 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data spread_a: ratio
-      -> unit basis_points 10000
+      -> unit basis_points: 10000
 
     data spread_b: ratio
-      -> unit basis_points 5000"#,
+      -> unit basis_points: 5000"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8802,7 +8820,7 @@ rule r: i.x
                 r#"spec test
     data margin: ratio -> suggest 10%
     data fee: ratio
-      -> unit tenths 10
+      -> unit tenths: 10
     data tax: ratio -> suggest 1%"#,
             );
 
@@ -8838,7 +8856,7 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data price: number
-      -> unit eur 1.00"#,
+      -> unit eur: 1.00"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8859,11 +8877,11 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money: measure
-      -> unit eur 1.00
-      -> unit usd 0.84
+      -> unit eur: 1.00
+      -> unit usd: 0.84
 
     data my_money: money
-      -> unit gbp 1.30"#,
+      -> unit gbp: 1.30"#,
             );
 
             let resolved = resolver
@@ -8887,9 +8905,9 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data source_measure: measure
-      -> unit usd 1.00
+      -> unit usd: 1.00
     data z: source_measure
-      -> unit usd 0.84"#,
+      -> unit usd: 0.84"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8914,9 +8932,9 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data parent: ratio
-      -> unit basis 1
+      -> unit basis: 1
     data child: parent
-      -> unit basis 100"#,
+      -> unit basis: 100"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8941,8 +8959,8 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money: measure
-      -> unit eur 1.00
-      -> unit eur 1.19"#,
+      -> unit eur: 1.00
+      -> unit eur: 1.19"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -8961,15 +8979,15 @@ rule r: i.x
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data currency: measure
-      -> unit usd 1.00
-      -> unit eur 0.92
+      -> unit usd: 1.00
+      -> unit eur: 0.92
 
     data time_period: measure
-      -> unit year 1
+      -> unit year: 1
 
     data run_rate: measure
-      -> unit arr usd/year
-      -> unit arr eur/year"#,
+      -> unit arr: usd/year
+      -> unit arr: eur/year"#,
             );
 
             let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
@@ -9500,11 +9518,12 @@ rule r: i.x
             let source = test_source();
             let constraints: Vec<Constraint> = (0..option_count)
                 .map(|i| {
-                    (
+                    Constraint::new(
                         TypeConstraintCommand::Option,
                         vec![CommandArg::Literal(crate::literals::Value::Text(
                             i.to_string(),
                         ))],
+                        source.clone(),
                     )
                 })
                 .collect();
@@ -9588,11 +9607,11 @@ rule r: i.x
             let alpha_code = r#"repo alpha
     spec units
     data force: measure
-      -> unit newton 1
+      -> unit newton: 1
     data length: measure
-      -> unit meter 1
+      -> unit meter: 1
     data torque: measure
-      -> unit nm newton*meter
+      -> unit nm: newton*meter
 
     spec worker
     uses u: alpha units
@@ -10183,7 +10202,7 @@ impl<'a> TypeResolver<'a> {
                         errors.push(e);
                     }
                 }
-                ParsedDataValue::With(_) | ParsedDataValue::Import(_) => {}
+                ParsedDataValue::Import { .. } => {}
             }
         }
         errors
@@ -10591,7 +10610,7 @@ impl<'a> TypeResolver<'a> {
                         if spec.data.iter().any(|data| {
                             data.reference.is_local()
                                 && data.reference.name == name.as_str()
-                                && matches!(&data.value, ParsedDataValue::Import(_))
+                                && matches!(&data.value, ParsedDataValue::Import { .. })
                         }) {
                             return Err(vec![Error::validation_with_context(
                                 format!(
@@ -10857,7 +10876,7 @@ impl<'a> TypeResolver<'a> {
         }
 
         for data_row in &spec.data {
-            let ParsedDataValue::Import(spec_ref) = &data_row.value else {
+            let ParsedDataValue::Import { spec_ref, .. } = &data_row.value else {
                 continue;
             };
             let import_alias = data_row.reference.name.clone();
@@ -11209,7 +11228,7 @@ pub fn validate_type_specifications(
             if units.is_empty() {
                 errors.push(Error::validation_with_context(
                     format!(
-                        "Type '{}' is a measure type but has no units. Measure types must define at least one unit (e.g. -> unit eur 1).",
+                        "Type '{}' is a measure type but has no units. Measure types must define at least one unit (e.g. -> unit eur: 1).",
                         type_name
                     ),
                     Some(source.clone()),

@@ -1,8 +1,8 @@
 mod imp {
     use anyhow::Result;
+    use lemma::mcp::ToolError;
     use lemma::DateTimeValue;
     use lemma::Engine;
-    use lemma_mcp::ToolError;
     use serde::{Deserialize, Serialize};
     use std::fs;
     use std::io::{self, BufRead, Write};
@@ -451,16 +451,16 @@ mod imp {
         fn list_tools(&self) -> Result<serde_json::Value, McpError> {
             debug!("Listing tools");
 
-            let mut catalog = serde_json::to_value(lemma_mcp::list_tools())
+            let mut catalog = serde_json::to_value(lemma::mcp::list_tools())
                 .unwrap_or_else(|error| panic!("BUG: MCP tool catalog must serialize: {error}"));
             let tools = catalog
                 .as_array_mut()
-                .expect("BUG: lemma_mcp::list_tools serializes as an array");
+                .expect("BUG: lemma::mcp::list_tools serializes as an array");
 
             if self.config.admin {
                 tools.push(serde_json::json!({
                     "name": "add_spec",
-                    "description": "Load Lemma source as one or more specs (persists). Prefer check first; check alone does not load. On failure returns structured diagnostics. After success, present the full source in chat for user verify.",
+                    "description": "Load Lemma source as one or more specs (persists). Prefer check first; check alone does not load. On failure returns structured diagnostics. After success, call source and present that formatted text in chat for user verify; do not paste the unformatted draft.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -478,7 +478,7 @@ mod imp {
                 }));
                 tools.push(serde_json::json!({
                     "name": "update_spec",
-                    "description": "Replace an existing spec with new source. After success, present the full source in chat for user verify.",
+                    "description": "Replace an existing spec with new source. After success, call source and present that formatted text in chat for user verify; do not paste the unformatted draft.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -561,7 +561,7 @@ mod imp {
         }
 
         fn list_resources(&self) -> Result<serde_json::Value, McpError> {
-            Ok(serde_json::json!({ "resources": lemma_mcp::list_resources() }))
+            Ok(serde_json::json!({ "resources": lemma::mcp::list_resources() }))
         }
 
         fn read_resource(
@@ -573,7 +573,7 @@ mod imp {
             let uri = params["uri"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'uri' field".to_string()))?;
-            let text = lemma_mcp::read_resource(uri)
+            let text = lemma::mcp::read_resource(uri)
                 .map_err(|error| McpError::invalid_params(error.to_string()))?;
             Ok(serde_json::json!({
                 "contents": [{
@@ -615,12 +615,12 @@ mod imp {
                 "remove_spec" => self.tool_remove_spec(arguments),
                 "clear" => self.tool_clear(arguments),
                 "install" => self.tool_install(arguments),
-                "evaluate" => map_tool_result(lemma_mcp::evaluate(&self.engine, arguments)),
+                "evaluate" => map_tool_result(lemma::mcp::evaluate(&self.engine, arguments)),
                 "list" => self.tool_list(arguments),
-                "show" => map_tool_result(lemma_mcp::show(&self.engine, arguments)),
-                "source" => map_tool_result(lemma_mcp::source(&self.engine, arguments)),
-                "check" => map_tool_result(lemma_mcp::check(arguments)),
-                "guide" => map_tool_result(lemma_mcp::guide(arguments)),
+                "show" => map_tool_result(lemma::mcp::show(&self.engine, arguments)),
+                "source" => map_tool_result(lemma::mcp::source(&self.engine, arguments)),
+                "check" => map_tool_result(lemma::mcp::check(arguments)),
+                "guide" => map_tool_result(lemma::mcp::guide(arguments)),
                 other => panic!("BUG: unknown MCP tool {other}"),
             }
         }
@@ -1121,7 +1121,7 @@ mod imp {
         }
 
         fn tool_list(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let mut output = match lemma_mcp::list(&self.engine, args) {
+            let mut output = match lemma::mcp::list(&self.engine, args) {
                 Ok(text) => text,
                 Err(error) => return map_tool_result(Err(error)),
             };

@@ -9,7 +9,7 @@ Lemma syntax is meant to be hard to misuse. It favours readable keywords over pu
 
 ## Building blocks
 
-Lemma can be written in `.lemma` files however you like. The CLI ignores file names and reads only what those files contain. A file may hold one `spec` or many, optionally organized under a `repo`. Inside a spec, after an optional commentary, `data`, `uses`, `with`, `rule`, and `meta` may appear in any order.
+Lemma can be written in `.lemma` files however you like. The CLI ignores file names and reads only what those files contain. A file may hold one `spec` or many, optionally organized under a `repo`. Inside a spec, after an optional commentary, `data`, `uses` (optional `  -> with` bindings), `rule`, and `meta` may appear in any order.
 
 ### `repo`
 
@@ -202,7 +202,7 @@ So `balance / rate as month` parses as `balance / (rate as month)`, and `rate * 
 
 ## Using other Specs
 
-Specs are composed with `uses` and `with`. There is no inheritance. For unpinned versus pinned imports, temporal slices, coverage, and interface checks, see [Composing specs](../learn/composing_specs.md).
+Specs are composed with `uses` and `  -> with` bindings under each import. There is no inheritance. For unpinned versus pinned imports, temporal slices, coverage, and interface checks, see [Composing specs](../learn/composing_specs.md).
 
 Write `uses spec_name` to import with an alias equal to the last path segment of the target name, or `uses alias: spec_name` for an explicit alias. Add an effective datetime after the target to pin that edge (`uses spec_name 2025-01-01`, or a bare year `YYYY` for that year's Jan 1 00:00). Versioning is temporal only: multiple rows of the same name with different `effective_from` datetimes.
 
@@ -346,7 +346,7 @@ Pin which temporal version of a dependency applies for that edge:
 spec finance 2026-01-01
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 ```
 
 ```lemma
@@ -359,11 +359,11 @@ data wallet: fin.money
 
 These edges participate in temporal slicing: the engine creates slice boundaries when a dependency has multiple temporal versions and the consumer references it without a per-edge pin.
 
-### Setting data on an imported spec (`with`)
+### Setting data on an imported spec (`uses` block)
 
-`with` sets a literal or reference on a **data slot of a spec you** `uses`. The left-hand side must be an import path (`alias.field` or `alias.nested.field`). Local names (`with x: …`) are rejected; use `data` for slots in the current spec.
+Under a `uses` line, `  -> with path: value` sets a literal or reference on a **data slot of the imported spec**. The path is relative to that import (no alias prefix). Standalone `with alias.field: …` is deprecated (still parses; `quality` recommends the block form); use `data` for local slots.
 
-Constraint chains (`-> ...`) belong on `data` and cannot be used on `with`.
+Constraint chains (`-> ...`) on binding values are not allowed; they belong on `data`.
 
 ```lemma
 spec base_employee
@@ -374,8 +374,8 @@ data monthly_salary: number
 ```lemma
 spec specific_employee
 uses employee: base_employee
-with employee.name: "Alice Smith"
-with employee.monthly_salary: 7_500
+  -> with name: "Alice Smith"
+  -> with monthly_salary: 7_500
 
 rule employee_summary: employee.name
 ```
@@ -407,11 +407,11 @@ rule final_price: price * (100% - discount)
 ```lemma
 spec scenarios
 uses retail: pricing
-with retail.discount: 5%
+  -> with discount: 5%
 
 uses wholesale: pricing
-with wholesale.discount: 15%
-with wholesale.price: 80
+  -> with discount: 15%
+  -> with price: 80
 
 rule retail_final: retail.final_price
 rule wholesale_final: wholesale.final_price
@@ -433,8 +433,8 @@ data slot: number
 ```lemma
 spec outer
 uses i: inner
-data src: 42
-with i.slot: src
+  -> with slot: src
+data src: number -> suggest 42
 rule r: i.slot
 ```
 
@@ -592,7 +592,7 @@ Every input slot and every named type is declared with `data`. The right-hand si
 
 ### Values
 
-A literal **prefills** the slot and Lemma infers the type. Callers may override at evaluation time; interactive UIs typically skip review for prefilled fields (including literal `with` bindings on templates):
+A literal **prefills** the slot and Lemma infers the type. Callers may override at evaluation time; interactive UIs typically skip review for prefilled fields (including literal `uses` block `  -> with` bindings on templates):
 
 ```lemma
 spec employment
@@ -612,7 +612,7 @@ data salary:     75_000
 
 ### Open inputs
 
-Declare a type without a value to leave the slot open for evaluation. Add constraints on the same declaration. Use `-> suggest` for a **suggestion** (UIs may offer it; Enter to accept); this differs from a literal prefilled value or a template `with alias.field: literal` binding:
+Declare a type without a value to leave the slot open for evaluation. Add constraints on the same declaration. Use `-> suggest` for a **suggestion** (UIs may offer it; Enter to accept); this differs from a literal prefilled value or a `uses` block `-> with path: literal` binding:
 
 ```lemma
 spec loan_application
@@ -629,8 +629,8 @@ data status: text
   -> suggest "active"
 
 data amount: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
 ```
 
@@ -646,8 +646,8 @@ When the right-hand side is a primitive or another data name (not a literal), th
 spec warehouse
 
 data mass: measure
-  -> unit kilogram 1.0
-  -> unit pound 0.453592
+  -> unit kilogram: 1.0
+  -> unit pound: 0.453592
 
 data weight:         mass
 data package_weight: 75 kilogram
@@ -665,8 +665,8 @@ A `data` declaration whose right-hand side is a primitive or another data name c
 spec money_type
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
   -> minimum 0 eur
 ```
@@ -677,8 +677,8 @@ A data declaration can also extend another data name:
 spec extended_types
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
 
 data price: money
   -> minimum 0 eur
@@ -786,11 +786,11 @@ spec rates
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.90
+  -> unit eur: 1.00
+  -> unit usd: 0.90
 
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 
 data time_worked: 120 hour
 data wage: 60 eur_per_hour

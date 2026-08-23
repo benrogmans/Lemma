@@ -74,14 +74,14 @@ fn qualified_data_import_pins_to_referenced_version() {
             r#"
 spec finance
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#
@@ -143,13 +143,13 @@ fn qualified_data_import_rejects_unit_from_later_version() {
             r#"
 spec finance
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 
 spec finance 2025-07-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 "#
             .to_string(),
@@ -215,13 +215,13 @@ fn unranged_spec_with_type_only_dep_rejects_incompatible_interface() {
             r#"
 spec units
 data weight: measure
- -> unit kg 1.00
+ -> unit kg: 1.00
  -> decimals 1
 
 spec units 2025-06-01
 data weight: measure
- -> unit kg 1.00
- -> unit lb 2.205
+ -> unit kg: 1.00
+ -> unit lb: 2.205
  -> decimals 1
 "#
             .to_string(),
@@ -274,14 +274,14 @@ fn mixed_spec_ref_and_data_import_to_same_dep() {
             r#"
 spec finance
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#
@@ -364,14 +364,14 @@ fn inline_data_import_rejects_incompatible_unpinned_dep() {
             r#"
 spec finance
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#
@@ -419,14 +419,14 @@ fn data_import_with_effective_datetime_pins_version() {
             r#"
 spec finance
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#
@@ -480,13 +480,13 @@ fn qualified_pin_must_not_leak_later_version_types() {
             r#"
 spec finance
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 
 spec finance 2025-07-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 "#
             .to_string(),

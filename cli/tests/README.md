@@ -23,7 +23,7 @@ cargo nextest run -p lemma --test integration integrations::lsp
 | [integrations/lsp.rs](integrations/lsp.rs) | `lemma lsp` over stdio (initialize, diagnostics, formatting, semantic tokens) | Content-Length framed JSON-RPC via [lsp_session.rs](integrations/lsp_session.rs) |
 | [integrations/server.rs](integrations/server.rs) | HTTP evaluate/list endpoints | `reqwest` against local server |
 | [integrations/examples.rs](integrations/examples.rs) | Fixture `.lemma` under `integrations/examples/` | Same as run; golden paths |
-| [integrations/documentation_examples.rs](integrations/documentation_examples.rs) | Shipped `documentation/examples/` specs | In-process `Engine` |
+| [integrations/documentation_examples.rs](integrations/documentation_examples.rs) | Shipped `engine/documentation/examples/` specs | In-process `Engine` |
 | [integrations/documentation_fences.rs](integrations/documentation_fences.rs) | Every `` ```lemma `` fence in repo `*.md` / `*.txt` | Parse + load + run |
 | [integrations/documentation_formatting.rs](integrations/documentation_formatting.rs) | Format round-trip of documentation examples | `format_source` + `parse` |
 

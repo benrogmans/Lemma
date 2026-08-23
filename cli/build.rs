@@ -2,15 +2,15 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    let guide_dir = Path::new("documentation/guide");
+    let guide_dir = Path::new("../engine/documentation/guide");
     let output_path = Path::new("documentation/llms.txt");
 
     let mut entries = fs::read_dir(guide_dir)
-        .expect("BUG: documentation/guide/ must exist")
+        .expect("BUG: engine/documentation/guide/ must exist")
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
-            if path.extension()?.to_str()? == "txt" {
+            if path.extension()?.to_str()? == "md" {
                 Some(path)
             } else {
                 None
@@ -33,5 +33,5 @@ fn main() {
     fs::write(output_path, content)
         .unwrap_or_else(|e| panic!("BUG: failed to write {}: {}", output_path.display(), e));
 
-    println!("cargo:rerun-if-changed=documentation/guide");
+    println!("cargo:rerun-if-changed=../engine/documentation/guide");
 }

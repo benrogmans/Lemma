@@ -65,7 +65,10 @@ pub(crate) fn resolve_spec_ref_after_expanding_uses_aliases(
             if d.reference.name != spec_ref.name {
                 continue;
             }
-            let DataValue::Import(inner) = &d.value else {
+            let DataValue::Import {
+                spec_ref: inner, ..
+            } = &d.value
+            else {
                 continue;
             };
             if spec_ref.effective.is_some()
@@ -387,7 +390,7 @@ pub(crate) fn dependency_edges(
 
     for data in &spec.data {
         match &data.value {
-            DataValue::Import(spec_ref) => {
+            DataValue::Import { spec_ref, .. } => {
                 push_edge(spec_ref, &data.source_location);
             }
             DataValue::Definition {
@@ -1093,7 +1096,7 @@ mod tests {
         let mut s = LemmaSpec::new("with_alias".to_string());
         s.data.push(LemmaData::new(
             Reference::local("iso".to_string()),
-            AstDataValue::Import(SpecRef {
+            AstDataValue::import(SpecRef {
                 name: "alpha2".to_string(),
                 repository: Some(RepositoryQualifier::new("@iso/countries")),
                 effective: Some(date(2024, 1, 1)),
@@ -1130,7 +1133,7 @@ mod tests {
         s.effective_from = EffectiveDate::from_option(eff);
         s.data.push(LemmaData {
             reference: Reference::local("d".to_string()),
-            value: AstDataValue::Import(SpecRef {
+            value: AstDataValue::import(SpecRef {
                 name: dep.to_string(),
                 repository: dep_repository,
                 effective: qualified_at,
@@ -1373,7 +1376,7 @@ mod tests {
         consumer.effective_from = EffectiveDate::from_option(Some(date(2027, 1, 1)));
         consumer.data.push(LemmaData::new(
             Reference::local("finance".to_string()),
-            AstDataValue::Import(inner.clone()),
+            AstDataValue::import(inner.clone()),
             dummy_source(),
         ));
 
@@ -1425,7 +1428,7 @@ mod tests {
         consumer.effective_from = EffectiveDate::from_option(Some(date(2026, 5, 20)));
         consumer.data.push(LemmaData::new(
             Reference::local("fin".to_string()),
-            DataValue::Import(SpecRef {
+            DataValue::import(SpecRef {
                 name: "finance".into(),
                 repository: None,
                 effective: Some(date(2027, 1, 1)),
@@ -1529,7 +1532,7 @@ mod tests {
         let mut dep = LemmaSpec::new("dep".to_string());
         dep.data.push(LemmaData::new(
             Reference::local("c".to_string()),
-            DataValue::Import(SpecRef {
+            DataValue::import(SpecRef {
                 effective: Some(date(2025, 6, 1)),
                 ..SpecRef::same_repository("child")
             }),
@@ -1585,13 +1588,13 @@ rule doubled: p * 2
 
 spec child 2025-01-01
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 
 spec child 2025-06-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 "#;
         let specs = crate::parse(

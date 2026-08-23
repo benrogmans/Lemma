@@ -1,7 +1,7 @@
 spec money
 
 data salary: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
   -> decimals 2
   -> minimum 0 eur
 

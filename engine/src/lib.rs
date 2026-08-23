@@ -22,9 +22,13 @@ pub(crate) mod registry;
 pub mod result_value;
 pub(crate) mod spec_set_id;
 pub(crate) mod stdlib;
+pub(crate) mod string_distance;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deps;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;

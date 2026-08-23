@@ -8,26 +8,71 @@ import java.math.BigDecimal;
 /** Spec {@code meta} field value. Externally tagged. */
 public sealed interface MetaValue {
 
+  /**
+   * Literal.
+   * @param value value
+   */
   record Literal(LiteralValue value) implements MetaValue {}
 
+  /**
+   * Unquoted.
+   * @param value value
+   */
   record Unquoted(String value) implements MetaValue {}
 
   /** Parsed literal value. Externally tagged. */
   public sealed interface LiteralValue {
+    /**
+     * Number.
+     * @param value value
+     */
     record Number(BigDecimal value) implements LiteralValue {}
 
+    /**
+     * NumberWithUnit.
+     * @param number number
+     * @param unit unit
+     */
     record NumberWithUnit(BigDecimal number, String unit) implements LiteralValue {}
 
+    /**
+     * Text.
+     * @param value value
+     */
     record Text(String value) implements LiteralValue {}
 
+    /**
+     * Date.
+     * @param value value
+     */
     record Date(String value) implements LiteralValue {}
 
+    /**
+     * Time.
+     * @param value value
+     */
     record Time(String value) implements LiteralValue {}
 
+    /**
+     * BooleanLit.
+     * @param value value
+     */
     record BooleanLit(String value) implements LiteralValue {}
 
+    /**
+     * Range.
+     * @param from from
+     * @param to to
+     */
     record Range(LiteralValue from, LiteralValue to) implements LiteralValue {}
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static LiteralValue read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LiteralValue");
       p.nextToken();
@@ -68,6 +113,13 @@ public sealed interface MetaValue {
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   static MetaValue read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "MetaValue");
     p.nextToken();

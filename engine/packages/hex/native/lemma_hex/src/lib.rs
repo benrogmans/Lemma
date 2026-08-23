@@ -620,23 +620,23 @@ fn mcp_args(json: &str) -> Result<serde_json::Value, rustler::Error> {
 
 fn mcp_tool_result<'a>(
     env: Env<'a>,
-    result: Result<String, lemma_mcp::ToolError>,
+    result: Result<String, lemma::mcp::ToolError>,
 ) -> NifResult<Term<'a>> {
     match result {
         Ok(text) => Ok((atom::ok(), text).encode(env)),
-        Err(lemma_mcp::ToolError::InvalidArguments(message)) => Ok((
+        Err(lemma::mcp::ToolError::InvalidArguments(message)) => Ok((
             atom::error(),
             rustler::Atom::from_str(env, "invalid_arguments")?,
             message,
         )
             .encode(env)),
-        Err(lemma_mcp::ToolError::NotFound(message)) => Ok((
+        Err(lemma::mcp::ToolError::NotFound(message)) => Ok((
             atom::error(),
             rustler::Atom::from_str(env, "not_found")?,
             message,
         )
             .encode(env)),
-        Err(lemma_mcp::ToolError::Diagnostics(message)) => Ok((
+        Err(lemma::mcp::ToolError::Diagnostics(message)) => Ok((
             atom::error(),
             rustler::Atom::from_str(env, "diagnostics")?,
             message,
@@ -647,23 +647,23 @@ fn mcp_tool_result<'a>(
 
 #[rustler::nif]
 fn mcp_list_tools<'a>(env: Env<'a>) -> NifResult<Term<'a>> {
-    let json = serde_json::to_string(&lemma_mcp::list_tools())
+    let json = serde_json::to_string(&lemma::mcp::list_tools())
         .unwrap_or_else(|error| panic!("BUG: MCP tool catalog must serialize: {error}"));
     Ok((atom::ok(), json).encode(env))
 }
 
 #[rustler::nif]
 fn mcp_list_resources<'a>(env: Env<'a>) -> NifResult<Term<'a>> {
-    let json = serde_json::to_string(&lemma_mcp::list_resources())
+    let json = serde_json::to_string(&lemma::mcp::list_resources())
         .unwrap_or_else(|error| panic!("BUG: MCP resource catalog must serialize: {error}"));
     Ok((atom::ok(), json).encode(env))
 }
 
 #[rustler::nif]
 fn mcp_read_resource<'a>(env: Env<'a>, uri: String) -> NifResult<Term<'a>> {
-    match lemma_mcp::read_resource(&uri) {
+    match lemma::mcp::read_resource(&uri) {
         Ok(text) => Ok((atom::ok(), text).encode(env)),
-        Err(lemma_mcp::ResourceError::UnknownUri(message)) => Ok((
+        Err(lemma::mcp::ResourceError::UnknownUri(message)) => Ok((
             atom::error(),
             rustler::Atom::from_str(env, "unknown_uri")?,
             message,
@@ -683,7 +683,7 @@ fn mcp_evaluate<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    mcp_tool_result(env, lemma_mcp::evaluate(&engine, &args))
+    mcp_tool_result(env, lemma::mcp::evaluate(&engine, &args))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -697,7 +697,7 @@ fn mcp_list<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    mcp_tool_result(env, lemma_mcp::list(&engine, &args))
+    mcp_tool_result(env, lemma::mcp::list(&engine, &args))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -711,7 +711,7 @@ fn mcp_show<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    mcp_tool_result(env, lemma_mcp::show(&engine, &args))
+    mcp_tool_result(env, lemma::mcp::show(&engine, &args))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -725,19 +725,19 @@ fn mcp_source<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    mcp_tool_result(env, lemma_mcp::source(&engine, &args))
+    mcp_tool_result(env, lemma::mcp::source(&engine, &args))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn mcp_check<'a>(env: Env<'a>, args_json: String) -> NifResult<Term<'a>> {
     let args = mcp_args(&args_json)?;
-    mcp_tool_result(env, lemma_mcp::check(&args))
+    mcp_tool_result(env, lemma::mcp::check(&args))
 }
 
 #[rustler::nif]
 fn mcp_guide<'a>(env: Env<'a>, args_json: String) -> NifResult<Term<'a>> {
     let args = mcp_args(&args_json)?;
-    mcp_tool_result(env, lemma_mcp::guide(&args))
+    mcp_tool_result(env, lemma::mcp::guide(&args))
 }
 
 rustler::init!("Elixir.Lemma.Native", load = load);

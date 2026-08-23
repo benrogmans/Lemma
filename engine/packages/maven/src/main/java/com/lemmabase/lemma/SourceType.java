@@ -7,12 +7,28 @@ import java.io.IOException;
 /** Provenance of a loaded source. Externally tagged; unit {@code Volatile} is bare {@code "volatile"}. */
 public sealed interface SourceType {
 
+  /** Volatile. */
   record Volatile() implements SourceType {}
 
+  /**
+   * Path.
+   * @param value value
+   */
   record Path(String value) implements SourceType {}
 
+  /**
+   * Dependency.
+   * @param value value
+   */
   record Dependency(String value) implements SourceType {}
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   static SourceType read(JsonParser p) throws IOException {
     if (p.currentToken() == JsonToken.VALUE_STRING) {
       String value = p.getText();

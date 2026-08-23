@@ -6,10 +6,18 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
-
 /**
- * API value shared by {@link RuleResult} (flattened), {@link Show.ShowData#prefilled()}, and
- * suggestion.
+ * RuleResultValue.
+ * @param display display
+ * @param measure measure
+ * @param ratio ratio
+ * @param number number
+ * @param booleanValue booleanValue
+ * @param text text
+ * @param date date
+ * @param time time
+ * @param calendar calendar
+ * @param range range
  */
 public record RuleResultValue(
     @Nullable String display,
@@ -22,9 +30,19 @@ public record RuleResultValue(
     @Nullable String time,
     @Nullable CalendarResult calendar,
     @Nullable RangeResult range) {
-
-  /** Calendar magnitude with unit. */
+  /**
+   * CalendarResult.
+   * @param value value
+   * @param unit unit
+   */
   public record CalendarResult(BigDecimal value, String unit) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static CalendarResult read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "CalendarResult");
       BigDecimal value = null;
@@ -47,8 +65,18 @@ public record RuleResultValue(
       return new CalendarResult(value, unit);
     }
   }
-
-  /** Non-range typed endpoint fields. */
+  /**
+   * Endpoint.
+   * @param display display
+   * @param measure measure
+   * @param ratio ratio
+   * @param number number
+   * @param booleanValue booleanValue
+   * @param text text
+   * @param date date
+   * @param time time
+   * @param calendar calendar
+   */
   public record Endpoint(
       @Nullable String display,
       @Nullable Map<String, BigDecimal> measure,
@@ -59,6 +87,13 @@ public record RuleResultValue(
       @Nullable String date,
       @Nullable String time,
       @Nullable CalendarResult calendar) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Endpoint read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "RuleResultValueEndpoint");
       String display = null;
@@ -90,9 +125,19 @@ public record RuleResultValue(
           display, measure, ratio, number, booleanValue, text, date, time, calendar);
     }
   }
-
-  /** Range from/to endpoints. */
+  /**
+   * RangeResult.
+   * @param from from
+   * @param to to
+   */
   public record RangeResult(Endpoint from, Endpoint to) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static RangeResult read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "RangeResult");
       Endpoint from = null;
@@ -116,6 +161,13 @@ public record RuleResultValue(
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static RuleResultValue read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "RuleResultValue");
     String display = null;

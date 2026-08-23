@@ -2425,7 +2425,7 @@ mod tests {
                 r#"
                 spec pricing
                 data bridge_height: measure
-                  -> unit meter 1
+                  -> unit meter: 1
                   -> suggest 100 meter
                 data quantity: number -> minimum 0
                 rule cost: bridge_height * quantity
@@ -2507,11 +2507,11 @@ mod tests {
                 r#"
                 spec units_contract
                 data money: measure
-                  -> unit eur 1
-                  -> unit usd 0.91
+                  -> unit eur: 1
+                  -> unit usd: 0.91
                 data rate: ratio
-                  -> unit basis_points 10000
-                  -> unit percent 100
+                  -> unit basis_points: 10000
+                  -> unit percent: 100
                   -> suggest 500 basis_points
                 rule total: money
                 rule rate_out: rate
@@ -2596,22 +2596,22 @@ spec cost_price
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
-  -> unit inr 0.0092
+  -> unit eur: 1.00
+  -> unit inr: 0.0092
   -> decimals 2
 
 data labor_cost: measure
-  -> unit eur_per_hour eur/hour
-  -> unit inr_per_hour inr/hour
+  -> unit eur_per_hour: eur/hour
+  -> unit inr_per_hour: inr/hour
   -> suggest 25 eur_per_hour
 
 data product_cost: measure
-  -> unit eur_per_kg eur/kilogram
-  -> unit inr_per_kg inr/kilogram
+  -> unit eur_per_kg: eur/kilogram
+  -> unit inr_per_kg: inr/kilogram
   -> suggest 4 eur_per_kg
 
 data throughput: measure
-  -> unit kg_per_hour kilogram/hour
+  -> unit kg_per_hour: kilogram/hour
   -> suggest 12 kg_per_hour
 
 rule cost_price: product_cost + labor_cost / throughput
@@ -2800,13 +2800,13 @@ spec bag
 uses lemma units
 
 data weight: measure
-  -> unit kg 1
+  -> unit kg: 1
 
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data price_per_weight: measure
-  -> unit eur_per_kg eur/kg
+  -> unit eur_per_kg: eur/kg
 
 data item_cost: price_per_weight
 data roasting: price_per_weight
@@ -2816,8 +2816,8 @@ rule total_price: weight * (item_cost + roasting + chocolatizing)
 
 spec calc
 uses bag
-with bag.item_cost: item_cost
-with bag.roasting: roasting
+  -> with item_cost: item_cost
+  -> with roasting: roasting
 
 data type_of_nut: text -> options "peanut" "cashew"
 
@@ -2931,7 +2931,7 @@ rule total_price: bag.total_price
 spec units
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> decimals 2
 "#;
 

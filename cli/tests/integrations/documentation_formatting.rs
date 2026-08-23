@@ -5,23 +5,23 @@ use lemma::{format_source, parse, ResourceLimits};
 const EXAMPLE_FILES: &[(&str, &str)] = &[
     (
         "01_coffee_order.lemma",
-        include_str!("../../documentation/examples/01_coffee_order.lemma"),
+        include_str!("../../../engine/documentation/examples/01_coffee_order.lemma"),
     ),
     (
         "02_library_fees.lemma",
-        include_str!("../../documentation/examples/02_library_fees.lemma"),
+        include_str!("../../../engine/documentation/examples/02_library_fees.lemma"),
     ),
     (
         "03_recipe_scaling.lemma",
-        include_str!("../../documentation/examples/03_recipe_scaling.lemma"),
+        include_str!("../../../engine/documentation/examples/03_recipe_scaling.lemma"),
     ),
     (
         "04_membership_benefits.lemma",
-        include_str!("../../documentation/examples/04_membership_benefits.lemma"),
+        include_str!("../../../engine/documentation/examples/04_membership_benefits.lemma"),
     ),
     (
         "05_weather_clothing.lemma",
-        include_str!("../../documentation/examples/05_weather_clothing.lemma"),
+        include_str!("../../../engine/documentation/examples/05_weather_clothing.lemma"),
     ),
 ];
 

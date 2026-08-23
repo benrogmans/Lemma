@@ -17,6 +17,9 @@ pub fn parse(
     parser::parse(content, source_type, limits)
 }
 
+#[cfg(test)]
+mod assignment_continuation_tests;
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -482,10 +485,10 @@ rule rate: 10 usd as eur
 data price: 100 eur"#,
             ),
             (
-                "sibling with",
+                "sibling uses",
                 r#"spec s
 rule rate: 10 usd as eur
-with cfg.rate: rate"#,
+uses other"#,
             ),
             (
                 "sibling meta",
@@ -548,8 +551,8 @@ rule other: 1"#,
         let result = parse(
             r#"spec test
 data c: measure
-  -> unit eur 1
-  -> unit usd 0.84
+  -> unit eur: 1
+  -> unit usd: 0.84
 rule z: 5 + c as usd"#,
             crate::parsing::source::SourceType::Volatile,
             &ResourceLimits::default(),
@@ -569,8 +572,8 @@ rule z: 5 + c as usd"#,
                 "money",
                 r#"spec test
 data c: measure
-  -> unit eur 1
-  -> unit usd 0.84
+  -> unit eur: 1
+  -> unit usd: 0.84
 rule z: 5 as usd + c as usd"#,
             ),
             (
@@ -593,7 +596,7 @@ rule z: duration as hour + 1 > 0"#,
 uses lemma units
 data age: date range
 data c: measure
-  -> unit eur 1
+  -> unit eur: 1
 rule z: age as day + c"#,
             ),
         ];
@@ -658,7 +661,7 @@ rule z: age as day + c"#,
     fn parse_range_binds_tighter_than_multiply() {
         let base = r#"spec test
 uses lemma units
-data rate: measure -> unit eur 1
+data rate: measure -> unit eur: 1
 data period_start: 2026-01-01
 data period_end: 2026-01-02
 "#;
@@ -734,8 +737,8 @@ rule valid: now in start...start + length"#,
         let expression = rule_expression(
             r#"spec test
 uses lemma units
-data money: measure -> unit eur 1
-data rate: measure -> unit eur_per_hour eur/hour
+data money: measure -> unit eur: 1
+data rate: measure -> unit eur_per_hour: eur/hour
 data hourly_rate: 50 eur_per_hour
 data period_start: 2026-01-01
 data period_end: 2026-01-02
@@ -805,7 +808,10 @@ uses external: @user/workspace somespec"#;
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].data.len(), 1);
         match &specs[0].data[0].value {
-            crate::parsing::ast::DataValue::Import(spec_ref) => {
+            crate::parsing::ast::DataValue::Import {
+                spec_ref,
+                bindings: _,
+            } => {
                 assert_eq!(spec_ref.name, "somespec");
                 let repository_hdr = spec_ref
                     .repository
@@ -848,7 +854,10 @@ uses a: spec_a"#;
         .unwrap()
         .into_flattened_specs();
         match &specs[0].data[0].value {
-            crate::parsing::ast::DataValue::Import(spec_ref) => {
+            crate::parsing::ast::DataValue::Import {
+                spec_ref,
+                bindings: _,
+            } => {
                 assert_eq!(spec_ref.name, "somespec");
                 let repository_hdr = spec_ref
                     .repository
@@ -871,7 +880,10 @@ uses a: spec_a"#;
         .unwrap()
         .into_flattened_specs();
         match &specs[0].data[0].value {
-            crate::parsing::ast::DataValue::Import(spec_ref) => {
+            crate::parsing::ast::DataValue::Import {
+                spec_ref,
+                bindings: _,
+            } => {
                 assert_eq!(spec_ref.name, "myspec");
                 assert!(
                     spec_ref.repository.is_none(),
@@ -922,7 +934,7 @@ uses a: spec_a"#;
         assert!(result.is_ok(), "uses name should parse");
         let specs = result.unwrap().into_flattened_specs();
         let spec_ref = match &specs[0].data[0].value {
-            crate::parsing::ast::DataValue::Import(r) => r,
+            crate::parsing::ast::DataValue::Import { spec_ref, .. } => spec_ref,
             _ => panic!("expected Import"),
         };
         assert_eq!(spec_ref.name, "other");
@@ -939,7 +951,7 @@ uses a: spec_a"#;
         .unwrap();
         let specs = result.into_flattened_specs();
         let spec_ref = match &specs[0].data[0].value {
-            crate::parsing::ast::DataValue::Import(r) => r,
+            crate::parsing::ast::DataValue::Import { spec_ref, .. } => spec_ref,
             _ => panic!("expected Import"),
         };
         assert_eq!(spec_ref.name, "other");
@@ -960,7 +972,7 @@ uses a: spec_a"#;
         .unwrap();
         let spec = &result.flatten_specs()[0];
         let sr = match &spec.data[0].value {
-            crate::parsing::ast::DataValue::Import(r) => r,
+            crate::parsing::ast::DataValue::Import { spec_ref, .. } => spec_ref,
             _ => panic!("expected Import"),
         };
         let rs = sr
@@ -988,7 +1000,7 @@ uses a: spec_a"#;
         assert_eq!(data.len(), 2);
         assert_eq!(data[0].reference.name, "alias");
         let sr = match &data[0].value {
-            crate::parsing::ast::DataValue::Import(r) => r,
+            crate::parsing::ast::DataValue::Import { spec_ref, .. } => spec_ref,
             _ => panic!("expected Import"),
         };
         assert_eq!(sr.name, "retail");
@@ -1010,7 +1022,7 @@ uses a: spec_a"#;
         .unwrap()
         .into_flattened_specs();
         let spec_ref = match &result[0].data[0].value {
-            crate::parsing::ast::DataValue::Import(sr) => sr,
+            crate::parsing::ast::DataValue::Import { spec_ref: sr, .. } => sr,
             other => panic!("expected Import on uses row, got: {:?}", other),
         };
         assert_eq!(spec_ref.name, "alpha2");
@@ -1088,8 +1100,8 @@ with x: 42"#,
         .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("imported spec") || msg.contains("alias.field"),
-            "expected local with rejection, got: {msg}"
+            msg.contains("Standalone") || msg.contains("uses"),
+            "expected standalone with rejection, got: {msg}"
         );
     }
 
@@ -1105,8 +1117,8 @@ with copy: i.v"#,
         .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("imported spec") || msg.contains("alias.field"),
-            "expected local with rejection, got: {msg}"
+            msg.contains("Standalone") || msg.contains("uses"),
+            "expected standalone with rejection, got: {msg}"
         );
     }
 
@@ -1121,8 +1133,8 @@ with x: a.something"#,
         .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("imported spec") || msg.contains("alias.field"),
-            "expected local with rejection, got: {msg}"
+            msg.contains("Standalone") || msg.contains("uses"),
+            "expected standalone with rejection, got: {msg}"
         );
     }
 
@@ -1137,8 +1149,8 @@ with x: alpha.beta.gamma.delta"#,
         .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("imported spec") || msg.contains("alias.field"),
-            "expected local with rejection, got: {msg}"
+            msg.contains("Standalone") || msg.contains("uses"),
+            "expected standalone with rejection, got: {msg}"
         );
     }
 
@@ -1169,11 +1181,12 @@ data x: myothertype"#;
         );
     }
 
-    /// `with x.y: notdotted` (binding LHS, non-dotted RHS) is parsed as [`DataValue::With`] with a reference payload.
+    /// `uses` block `-> with path: reference` stores reference in binding rhs.
     #[test]
-    fn parse_binding_non_dotted_rhs_is_with_reference() {
+    fn parse_uses_binding_non_dotted_rhs_is_reference() {
         let input = r#"spec s
-with child.slot: somename"#;
+uses child: other
+  -> with slot: somename"#;
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -1181,16 +1194,18 @@ with child.slot: somename"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let value = &result[0].data[0].value;
+        let bindings = match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::Import { bindings, .. } => bindings,
+            other => panic!("expected Import, got: {:?}", other),
+        };
+        assert_eq!(bindings.len(), 1);
         assert!(
             matches!(
-                value,
-                crate::parsing::ast::DataValue::With(
-                    crate::parsing::ast::WithRhs::Reference { .. }
-                )
+                &bindings[0].rhs,
+                crate::parsing::ast::WithRhs::Reference { .. }
             ),
-            "non-dotted RHS in binding context must yield With(Reference); got: {:?}",
-            value
+            "non-dotted RHS must yield Reference; got: {:?}",
+            bindings[0].rhs
         );
     }
 
@@ -1217,12 +1232,12 @@ data x: spec other
         }
     }
 
-    /// `with x.y: z.w` (binding LHS, dotted RHS) → Reference with two LHS
-    /// segments and two RHS segments.
+    /// `uses` block dotted path and dotted reference rhs preserved.
     #[test]
-    fn parse_binding_with_dotted_rhs_preserves_both_sides() {
+    fn parse_uses_binding_with_dotted_rhs_preserves_both_sides() {
         let input = r#"spec s
-with outer.inner: target.field"#;
+uses outer: other
+  -> with inner: target.field"#;
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -1230,17 +1245,96 @@ with outer.inner: target.field"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let datum = &result[0].data[0];
-        assert_eq!(datum.reference.segments, vec!["outer"]);
-        assert_eq!(datum.reference.name, "inner");
-        match &datum.value {
-            crate::parsing::ast::DataValue::With(crate::parsing::ast::WithRhs::Reference {
-                target,
-            }) => {
+        let bindings = match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::Import { bindings, .. } => bindings,
+            other => panic!("expected Import, got: {:?}", other),
+        };
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].path.segments, vec![] as Vec<String>);
+        assert_eq!(bindings[0].path.name, "inner");
+        match &bindings[0].rhs {
+            crate::parsing::ast::WithRhs::Reference { target } => {
                 assert_eq!(target.segments, vec!["target"]);
                 assert_eq!(target.name, "field");
             }
-            other => panic!("expected With(Reference), got: {:?}", other),
+            other => panic!("expected Reference rhs, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_deprecated_standalone_with_merges_into_import_bindings() {
+        let input = r#"spec inner
+data x: number
+
+spec outer
+uses i: inner
+with i.x: 42
+rule r: i.x"#;
+        let result = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+        let outer = result.iter().find(|s| s.name == "outer").unwrap();
+        let bindings = match &outer.data[0].value {
+            crate::parsing::ast::DataValue::Import { bindings, .. } => bindings,
+            other => panic!("expected Import, got: {:?}", other),
+        };
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings[0].deprecated_standalone_with);
+        assert_eq!(bindings[0].path.name, "x");
+        match &bindings[0].rhs {
+            crate::parsing::ast::WithRhs::Literal(crate::parsing::ast::Value::Number(n)) => {
+                assert_eq!(n, &rust_decimal::Decimal::from(42));
+            }
+            other => panic!("expected literal 42, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_deprecated_standalone_with_before_uses_merges() {
+        let input = r#"spec inner
+data slot: number
+
+spec outer
+with i.slot: 99
+uses i: inner
+rule r: i.slot"#;
+        let result = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+        let outer = result.iter().find(|s| s.name == "outer").unwrap();
+        let bindings = match &outer.data[0].value {
+            crate::parsing::ast::DataValue::Import { bindings, .. } => bindings,
+            other => panic!("expected Import, got: {:?}", other),
+        };
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings[0].deprecated_standalone_with);
+    }
+
+    #[test]
+    fn parse_standalone_with_without_matching_uses_errors() {
+        let result = parse(
+            r#"spec s
+with outer.inner: 1"#,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        match result {
+            Ok(_) => panic!("standalone with without uses must not parse"),
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("uses") && msg.contains("outer"),
+                    "error should mention required uses; got: {msg}"
+                );
+            }
         }
     }
 

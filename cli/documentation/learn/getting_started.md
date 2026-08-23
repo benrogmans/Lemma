@@ -33,14 +33,14 @@ Create `shipping.lemma`:
 spec shipping
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
   -> minimum 0 eur
 
 data weight: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
+  -> unit kilogram: 1
+  -> unit gram: 0.001
 
 data is_express:     true
 data package_weight: 2.5 kilogram

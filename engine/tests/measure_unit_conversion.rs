@@ -38,8 +38,8 @@ fn measure_comparison_converts_units_before_comparing() {
     let code = r#"
 spec pricing
 data money: measure
-    -> unit eur 1
-    -> unit usd 0.84
+    -> unit eur: 1
+    -> unit usd: 0.84
 
 data price: money
 
@@ -82,8 +82,8 @@ fn measure_data_value_rejects_unknown_unit() {
     let code = r#"
 spec pricing
 data money: measure
-    -> unit eur 1
-    -> unit usd 0.84
+    -> unit eur: 1
+    -> unit usd: 0.84
 
 data price: money
 
@@ -110,8 +110,8 @@ fn measure_as_operator_converts_units() {
     let code = r#"
 spec pricing
 data money: measure
-    -> unit eur 1
-    -> unit usd 0.84
+    -> unit eur: 1
+    -> unit usd: 0.84
 
 data amount: 100 usd
 rule price_eur: amount as eur
@@ -173,7 +173,7 @@ fn measure_add_subtract_converts_units_when_same_family() {
     // Regression: previously returned Veto "Cannot apply '-' to values with different units".
     let code = r#"
 spec t
-data money: measure -> unit eur 1.00 -> unit usd 0.84
+data money: measure -> unit eur: 1.00 -> unit usd: 0.84
 data gross: 7600 usd
 data pension: 0 eur
 rule taxable: gross - pension
@@ -212,8 +212,8 @@ fn measure_as_operator_rejects_unknown_unit() {
     let code = r#"
 spec pricing
 data money: measure
-    -> unit eur 1
-    -> unit usd 0.84
+    -> unit eur: 1
+    -> unit usd: 0.84
 
 rule price_gbp: 100 as gbp
 "#;
@@ -241,7 +241,7 @@ fn named_measure_type_comparison_with_unit_literal() {
     let code = r#"
 spec shipping
 
-data weight: measure -> unit kilogram 1.0
+data weight: measure -> unit kilogram: 1.0
 
 data package_weight: 2.5 kilogram
 
@@ -295,7 +295,7 @@ fn named_measure_type_arithmetic_within_same_family() {
     let code = r#"
 spec shipping
 
-data money: measure -> unit USD 1.00
+data money: measure -> unit USD: 1.00
 
 data base_fee: 5.99 USD
 data surcharge: 2.00 USD
@@ -350,8 +350,8 @@ fn measure_as_converts_kg_to_gram() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> suggest 2 kilogram
 
 rule result: mass as gram as number
@@ -401,8 +401,8 @@ fn measure_as_converts_gram_to_kg() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> suggest 500 gram
 
 rule result: mass as kilogram as number
@@ -452,9 +452,9 @@ fn measure_as_converts_pound_to_gram() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
-    -> unit pound 0.453592
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
+    -> unit pound: 0.453592
     -> suggest 1 pound
 
 rule result: mass as gram as number
@@ -504,8 +504,8 @@ fn measure_arithmetic_different_units_converts_correctly() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
 
 data a: 1 kilogram
 data b: 500 gram
@@ -545,8 +545,8 @@ fn measure_comparison_different_units_physical() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
 
 data package: 1500 gram
 rule heavy: package > 1 kilogram
@@ -585,8 +585,8 @@ fn measure_validation_respects_unit_for_maximum() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> maximum 2 kilogram
 
 data weight: mass
@@ -634,8 +634,8 @@ fn measure_validation_respects_unit_for_minimum() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> minimum 1 kilogram
 
 data weight: mass
@@ -683,8 +683,8 @@ fn measure_validation_rejects_over_maximum_in_non_base_unit() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> maximum 2 kilogram
 
 data weight: mass
@@ -718,10 +718,10 @@ rule result: weight
 fn measure_below_minimum_veto_uses_per_unit_not_canonical() {
     let code = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kilogram 1
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kilogram: 1
 data cost_per_unit: measure
-  -> unit eur_per_kilo eur/kilogram
+  -> unit eur_per_kilo: eur/kilogram
   -> minimum 1.20 eur_per_kilo
 rule out: cost_per_unit
 "#;
@@ -759,11 +759,11 @@ rule out: cost_per_unit
 fn measure_below_minimum_veto_respects_type_decimals() {
     let code = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kilogram 1 -> unit tonne 1000
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kilogram: 1 -> unit tonne: 1000
 data cost_per_unit: measure
-  -> unit eur_per_kilo eur/kilogram
-  -> unit usd_per_tonne usd/tonne
+  -> unit eur_per_kilo: eur/kilogram
+  -> unit usd_per_tonne: usd/tonne
   -> minimum 1.20 eur_per_kilo
   -> decimals 2
 rule out: cost_per_unit
@@ -803,11 +803,11 @@ rule out: cost_per_unit
 
 const COMPOUND_COST_VALIDATION_SPEC: &str = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kilogram 1 -> unit tonne 1000
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kilogram: 1 -> unit tonne: 1000
 data cost_per_unit: measure
-  -> unit eur_per_kilo eur/kilogram
-  -> unit usd_per_tonne usd/tonne
+  -> unit eur_per_kilo: eur/kilogram
+  -> unit usd_per_tonne: usd/tonne
   -> maximum 2.00 eur_per_kilo
 rule out: cost_per_unit
 "#;
@@ -892,16 +892,16 @@ spec s
 uses lemma units
 
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.91
+  -> unit eur: 1
+  -> unit usd: 0.91
 
 data mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data storage_cost: measure
-  -> unit eur_per_kilo_hour eur/kilogram/hour
-  -> unit usd_per_ton_hour usd/tonne/hour
+  -> unit eur_per_kilo_hour: eur/kilogram/hour
+  -> unit usd_per_ton_hour: usd/tonne/hour
   -> maximum 2.00 eur_per_kilo_hour
 
 rule out: storage_cost
@@ -987,8 +987,8 @@ fn measure_below_minimum_cross_unit_veto_message() {
     let code = r#"
 spec physics
 data mass: measure
-    -> unit kilogram 1.0
-    -> unit gram 0.001
+    -> unit kilogram: 1.0
+    -> unit gram: 0.001
     -> minimum 1 kilogram
 
 data weight: mass
@@ -1097,7 +1097,7 @@ fn eval_rule_measure_magnitude(
 fn prime_precision_spec_header(primes: &[u32]) -> String {
     let mut spec = String::from(
         "spec prime_precision\n\
-         data seed: measure\n    -> unit base 1\n",
+         data seed: measure\n    -> unit base: 1\n",
     );
     for prime in primes {
         spec.push_str(&format!("    -> unit p{prime} {prime}\n"));
@@ -1111,8 +1111,8 @@ fn precision_baseline_roundtrip_base_p2_base() {
     let code = r#"
 spec prime_precision
 data seed: measure
-    -> unit base 1
-    -> unit p2 2
+    -> unit base: 1
+    -> unit p2: 2
 data anchor: 37 base
 rule step0: anchor
 rule step1: step0 as p2
@@ -1211,7 +1211,7 @@ fn prime_cycles_lemma(cycle_count: usize) -> String {
     let cycle: &[u32] = &[2, 3, 5, 7, 11];
     let mut code = String::from(
         "spec prime_cycles\n\
-         data seed: measure\n    -> unit base 1\n",
+         data seed: measure\n    -> unit base: 1\n",
     );
     for prime in cycle {
         code.push_str(&format!("    -> unit p{prime} {prime}\n"));
@@ -1299,7 +1299,7 @@ fn precision_many_prime_cycles_explain_tip_only() {
 fn precision_ping_pong_p7_p11_forty_hops() {
     let mut code = String::from(
         "spec ping_pong\n\
-         data seed: measure\n    -> unit base 1\n    -> unit p7 7\n    -> unit p11 11\n\
+         data seed: measure\n    -> unit base: 1\n    -> unit p7: 7\n    -> unit p11: 11\n\
          data anchor: 37 base\nrule step0: anchor\n",
     );
     let mut previous = String::from("step0");
@@ -1325,9 +1325,9 @@ fn precision_mixed_arithmetic_conversion_completes() {
     let code = r#"
 spec mixed_arith
 data seed: measure
-    -> unit base 1
-    -> unit p3 3
-    -> unit p7 7
+    -> unit base: 1
+    -> unit p3: 3
+    -> unit p7: 7
 data anchor: 37 base
 data five: 5
 data two: 2
@@ -1361,7 +1361,7 @@ rule step5: step4 as base
 fn precision_api_display_ping_pong_twenty_unit_toggles() {
     let mut code = String::from(
         "spec api_ping_pong\n\
-         data seed: measure\n    -> unit base 1\n    -> unit p7 7\n    -> unit p11 11\n\
+         data seed: measure\n    -> unit base: 1\n    -> unit p7: 7\n    -> unit p11: 11\n\
          data anchor: 37 base\nrule step0: anchor\n",
     );
     let mut previous = String::from("step0");
@@ -1444,7 +1444,7 @@ fn shadowed_duration_rejects_minutes_alias_at_load() {
 spec s
 uses lemma units
 data duration: measure
-  -> unit minute 60
+  -> unit minute: 60
 rule r: 5 as minutes
 "#;
 
@@ -1498,8 +1498,8 @@ fn cross_family_relabel_measure_literal_no_factor() {
     // `5 eur as kg` — magnitude carried unchanged, target family is mass.
     let code = r#"
 spec t
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kg 1
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kg: 1
 rule out: 5 eur as kg
 "#;
     let mut engine = Engine::new();
@@ -1547,8 +1547,8 @@ fn cross_family_relabel_via_convert_then_relabel() {
     // `amount as eur as kg`: 100 usd → 91 eur (money factor), then relabel → 91 kg (no factor).
     let code = r#"
 spec t
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kg 1
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kg: 1
 data amount: 100 usd
 rule out: amount as eur as kg
 "#;
@@ -1593,8 +1593,8 @@ fn cross_family_extract_then_relabel_number_bridge() {
     // `amount as eur as number as kg`: strip to 91, then construct 91 kg.
     let code = r#"
 spec t
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kg 1
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kg: 1
 data amount: 100 usd
 rule out: amount as eur as number as kg
 "#;
@@ -1643,7 +1643,7 @@ fn bare_measure_reference_as_number_rejected() {
     // `amount as number` without naming a unit must be rejected with a suggestion.
     let code = r#"
 spec t
-data money: measure -> unit eur 1 -> unit usd 0.91
+data money: measure -> unit eur: 1 -> unit usd: 0.91
 data amount: money
 rule out: amount as number
 "#;
@@ -1672,8 +1672,8 @@ fn bare_measure_reference_cross_family_as_unit_rejected() {
     // `amount as kg` without naming source unit must be rejected.
     let code = r#"
 spec t
-data money: measure -> unit eur 1
-data mass: measure -> unit kg 1
+data money: measure -> unit eur: 1
+data mass: measure -> unit kg: 1
 data amount: money
 rule out: amount as kg
 "#;

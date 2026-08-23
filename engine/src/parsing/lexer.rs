@@ -1201,11 +1201,12 @@ mod tests {
 
     #[test]
     fn lex_arrow_chain() {
-        let kinds = lex_kinds("-> unit eur 1.00 -> decimals 2").unwrap();
+        let kinds = lex_kinds("-> unit eur: 1.00 -> decimals 2").unwrap();
         assert_eq!(kinds[0], TokenKind::Arrow);
         assert_eq!(kinds[1], TokenKind::Identifier);
         assert_eq!(kinds[2], TokenKind::Identifier);
-        assert_eq!(kinds[3], TokenKind::NumberLit);
-        assert_eq!(kinds[4], TokenKind::Arrow);
+        assert_eq!(kinds[3], TokenKind::Colon);
+        assert_eq!(kinds[4], TokenKind::NumberLit);
+        assert_eq!(kinds[5], TokenKind::Arrow);
     }
 }

@@ -29,7 +29,7 @@ rule total: salary
 
     let err_msg = err.errors[0].to_string();
     assert!(
-        err_msg.contains("imported spec") || err_msg.contains("alias.field"),
+        err_msg.contains("Standalone") || err_msg.contains("uses"),
         "local with without import path must be rejected at parse: {}",
         err_msg
     );
@@ -145,8 +145,8 @@ fn test_measure_type_default_before_unit_declarations() {
         spec pricing
         data money: measure
           -> suggest 4 eur
-          -> unit eur 1
-          -> unit usd 0.84
+          -> unit eur: 1
+          -> unit usd: 0.84
         data price: money
         rule doubled: price * 2
     "#
@@ -188,8 +188,8 @@ fn test_measure_type_default_after_unit_declarations() {
             r#"
         spec pricing
         data money: measure
-          -> unit eur 1
-          -> unit usd 0.84
+          -> unit eur: 1
+          -> unit usd: 0.84
           -> suggest 4 eur
         rule doubled: money * 2
     "#
@@ -347,8 +347,8 @@ fn test_show_measure_default_is_value() {
             r#"
         spec salary
         data money: measure
-          -> unit eur 1
-          -> unit usd 0.84
+          -> unit eur: 1
+          -> unit usd: 0.84
           -> suggest 3000 eur
         data salary: money
         rule doubled: salary * 2
@@ -379,7 +379,7 @@ fn test_typedef_default_inherits_through_extension_chain() {
             r#"
             spec chain
             data money: measure
-              -> unit eur 1
+              -> unit eur: 1
               -> suggest 4 eur
             data price: money
             data final_price: price
@@ -410,10 +410,10 @@ fn child_measure_cannot_change_inherited_unit_factor() {
             r#"
             spec money_type
             data money: measure
-              -> unit eur 1.00
-              -> unit usd 0.91
+              -> unit eur: 1.00
+              -> unit usd: 0.91
             data price: money
-              -> unit usd 1.00
+              -> unit usd: 1.00
             "#
             .to_string(),
         )])
@@ -439,9 +439,9 @@ fn child_measure_may_add_new_unit() {
             r#"
             spec money_type
             data money: measure
-              -> unit eur 1.00
+              -> unit eur: 1.00
             data price: money
-              -> unit usd 0.91
+              -> unit usd: 0.91
             data amount: 100 usd
             rule r: amount as eur
             "#

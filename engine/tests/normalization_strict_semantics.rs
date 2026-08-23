@@ -67,7 +67,7 @@ fn multiply_measure_data_by_zero_keeps_unit() {
     let engine = load(
         r#"
 spec strict_measure_multiply
-data money: measure -> unit eur 1
+data money: measure -> unit eur: 1
 data price: money
 rule r: price * 0
 "#,
@@ -92,7 +92,7 @@ fn multiply_measure_literal_by_zero_folds_to_typed_zero() {
     let engine = load(
         r#"
 spec folded_measure_multiply
-data money: measure -> unit eur 1
+data money: measure -> unit eur: 1
 data rate: 5 eur
 rule r: rate * 0
 "#,

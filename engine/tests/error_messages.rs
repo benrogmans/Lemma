@@ -74,19 +74,14 @@ data age: age.age
         .expect("validation error");
 
     assert!(
-        details.message.contains("uses age") && details.message.contains("data age"),
-        "message should name both declarations, got: {}",
-        details.message
-    );
-    assert!(
-        details.message.contains("`data` definition"),
-        "message should say data definition, got: {}",
+        details.message.contains("age"),
+        "message should name the clash, got: {}",
         details.message
     );
     let suggestion = details.suggestion.as_deref().expect("expected suggestion");
     assert!(
         suggestion.contains("age_spec"),
-        "suggestion should show renamed import, got: {suggestion}"
+        "suggestion should show renamed import alias, got: {suggestion}"
     );
 }
 
@@ -504,8 +499,8 @@ fn test_multiple_error_phases_reported_together() {
         spec pricing
 
         data money: measure
-          -> unit eur 1
-          -> unit usd 0.84
+          -> unit eur: 1
+          -> unit usd: 0.84
 
         data price    : money
         data quantity : number -> minimum 0

@@ -1,4 +1,4 @@
-//! Tests for example files under cli/documentation/examples/
+//! Tests for example files under engine/documentation/examples/
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
@@ -45,12 +45,12 @@ fn load_specs_folder_examples() -> Engine {
     let mut engine = Engine::new();
 
     let examples = [
-        "documentation/examples/01_coffee_order.lemma",
-        "documentation/examples/02_library_fees.lemma",
-        "documentation/examples/03_recipe_scaling.lemma",
-        "documentation/examples/04_membership_benefits.lemma",
-        "documentation/examples/05_weather_clothing.lemma",
-        "documentation/examples/nl/tax/net_salary.lemma",
+        "../engine/documentation/examples/01_coffee_order.lemma",
+        "../engine/documentation/examples/02_library_fees.lemma",
+        "../engine/documentation/examples/03_recipe_scaling.lemma",
+        "../engine/documentation/examples/04_membership_benefits.lemma",
+        "../engine/documentation/examples/05_weather_clothing.lemma",
+        "../engine/documentation/examples/nl/tax/net_salary.lemma",
     ];
 
     for path in examples {

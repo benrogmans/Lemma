@@ -18,6 +18,12 @@ final class NativeLibraryCacheTest {
   private static final String RESOURCE_PATH = "native/" + TRIPLE + "/" + LIB_NAME;
 
   @Test
+  void implementationVersionIsSemVer() {
+    String version = Native.implementationVersion();
+    assertTrue(version.matches("\\d+\\.\\d+\\.\\d+"), "version: " + version);
+  }
+
+  @Test
   void preExistingCacheFileIsReused(@TempDir Path tempDir) throws IOException {
     Path cacheRoot = tempDir.resolve("cache");
     Path cacheDir = cacheRoot.resolve("lemma-jni").resolve(VERSION + "-" + TRIPLE);

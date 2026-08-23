@@ -46,9 +46,11 @@ Do not halt mid-task to summarize or recap. Report when done or when blocked.
 
 Pre-existing blocker discovered during implementation: state blocker and decision needed. That is signal, not narration.
 
-### Warnings and errors from tests and clippy
+### Warnings and errors from tests, clippy, and Java
 
 **NEVER** suppress warnings or errors: no `_` prefixes, no `#[allow(...)]`, no `#[expect(...)]`, no quick fixes that hide the problem. Fix the cause completely or leave the warning visible.
+
+Precommit treats warnings as errors across Rust (`clippy -D warnings`), npm (`npm warn` / `WARNING` lines), and Maven (`[WARNING]` lines plus `maven-compiler-plugin` `-Werror` / `failOnWarning` and `maven-javadoc-plugin` `failOnWarnings` with `doclint` `all`).
 
 ---
 

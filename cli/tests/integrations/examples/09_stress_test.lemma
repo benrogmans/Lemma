@@ -201,13 +201,13 @@ Demonstrates: cross-spec references, field access, complex dependencies, data bi
 """
 
 uses config: stress_test_config
-with config.base_tax_rate        : 7%
-with config.luxury_tax_threshold : 1_200
-with config.max_discount_cap     : 35%
+  -> with base_tax_rate: 7%
+  -> with luxury_tax_threshold: 1_200
+  -> with max_discount_cap: 35%
 
 uses order: stress_test
-with order.free_shipping_threshold : 600
-with order.min_order_value         : 100
+  -> with free_shipping_threshold: 600
+  -> with min_order_value: 100
 
 rule is_luxury_order:
   order.grand_total > config.luxury_tax_threshold

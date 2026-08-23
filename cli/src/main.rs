@@ -762,7 +762,16 @@ async fn install_workspace_deps(
                     let repository_arc = std::sync::Arc::clone(parsed_repo);
                     for spec in specs {
                         ctx.insert_spec(std::sync::Arc::clone(&repository_arc), spec.clone())
-                            .map_err(|error| anyhow::anyhow!("{error}"))?;
+                            .map_err(|errors| {
+                                anyhow::anyhow!(
+                                    "{}",
+                                    errors
+                                        .iter()
+                                        .map(|error| error.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                )
+                            })?;
                     }
                 }
                 sources.insert(source_type, code);
