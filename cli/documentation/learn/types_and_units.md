@@ -248,75 +248,19 @@ Use Veto when a Rule cannot produce a meaningful value: the domain says "no answ
 
 A vetoed Rule is not `false`. `x is false` does not match a vetoed `x`. To test whether a Rule vetoed, use `x is veto`.
 
-Common cases:
+| Situation | Use |
+|-----------|-----|
+| Out-of-range input (negative score, age above 120) | `-> minimum` / `-> maximum` on `data` |
+| Closed choice list | `-> option` on `data` |
+| Normal business "no" | `false` or `no` |
+| Lookup / no mapped result | default `veto` + `unless` arm per known case |
+| Test veto without propagating | `x is veto` (returns boolean) |
 
-- Data validation: input is out of acceptable range.
-- Missing or unrecognized input: a required Data field has no match.
-- Constraint violations at runtime: a Data override breaks a bound or type constraint.
+Out-of-range values and failed constraints on `data` bind as a veto on that slot at runtime; express bounds on the `data` declaration instead of vetoing in a Rule.
 
-```lemma
-spec age_validation
+### Lookup (default veto + unless arms)
 
-data age: number
-
-rule validated_age: age
-  unless age < 0   then veto "Age must be a positive number"
-  unless age > 120 then veto "Invalid age value"
-```
-
-A vetoed Rule produces no result. If a Rule references a vetoed Rule and needs its value, the Veto propagates. If an Unless clause provides an alternative, the Veto does not propagate:
-
-```lemma
-spec scoring
-
-data score:       number
-data use_default: false
-
-rule validated_score: score
-  unless score < 0 then veto "Invalid score"
-
-rule result: validated_score
-  unless use_default then 50
-```
-
-If `validated_score` is vetoed but `use_default` is true, `result` = 50.
-
-### Veto applies to dependent Rules
-
-```lemma
-spec order_total
-
-data price: number
-data quantity:   number
-
-rule validated_price: price
-  unless price < 0 then veto "Price cannot be negative"
-
-rule total: validated_price * quantity
-```
-
-If `validated_price` is vetoed, `total` is also vetoed because we need the price value.
-
-### Veto does not apply when Unless provides a fallback
-
-```lemma
-spec shipping_estimate
-
-data weight:        number
-data use_estimated: boolean
-
-rule validated_weight: weight
-  unless weight < 0 then veto "Weight cannot be negative"
-
-rule shipping_weight: validated_weight
-  unless use_estimated then 5
-```
-
-If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weight` = 5. The Veto does not apply because `validated_weight` is never evaluated (the Unless clause provides the value).
-
-### Missing Data propagates as Veto
-
-When a Data field has no value (not provided), Rules that depend on it Veto with a "Missing data" reason:
+When a value is on a closed list but has no mapped outcome, default to `veto` and map each known case with `unless`:
 
 ```lemma
 spec coffee_prices
@@ -327,14 +271,53 @@ data money: measure
 
 data product: text
   -> option "latte"
+  -> option "cappuccino"
 
-rule base_price: veto "Unknown product"
-  unless product is "latte" then 3.50 eur
+rule base_price:
+  veto "Unknown product"
+  unless product is "latte"      then 3.50 eur
+  unless product is "cappuccino" then 3.50 eur
 
 rule total: base_price * 2
 ```
 
-If `product` is not provided, `base_price` vetoes with "Missing data: product", not the default arm's "Unknown product" message. The `total` Rule also vetoes because its dependency has no value.
+If `product` is not provided, `base_price` vetoes with "Missing data: product", not the default arm's message. The `total` Rule also vetoes because its dependency has no value.
+
+### Bounds on data, not veto in rules
+
+```lemma
+spec age_gate
+
+data customer_age: number
+  -> minimum 0
+  -> maximum 120
+  -> help "How old is the customer?"
+
+rule is_adult:
+  customer_age >= 18
+```
+
+### Veto does not apply when Unless provides a fallback
+
+```lemma
+spec shipping_estimate
+
+uses lemma units
+
+data weight: units.mass
+  -> minimum 0 kilogram
+
+data use_estimated: boolean
+
+rule shipping_weight: weight
+  unless use_estimated then 5 kilogram
+```
+
+If `weight` is missing or vetoed on constraints but `use_estimated` is true, `shipping_weight` = `5 kilogram` because the Unless arm does not need `weight`.
+
+### Missing Data propagates as Veto
+
+When a Data field has no value (not provided), Rules that depend on it Veto with a "Missing data" reason. See the lookup example above when `product` is absent.
 
 After a `MissingData` or definitive veto, evaluation may still walk later siblings so nested control can record for explain and prune. Intake keeps unbound keys on `missing_data` only when some completion can still produce a **value**. For `and`, an unbound left stays `MissingData` even if a later conjunct definitively vetoes (`false and …` can still answer). Product and other operators that need both values settle on a definitive factor and clear keys that cannot un-veto. `is veto` stays a boolean probe and does not change this intake rule.
 
@@ -346,37 +329,23 @@ Test whether an expression produced no value and branch on a boolean, without pr
 spec fallback_total
 
 data price: number
-data quantity:   number
+  -> minimum 0
 
-rule validated_price: price
-  unless price < 0 then veto "Price cannot be negative"
+data quantity: number
 
-rule total: validated_price * quantity
-  unless validated_price is veto then 0
+rule line_total: price * quantity
+  unless price is veto then 0
 ```
 
-When `validated_price` vetoes, `validated_price is veto` is true and `total` can take the fallback `0`. The test never returns Veto; only the Rule's final arm can.
+When `price` vetoes (for example a failed constraint override), `price is veto` is true and `line_total` can take the fallback `0`. The test never returns Veto; only the Rule's final arm can.
 
-Equivalent forms: `veto is validated_price`, `validated_price is not veto`, `not veto is validated_price`.
+Equivalent forms: `veto is price`, `price is not veto`, `not veto is price`.
 
 When the operand is a Rule reference (`validated_price is veto`), the test reads that Rule's already-computed result. When the operand is a compound expression (`price * quantity is veto`), that expression is evaluated and the test is true when the result is a Veto. To test a single failing operand inside a sum or product, apply `is veto` to that operand (`b is veto`) rather than to the whole expression (`a + b is veto`).
 
 You can Veto again based on a test: `unless x is veto then veto "outer"`. The Rule's result message is then `"outer"`; explanations may still show the inner Veto beneath the `is veto` operand.
 
 `veto` and `veto "message"` are only valid as a Rule or Unless result. See [Special expressions in the language reference](../reference/readme.md#special-expressions).
-
-Test for a Veto without propagating it:
-
-```lemma
-spec veto_checks
-
-data score: number
-
-rule validated_score: score
-  unless score < 0 then veto "Invalid score"
-
-rule has_valid_score: validated_score is not veto
-```
 
 ### Veto vs Error vs Panic
 

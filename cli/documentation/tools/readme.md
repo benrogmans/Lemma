@@ -31,6 +31,6 @@ More SDKs are on the way. Precompiled binaries make each new one straightforward
 - Same engine underneath, so results are identical across languages.
 - `load` validates: invalid specs are rejected there, never at run time.
 - The engine never hits the network. Resolve `@...` [registry](../reference/registry.md) references before loading.
-- Explanations are opt-in (`explain: true` / `--explain`). Wire shape: [`api.v1.json`](../schemas/api.v1.json) (`RuleResult.explanation` → `RuleNode`; nested tree under `ExplanationNode`).
+- Explanations are opt-in (`explain: true` / `--explain`). Wire shape: [`api.v1.json`](../../engine/schemas/api.v1.json) (`RuleResult.explanation` → `RuleNode`; nested tree under `ExplanationNode`).
 - Java / Kotlin package requires **JDK 21+**.
 - Editor support (any language): the [VS Code / Cursor extension](../installation.md) drives `lemma lsp`.

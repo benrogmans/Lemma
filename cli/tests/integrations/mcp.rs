@@ -3502,7 +3502,7 @@ fn test_mcp_resources_list_and_read() {
     let syntax = responses[2]["result"]["contents"][0]["text"]
         .as_str()
         .expect("syntax resource");
-    assert!(syntax.contains("Mandatory spec opening order"));
+    assert!(syntax.contains("Recommended spec opening order"));
 
     let coffee = responses[3]["result"]["contents"][0]["text"]
         .as_str()

@@ -43,7 +43,7 @@ This allows you to implement policy changes rapidly without compromising complia
 
 ### Direction
 
-Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what inputs satisfy this outcome?”), **tables** as a first-class data type for data-driven rules and **performance** competitive with high performance programming languages.
+Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what inputs satisfy this outcome?”), **tables** as a first-class data type for data-driven rules and **performance** competitive with high performance programming languages.
 
 ### What about AI?
 
@@ -312,7 +312,7 @@ lemma mcp --admin     # also enable add_spec and other mutators
 ```
 
 Authoring loop: `guide` → `check` (diagnostics) → `evaluate`. Resources expose `lemma://guide` and curated examples.
-### WebAssembly
+### JavaScript / TypeScript
 
 ```bash
 npm install @lemmabase/lemma-engine
@@ -325,13 +325,22 @@ const engine = await Lemma();
 
 See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 
+### Elixir
+
+```elixir
+# mix.exs
+{:lemma_engine, "~> 0.9"}
+```
+
+See [engine/packages/hex/README.md](engine/packages/hex/README.md) and [cli/documentation/tools/elixir.md](cli/documentation/tools/elixir.md).
+
 ### Java / Kotlin
 
 ```xml
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.6</version>
+  <version>0.9.7</version>
 </dependency>
 ```
 

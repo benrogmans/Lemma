@@ -5,7 +5,7 @@ nav_order: 10
 
 # A declarative language for business rules
 
-Lemma is a pure, declarative and open source programming language for business rules, that is easy to read for non-technical stakeholders. Rules are written in Specs that humans can read and systems can evaluate precisely and deterministically. Lemma validates Rules before they can be evaluated. Errors are impossible: Rules return a value or Veto, and optionally an explanation when you ask for one (`--explain` / `explain: true`).
+Lemma is a pure, declarative and open source programming language for business rules, that is easy to read for non-technical stakeholders. Rules are written in Specs that humans can read and systems can evaluate precisely and deterministically. Lemma validates Rules before they can be evaluated. Invalid Specs are rejected at planning time; after that, each Rule returns a value or Veto, and optionally an explanation when you ask for one (`--explain` / `explain: true`).
 
 ```lemma
 spec pricing 2026-01-01
@@ -48,7 +48,7 @@ Precompiled binaries for Linux, macOS, and Windows are included in the npm packa
 
 ## Writing your first Spec
 
-Write a `.lemma` file and run it. The [Learn guide](learn/readme.md) walks you through everything from your first Spec to composing Rules across time and registries. You'll be productive in minute.
+Write a `.lemma` file and run it. The [Learn guide](learn/readme.md) walks you through everything from your first Spec to composing Rules across time and registries. You'll be productive in minutes.
 
 ## Documentation
 

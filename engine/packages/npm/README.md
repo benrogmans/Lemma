@@ -121,6 +121,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `remove(repo, name, effective?)` | Remove a temporal spec slice. |
 | `update(repo, name, effective?, code, attribute?)` | Replace a temporal spec slice (atomic remove + load). |
 | `limits()` | Resource limits for this engine. |
+| `quality()` | Structural quality recommendations across loaded specs (advisory only). |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled - see `lemma.d.ts`.
