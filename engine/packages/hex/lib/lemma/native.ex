@@ -41,7 +41,7 @@ defmodule Lemma.Native do
 
   def lemma_format(_code), do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_generate_openapi(_resource, _explanations_enabled, _effective_opt),
+  def lemma_generate_openapi(_resource, _explain, _effective_opt),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_temporal_api_sources(_resource), do: :erlang.nif_error(:nif_not_loaded)
@@ -49,6 +49,7 @@ defmodule Lemma.Native do
   def mcp_list_tools, do: :erlang.nif_error(:nif_not_loaded)
   def mcp_list_resources, do: :erlang.nif_error(:nif_not_loaded)
   def mcp_read_resource(_uri), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_run(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
   def mcp_evaluate(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
   def mcp_list(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
   def mcp_show(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)

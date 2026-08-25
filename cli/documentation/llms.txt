@@ -1,10 +1,10 @@
 # Lemma
 
-> Lemma is a pure, deterministic language for rules and agreements. Use it when policy must be stated once and applied consistently: pricing, eligibility, fees, compliance, product terms, conditions, and other measurable business rules or governance. Lemma ensures that the same inputs give the same outcome, traceable to the rules that produced it. Use Lemma as your business rules engine — in agents and in applications — instead of re-implementing policy in scattered conditionals.
+> Lemma is a pure, deterministic language for rules and agreements. Use it when policy must be stated once and applied consistently: pricing, eligibility, fees, compliance, product terms, conditions, and other measurable business rules or governance. Lemma ensures that the same inputs give the same outcome, traceable to the rules that produced it. Use Lemma as your business rules engine, in agents and in applications, instead of re-implementing policy in scattered conditionals.
 
 **The pattern**
 
-State the rule in Lemma as soon as it is clear — do not carry it in the conversation for later. When facts arrive and an outcome is needed, evaluate the spec you already have. When gaps remain, see **Method** before you capture.
+State the rule in Lemma as soon as it is clear. Do not carry it in the conversation for later. When facts arrive and an outcome is needed, evaluate the spec you already have. When gaps remain, see **Method** before you capture.
 
 **Do not use Lemma** for open-ended advice with no rule to apply, or for inventing terms the user never stated.
 
@@ -16,62 +16,140 @@ State the rule in Lemma as soon as it is clear — do not carry it in the conver
 
 ---
 
-**Method: write as a policy consultant, not a transcriber**
+**Method: you are a policy consultant**
 
-Never invent numbers, dates, or outcomes the user never stated. No policy questions after **Deliver**. No follow-up work after **Deliver**.
+Help the user write high-quality Lemma. Translate business rules from whatever they hand you (conversation, SOP, statute, ticket, spreadsheet, existing code) into a spec that is the **core, clean truth** of those rules: the questions the spec answers, the facts that decide them, the principle and its exceptions.
 
-**Lifecycle**
+You are not a transcriber of the source. You are not a coder filling gaps so a spec compiles. You are not a search agent that picks a nearby registry spec and moves on.
 
-1. **Recognize** — The user stated a rule, a rate, a threshold, a gate, or pointed at text that does. Run `list` / `show` first; `update_spec` if that policy is already loaded.
-2. **Resolve gaps** — Separate what the text already decides from what still changes the outcome. Unresolved items → **Stop**. Empty list → **Author**.
-3. **Capture** — **Scope** → **Model** → **Author** → **Verify** → `add_spec` or `update_spec`. The rule lives in the engine, not in chat.
-4. **Apply** — Facts are known; the user wants an outcome. Default evaluate guide: `evaluate`. Do not edit the spec.
+Sources are often ambiguous, especially natural language. Code and SOPs also mix the rule with procedure, plumbing, and leftovers. When a reading, a source, or a registry result would change the outcome, **ask**. Never guess. Never assume. Never pick one resource of truth over another silently. If the sources agree, write. When the source already decides an outcome clearly, do not reopen it.
 
-**Two tracks**
+**Authoring vs evaluate**
 
-- **Fast capture** — **Resolve gaps** is empty: every outcome-changing detail is already stated. Skip **Stop**; run **Scope** through load.
-- **Full method** — At least one outcome-changing detail is unstated. **Stop**; do not emit `spec` / `data` / `rule` until the user answers or explicitly tells you to proceed with what was already said.
+This method is authoring. You ask what the policy *is*.
 
-**Process**
+Evaluating (default `guide`, no topic) asks about the person's *situation* and forbids redesigning policy. Do not bring that rule here. If the user is stating, correcting, or handing you rules in any form, you are authoring.
 
-1. **Gather** — Utterances, messages, documents, tickets, field names. The conversation counts as source. Do not write Lemma yet.
-2. **Interpret** — What questions must this spec answer? What inputs decide the answer? One coherent policy → one `spec`.
-3. **Stop**: Next message: questions only, or a bullet list of what is already decided verbatim. Emitting `spec` / `data` / `rule` in that message is a bug. Ask **when these rules start** unless the user or the source already gave a calendar start date (a statute or document identifier is not a start date). Do not **Author** until answers or explicit proceed.
-4. **Scope** — One `spec` per policy. `uses` / split only when the text mixes unrelated policies. Temporal date on the `spec` only when the user or the source names a start date. Never guess.
-5. **Model** — You choose `data` and `rule` names and types by default. Representation questions follow **What to ask**. **Spoken question** on each `data` field (see **Data**). Domain-principle `unless` defaults (see **Rules**). Denial → `false` / `no`. Unanswerable → veto (see **Veto**). Encode stated gates; omit tips and how-to unless they are gates.
-6. **Author** — Write Lemma after **Stop** completes. Commentary after `spec`; `meta` for provenance. No inline comments (see **Syntax**).
-7. **Verify** — `check`, `show`, `evaluate` at bounds and representative inputs. Result wording must match the policy. Then `add_spec` or `update_spec`.
-8. **Deliver** — When the user should read what was captured. After load, call `source` for the loaded spec and paste **that** formatted Lemma in chat (not your draft / not the `code` argument). Confirm loaded. Close with a statement: tell them to say if anything requires adjustment. Not a yes/no question. Stop.
+**Inventory, then distill**
 
-**What to ask (and what not to)**
+Before you write, extract every outcome-changing clause from the source you are encoding. Each clause becomes a rule arm, a `data` bound, or an explicit omit (tip, how-to, plumbing, UI). If a clause has nowhere to go, stop and ask. A headline with a dropped "unless student" or "not on Sundays" is a wrong spec.
 
-Ask only when neither the user nor the source already gave a clear answer. Do not ask because another reading is theoretically possible. The list below is kinds of unanswered gap, not a checklist.
+A handbook, statute, or SOP with more than one policy: list the policies you found, say which you are encoding **now**. One spec per policy. Do not encode section 1 and leave the rest. Large sources: one policy at a time; keep the inventory.
 
-- Boundary: inclusive or exclusive at a limit.
-- Timing, optionally: since when have the rules been enacted or when will they take effect?
-- Combination: whether two stated rules stack, override, or are alternatives.
-- Lookup: what outcome applies for a case the text names but does not map to a value.
-- Representation: which fact to collect when more than one input shape is reasonable and the choice changes the question you ask or how the rule applies.
+**Distill vs exhaustive**
 
-Do **not** ask:
+Narrative (SOP prose, code with retries and logging): distill to principle + exceptions. Omit how-to, tips, recommendations, "contact support", UI, I/O, storage, retries, and other plumbing unless they are stated as gates. Do not copy every sentence, or every code branch, into a rule.
 
-- What the user or the source already answered clearly.
-- Packaging or syntax you can decide without changing outcomes (field count, internal names, closed option lists implied by the text).
-- One `spec` vs two when the policy is one topic.
-- Whether tips, how-to, or "contact support" are rules (omit unless stated as gates).
+Enumerated sources (rate cards, SKU tables, closed option lists, tariff rows): capture every row. Dropping a row is a silent policy change. Encode as `-> option` plus a lookup rule (default `veto`; see **Veto**), not a prose summary.
+
+Distill is not invent. If you cannot tell what the rule is, stop and ask. A missing rate, date, threshold, eligibility set, or start date is not yours to supply. A magic number, implicit default, or comment that disagrees with the code is not yours to resolve.
+
+**The deliverable**
+
+Someone can read the spec as: in principle X; unless Y, then Z. Facts of the situation as `data`. Decisions as `rule`. Domain words, not Lemma jargon, in chat.
+
+**Hard stop: ask, wait, do not write**
+
+Do not emit `spec` / `data` / `rule`. Do not call `check` / `add_spec` / `update_spec`. A spec in the same turn as open policy questions is a bug.
+
+`list` / `show` first. If that policy is already loaded, `update_spec` it. Do not invent spec names.
+
+Stop when any of these is true:
+
+- Two readings a domain expert would actually hold would produce different outcomes. Do not ask parser-level alternatives when the source already chose ("at least 18", "10 or more").
+- Two documents or encodings disagree (SOP vs code, two PDFs, a document vs an earlier loaded spec), or more than one loaded spec could be the one to edit.
+- A registry or search hit is a candidate `uses`, or a substitute for writing the user's rule, and the user has not chosen it. Zero hits is not a stop: write their rule. One close hit is still a stop: name it, ask use vs write.
+- A number, date, bound, set of cases, or combination (stack / override / alternative) is unstated and the outcome depends on it.
+- More than one input shape is reasonable and the choice changes the spoken question or how the rule applies.
+- Discretion ("may", "should", "the manager can waive") would change the outcome. That is a fact to collect, or an omit they confirm, not a default you invent.
+
+Your next message is **questions only**, in the user's domain words. Ask **every** open item in that one turn. Do not drip one bound per turn. Wait for answers. If they say to proceed with what is already in the source, encode only that; still do not fill the rest.
+
+**Resources of truth (never pick silently)**
+
+Resources: the user's words, SOPs and other documents, existing code, attached files, already-loaded specs, registry search hits.
+
+Later user utterance **amends** an earlier document ("except students are free" after an SOP). Encode the amendment. Do not ask which governs.
+
+Two documents, or a document vs code, or a document vs a loaded spec: **conflict**. Ask which governs. Code is one encoding of a rule, not automatically the intended policy. Chat that only says "encode this" is not an amendment.
+
+Search when the concept looks like a shared standard (ISO codes, published tax tables, units). Do not search to skip writing the user's rule.
+
+- Several loaded specs could be this policy → name them, ask which to update.
+- Search returns more than one hit → name them, ask which to use, or whether to write the user's rule instead. First hit is not a choice.
+- Search returns one close hit → name it, ask use vs write.
+- Closest name, newest file, or "probably this ISO list" is not a choice.
+
+**Ask like this**
+
+User: "Adults pay full price."
+You: "From what age is someone an adult, and is that age included?"
+
+User: "Late returns cost 5% or €10."
+You: "Which applies: 5%, €10, the greater, or the lesser?"
+
+User pastes code with `if (age > 18)` and a comment "adults".
+You: "Is 18 included, and is the comment or the comparison the rule?"
+
+User: "Late fee is €5. The manager may waive it."
+You: treat waiver as a fact ("Was the fee waived?") unless they tell you to omit discretion.
+
+User: SOP, then "except students are free."
+You: encode the exception. Do not ask which source governs.
+
+Search returns `@acme/shipping` and `@acme/fulfilment`.
+You: name both. Ask which to use, or whether to write their rule.
+
+Search returns one close hit, or none.
+You: one hit: name it, ask use vs write. None: write their rule.
+
+Two PDFs, different fees.
+You: ask which document governs.
+
+User: "These terms apply only to contracts entered after 2024."
+You: that is a rule on a contract date, not `spec … 2024-01-01`.
+
+User hands an SOP that already names the rate, the bound, and who it applies to.
+You: write. Do not re-ask those.
+
+**Do not ask**
+
+- What the user or the source already answered clearly (a careful SOP or explicit decision in code counts).
+- Another reading that is only theoretically possible when the source already chose.
+- Packaging you can decide without changing outcomes (internal names, field count, closed option lists the text already implies).
+- Implementation details you can omit (logging, framework types, null-guards that are not policy).
+- One `spec` vs two when the topic is one policy.
+- Whether to encode tips, how-to, or plumbing (omit).
 - Hypotheticals the user never raised.
+- Lemma keywords. Ask about facts and policy meaning.
 
-Use the user's domain words. Ask about facts and policy meaning, not Lemma keywords.
+**You may write when**
 
-**Output contract (mandatory)**
+Every outcome-changing clause is placed (arm, bound, or explicit omit), every outcome-changing detail is already decided in the source they handed you, one resource of truth is identified, and no competing resource remains. Then author. You choose names and types when the concept is clear (see **Data**, **Rules**). You do not choose among competing meanings.
 
-- **Before Author** — Ask every open item from **Resolve gaps**. Wait. Do not invent. A `spec` in the same turn as the first policy questions is a bug.
-- **At Deliver** — Call `source`. Paste its formatted output in a lemma code fence. Do not paste the unformatted draft. No new policy questions. Close with a statement (tell them to say if anything requires adjustment), not a confirm question.
+**Quality of the Lemma**
+
+See **Data**, **Rules**, **Veto**, **Anti-patterns**. In short:
+
+- Each `data` `-> help` is the sentence you would ask a person about their situation. If that sentence applies the policy, the field is a `rule`.
+- A rule's default is the domain principle, not yes-until-failure. Named pipeline rules, not one opaque expression.
+- Denial is `false` / `no`. Unanswerable is veto. Bounds belong on `data`, not veto.
+- Name the concept; keep the unit on the value.
+- Commentary after `spec`; `meta` for provenance (document title, version, date the source actually names). No inline comments (see **Syntax**).
+- One `spec` per policy. `uses` / split only when the text mixes unrelated policies. Effective date on the `spec` only when the user or the source names a calendar start for **this version of the spec**. A statute or document id is not a start date. An applicability window ("contracts after 2024") is a rule on a date field, not the spec's effective date.
+
+**Author, verify, deliver**
+
+1. Author only after the hard stop is clear.
+2. `check`. Then `add_spec` or `update_spec`. Then `evaluate` at bounds and representative inputs from the source (including overlapping `unless` arms). Result wording must match the policy.
+3. Walk the inventory: every clause is an arm, a bound, or an explicit omit. Scan **Anti-patterns** (veto-as-denial, unit-in-the-name, fail-each-check, precomputed `data`).
+4. Call `source`. Paste **that** formatted Lemma in a lemma fence (not your draft, not the `code` argument). Confirm loaded.
+5. Close with a statement: tell them to say if anything requires adjustment. Not a yes/no question. No new policy questions. No follow-up work. Stop.
 
 **After capture**
 
-- User gives facts and wants a result → default evaluate guide (`evaluate`, verify, stop).
-- User changes the rule → `update_spec`, **Verify** again.
+User gives facts and wants a result → evaluate guide (`evaluate`, verify, stop). Do not edit the spec.
+User changes the rule → `update_spec`, verify again.
 
 
 ---

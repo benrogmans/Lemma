@@ -1,6 +1,14 @@
 defmodule Lemma.Mcp do
   @moduledoc """
-  Pure Lemma MCP tools: engine + arguments in, catalog or text out.
+  Pure Lemma MCP tools: engine + JSON args in, catalog or tool result text out.
+
+  Read tools mirror the engine catalog: `run`, `list`, `show`, `source`,
+  `check`, `guide`. Admin/write tools stay in the CLI MCP server only.
+
+  `run/2` always includes explanations and returns Engine `Response` JSON
+  (same shape as `Lemma.run/3` with `explain: true`). Args match SDK `run`:
+  `spec`, optional `repository`, `rules`, `data` (object), `effective`.
+  Do not pass `explain`.
   """
 
   @type engine :: Lemma.engine()
@@ -27,11 +35,21 @@ defmodule Lemma.Mcp do
     Lemma.Native.mcp_read_resource(uri)
   end
 
+  @spec run(engine(), args()) ::
+          {:ok, String.t()}
+          | {:error, :invalid_arguments | :not_found | :diagnostics, String.t()}
+  def run(engine, args) when is_map(args) do
+    Lemma.Native.mcp_run(engine, Jason.encode!(args))
+  end
+
+  @doc """
+  Deprecated alias of `run/2`. Prefer `Lemma.Mcp.run/2`.
+  """
   @spec evaluate(engine(), args()) ::
           {:ok, String.t()}
           | {:error, :invalid_arguments | :not_found | :diagnostics, String.t()}
   def evaluate(engine, args) when is_map(args) do
-    Lemma.Native.mcp_evaluate(engine, Jason.encode!(args))
+    run(engine, args)
   end
 
   @spec list(engine(), args()) ::

@@ -168,7 +168,7 @@ Chained casts nest from left to right: `expr as unit as unit … as number`.
 | `as <unit>` | Convert, relabel, or construct a measure/ratio in that unit                         | `mass as gram`, `5 as eur`, `rate as hour`  |
 | `as number` | Strip to raw magnitude (requires explicit unit on prior step for quantities/ranges) | `10 eur as number`, `span as day as number` |
 
-`<unit>` may be bare (`eur`) or qualified (`money.eur`, `units.kilogram`, `units.mass.kilogram`). Optionally qualify; must qualify when the bare name is ambiguous in scope: see [Qualifying units](#qualifying-units).
+`<unit>` may be bare (`eur`) or qualified (`money.eur`, `units.mass.kilogram`). Optionally qualify; must qualify when the bare name is ambiguous in scope: see [Qualifying units](#qualifying-units).
 
 Same-family conversion applies factors (`2 kilogram as gram` → `2000 gram`). Cross-family relabel keeps magnitude (`5 eur as kg` → `5 kg`).
 
@@ -763,18 +763,19 @@ On ranges, `minimum` / `maximum` always mean **width**. Endpoint limits use `low
 
 ### Qualifying units
 
-Optionally qualify units; must qualify when the bare name is ambiguous in scope.
+Optionally qualify units. A unit name has one declaring type in scope.
 
 | Form | Meaning |
 |------|---------|
-| `kilogram` | Bare: exactly one in-scope owner |
-| `my_weight.kilogram` | Local owning type |
+| `kilogram` | Bare: the type that declares the unit |
+| `my_weight.kilogram` | Extension (or owning) type |
 | `units.mass.kilogram` | Import alias + type |
-| `units.kilogram` | Import sugar: unique under that alias |
 
-Bare literals and `as` targets plan when the unit name has a unique owner. Qualified paths are allowed whenever they uniquely identify an owner. Ambiguous bare use is a planning error that lists legal qualifiers. The same rule applies to each factor in a compound unit expression. Two measure types may declare the same unit name; the spec still loads: clash surfaces only at a bare use site.
+Bare literals and `as` targets use the unique declarer. Qualified paths are `Type.unit` or `alias.Type.unit` (not `alias.unit`). A second independent `-> unit` with the same name is a planning error. Extensions inherit units: bare still binds the declarer; use `Type.unit` or cast to bind the extension. The same rule applies to each factor in a compound unit expression.
 
-Wire shapes for `run` / `show` measure maps stay bare declared unit names. Qualification is source syntax only.
+Custom units on `ratio` types follow the same uniqueness rule. Builtin `percent` and `permille` are shared across named ratio types.
+
+In `run` and `show` results, measure unit maps use bare declared names (`eur`, not `price.eur`). Qualification exists only in Lemma source.
 
 ### Compound units
 

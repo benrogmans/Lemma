@@ -15,7 +15,9 @@ pub fn concat_guide_fragments(guide_dir: &Path) -> Result<String, String> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
-            if path.extension()?.to_str()? == "md" {
+            if path.extension()?.to_str()? == "md"
+                && !path.file_stem()?.to_str()?.ends_with("_improved")
+            {
                 Some(path)
             } else {
                 None

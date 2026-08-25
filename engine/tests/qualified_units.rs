@@ -1,4 +1,6 @@
-//! Optionally qualify units; must qualify when ambiguous.
+//! Qualify units: bare when unique; Type.unit; alias.Type.unit.
+//! Import-alias sugar (alias.unit) is rejected.
+//! Unique unit names: second independent declarer is a planning Error at definition/merge.
 
 use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
@@ -29,107 +31,203 @@ fn eval_display(code: &str, spec: &str, rule: &str) -> String {
 
 fn expect_plan_error(code: &str) -> String {
     let mut engine = Engine::new();
-    let err = engine
-        .load([(path_source("bad.lemma"), code.to_string())])
-        .expect_err("expected planning error");
-    err.iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ")
+    match engine.load([(path_source("bad.lemma"), code.to_string())]) {
+        Err(err) => err
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; "),
+        Ok(()) => panic!("expected planning error, but load succeeded"),
+    }
 }
 
 #[test]
-fn optional_qualify_when_unique() {
-    let code = r#"spec t
-uses lemma units
-rule a: 5 kilogram
-rule b: 5 units.kilogram
-rule c: 5 units.mass.kilogram"#;
-    assert!(eval_display(code, "t", "a").contains("kilogram"));
-    assert!(eval_display(code, "t", "b").contains("kilogram"));
-    assert!(eval_display(code, "t", "c").contains("kilogram"));
-}
-
-#[test]
-fn bare_ambiguous_must_qualify() {
+fn import_alias_unit_sugar_rejected() {
     let msg = expect_plan_error(
         r#"spec t
-data money_a: measure -> unit eur: 1
-data money_b: measure -> unit eur: 2
-rule r: 1 eur"#,
+uses lemma units
+rule r: 5 units.kilogram"#,
     );
     assert!(
-        msg.to_lowercase().contains("ambiguous")
-            || msg.contains("Qualify")
-            || msg.contains("qualify"),
-        "expected ambiguous bare eur error, got: {msg}"
-    );
-    assert!(
-        msg.contains("money_a.eur") && msg.contains("money_b.eur"),
+        msg.contains("units.kilogram")
+            && (msg.contains("Unknown")
+                || msg.contains("alias.Type.unit")
+                || msg.contains("not alias.unit")),
         "got: {msg}"
     );
 }
 
 #[test]
-fn qualified_disambiguation_and_eval_arithmetic() {
-    let code = r#"spec t
-data money_a: measure -> unit eur: 1
-data money_b: measure -> unit eur: 2
-rule a: 10 money_a.eur + 5 money_a.eur
-rule b: 10 money_b.eur + 5 money_b.eur"#;
-    let a = eval_display(code, "t", "a");
-    let b = eval_display(code, "t", "b");
-    assert!(a.contains("15") && a.contains("eur"), "got {a}");
-    assert!(b.contains("15") && b.contains("eur"), "got {b}");
-}
-
-#[test]
-fn import_and_local_kilogram_clash() {
-    let bare = expect_plan_error(
+fn import_alias_unit_sugar_rejected_even_when_unique() {
+    let msg = expect_plan_error(
         r#"spec t
 uses lemma units
-data bag: measure -> unit kilogram: 999
-rule r: 1 kilogram"#,
+rule r: 5 units.kilogram"#,
     );
     assert!(
-        bare.to_lowercase().contains("ambiguous")
-            || bare.contains("Qualify")
-            || bare.contains("qualify"),
-        "got: {bare}"
+        !msg.to_lowercase().contains("ambiguous"),
+        "must reject sugar as unknown path, not as ambiguity, got: {msg}"
     );
-
-    let code = r#"spec t
-uses lemma units
-data bag: measure -> unit kilogram: 999
-rule si: 1 units.mass.kilogram
-rule local: 1 bag.kilogram
-rule sugar: 1 units.kilogram"#;
-    assert!(eval_display(code, "t", "si").contains("kilogram"));
-    assert!(eval_display(code, "t", "local").contains("kilogram"));
-    assert!(eval_display(code, "t", "sugar").contains("kilogram"));
 }
 
 #[test]
-fn as_qualified_unit() {
+fn as_import_alias_unit_sugar_rejected() {
+    let msg = expect_plan_error(
+        r#"spec t
+uses lemma units
+data x: 10 kilogram
+rule r: x as units.kilogram"#,
+    );
+    assert!(msg.contains("units.kilogram"), "got: {msg}");
+}
+
+#[test]
+fn compound_factor_import_alias_sugar_rejected() {
+    let msg = expect_plan_error(
+        r#"spec t
+uses lemma units
+data money: measure
+  -> unit eur: 1
+data rate: measure
+  -> unit eur_per_kg: eur/units.kilogram"#,
+    );
+    assert!(
+        msg.contains("units.kilogram"),
+        "compound factor must reject alias.unit sugar, got: {msg}"
+    );
+}
+
+#[test]
+fn bare_unique_still_ok() {
     let code = r#"spec t
-data money_a: measure -> unit eur: 1
-data money_b: measure -> unit eur: 2
-data x: 10 money_a.eur
-rule r: x as money_a.eur"#;
+uses lemma units
+rule a: 5 kilogram"#;
+    assert!(eval_display(code, "t", "a").contains("kilogram"));
+}
+
+#[test]
+fn three_segment_import_ok() {
+    let code = r#"spec t
+uses lemma units
+rule c: 5 units.mass.kilogram"#;
+    assert!(eval_display(code, "t", "c").contains("kilogram"));
+}
+
+#[test]
+fn local_type_unit_ok() {
+    let code = r#"spec t
+data money: measure -> unit eur: 1
+rule r: 5 money.eur"#;
     assert!(eval_display(code, "t", "r").contains("eur"));
 }
 
-/// Multi-owner bare `second` (local + lemma units) must not panic when datetime
-/// arithmetic expands an anonymous duration signature without typed owners.
 #[test]
-fn multi_owner_second_datetime_subtract_does_not_panic() {
+fn second_kilogram_declarer_vs_stdlib_rejected() {
+    let msg = expect_plan_error(
+        r#"spec t
+uses lemma units
+data bag: measure -> unit kilogram: 999
+"#,
+    );
+    assert!(
+        msg.contains("kilogram"),
+        "local bag + stdlib kilogram must Error at definition, got: {msg}"
+    );
+    assert!(
+        !msg.to_lowercase().contains("qualify as"),
+        "must not be bare-use qualify list, got: {msg}"
+    );
+}
+
+#[test]
+fn second_eur_declarer_rejected() {
+    let msg = expect_plan_error(
+        r#"spec t
+data money_a: measure -> unit eur: 1
+data money_b: measure -> unit eur: 2
+"#,
+    );
+    assert!(
+        msg.contains("eur") && (msg.contains("money_a") || msg.contains("money_b")),
+        "second independent eur declarer must Error, got: {msg}"
+    );
+}
+
+#[test]
+fn import_alias_unit_sugar_still_rejected_with_local_clash() {
+    let sugar = expect_plan_error(
+        r#"spec t
+uses lemma units
+data bag: measure -> unit kilogram: 999
+rule sugar: 1 units.kilogram"#,
+    );
+    assert!(
+        sugar.contains("units.kilogram") || sugar.contains("kilogram"),
+        "sugar and/or second declarer must Error, got: {sugar}"
+    );
+}
+
+#[test]
+fn as_extension_unit() {
     let code = r#"spec t
+data money_a: measure -> unit eur: 1
+data money_b: money_a -> decimals 2
+data x: 10 eur
+rule r: x as money_b.eur"#;
+    let display = eval_display(code, "t", "r");
+    assert!(display.contains("eur"), "got {display}");
+    assert!(
+        display.contains("10.00") || display.contains("10"),
+        "got {display}"
+    );
+}
+
+#[test]
+fn local_second_declarer_of_second_rejected() {
+    let msg = expect_plan_error(
+        r#"spec t
 uses lemma units
 data tick: measure -> unit second: 1
-rule value: (2024-01-01T03:30:00Z - 01:00:00) as minute"#;
-    let display = eval_display(code, "t", "value");
+"#,
+    );
     assert!(
-        display.contains("150") && display.contains("minute"),
-        "got {display}"
+        msg.contains("second"),
+        "local tick.second + stdlib second must Error, got: {msg}"
+    );
+}
+
+#[test]
+fn dep_later_slice_second_kilogram_declarer_rejected() {
+    let mut engine = Engine::new();
+    let err = engine
+        .load([(
+            path_source("b.lemma"),
+            r#"
+spec B 2025-01-01
+data mass: measure
+  -> unit kilogram: 1
+
+spec B 2025-07-01
+data mass: measure
+  -> unit kilogram: 1
+data bag: measure
+  -> unit kilogram: 999
+"#
+            .to_string(),
+        )])
+        .expect_err("B later slice must not declare a second kilogram");
+
+    let joined = err
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        joined.contains("kilogram"),
+        "second kilogram declarer on B later row must Error, got: {joined}"
+    );
+    assert!(
+        !joined.contains("BUG:"),
+        "must be planning Error, not panic, got: {joined}"
     );
 }

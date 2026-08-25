@@ -129,6 +129,93 @@ rule doubled: age * 2
 
     let doubled = response.results.get("doubled").expect("doubled");
     assert!(doubled.vetoed, "unparsable age must veto doubled");
+    let reason = doubled.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("Data age [number]:")
+            && reason.contains("twenty")
+            && reason.contains("Invalid number"),
+        "veto reason must name field, type, and parse fact, got: {reason}"
+    );
+    assert!(
+        !reason.contains("not a valid"),
+        "veto reason must not use generic invalid template, got: {reason}"
+    );
+}
+
+#[test]
+fn empty_measure_override_names_field_type_and_unit() {
+    let code = r#"
+spec s
+data mass: measure
+  -> unit kilogram: 1
+  -> unit gram: 0.001
+data price: mass
+rule total: price
+"#;
+    let mut engine = Engine::new();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("plan");
+
+    let now = DateTimeValue::now();
+    for empty in ["", "   "] {
+        let mut data = HashMap::new();
+        data.insert("price".to_string(), empty.to_string());
+
+        let response = assert_run_completes_with_veto_not_validation_error(
+            engine.run(None, "s", Some(&now), data, None, false),
+            &format!("price={empty:?} (empty measure)"),
+        );
+        let total = response.results.get("total").expect("total");
+        assert!(total.vetoed, "empty price must veto total");
+        let reason = total.veto_reason.as_deref().expect("veto reason");
+        assert!(
+            reason.contains("Data price [mass]:")
+                && reason.to_lowercase().contains("cannot be empty"),
+            "empty measure veto must name field and type, got: {reason}"
+        );
+        assert!(
+            !reason.contains("eur"),
+            "example unit must come from this type, got: {reason}"
+        );
+        assert!(
+            !reason.contains("Measure value cannot be empty"),
+            "veto reason must not dump FromStr grammar, got: {reason}"
+        );
+    }
+}
+
+#[test]
+fn empty_number_override_names_field_without_unit_lecture() {
+    let code = r#"
+spec s
+data age: number
+rule doubled: age * 2
+"#;
+    let mut engine = Engine::new();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("plan");
+
+    let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "   ".to_string());
+
+    let response = assert_run_completes_with_veto_not_validation_error(
+        engine.run(None, "s", Some(&now), data, None, false),
+        "age=whitespace (empty number)",
+    );
+    let doubled = response.results.get("doubled").expect("doubled");
+    assert!(doubled.vetoed, "empty age must veto doubled");
+    let reason = doubled.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("Data age [number]:") && reason.to_lowercase().contains("cannot be empty"),
+        "empty number veto must name field and type, got: {reason}"
+    );
+    assert!(
+        !reason.to_lowercase().contains("unit"),
+        "number empty veto must not mention units, got: {reason}"
+    );
 }
 
 #[test]

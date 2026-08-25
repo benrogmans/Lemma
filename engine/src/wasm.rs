@@ -1,5 +1,4 @@
 use crate::error::EngineError;
-use crate::evaluation::RunDataValue;
 use crate::{Engine, Error, Source, SourceType};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -116,7 +115,7 @@ impl WasmEngine {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let response_rules = resolve_run_rules(&opts.rules).map_err(js_err)?;
+        let response_rules = crate::resolve_run_rules(&opts.rules).map_err(js_err)?;
 
         let response = self
             .engine
@@ -289,75 +288,7 @@ struct RunOptions {
 }
 
 fn parse_run_data(data: &Option<serde_json::Value>) -> Result<HashMap<String, String>, String> {
-    let Some(value) = data else {
-        return Ok(HashMap::new());
-    };
-    if value.is_null() {
-        return Ok(HashMap::new());
-    }
-    let map: HashMap<String, serde_json::Value> = serde_json::from_value(value.clone())
-        .map_err(|e| format!("data must be a plain object: {e}"))?;
-    map.into_iter()
-        .filter(|(_, v)| !v.is_null())
-        .map(|(k, v)| {
-            let input = run_data_value_from_json_value(v)?;
-            match input {
-                RunDataValue::String(s) => Ok((k, s)),
-                RunDataValue::Boolean(b) => Ok((k, b.to_string())),
-                RunDataValue::MeasureMap(m) => {
-                    if m.len() == 1 {
-                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
-                        Ok((k, format!("{mag} {unit}")))
-                    } else {
-                        Err(format!(
-                            "data value '{k}' must be a convenience string for WASM run"
-                        ))
-                    }
-                }
-                RunDataValue::RatioMap(m) => {
-                    if m.len() == 1 {
-                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
-                        Ok((k, format!("{mag} {unit}")))
-                    } else {
-                        Err(format!(
-                            "data value '{k}' must be a convenience string for WASM run"
-                        ))
-                    }
-                }
-            }
-        })
-        .collect()
-}
-
-fn resolve_run_rules(rules: &Option<serde_json::Value>) -> Result<Option<Vec<String>>, String> {
-    let Some(value) = rules else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    if let Some(s) = value.as_str() {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            return Err("rules must not be empty".to_string());
-        }
-        return Ok(Some(vec![trimmed.to_string()]));
-    }
-    if let Some(arr) = value.as_array() {
-        if arr.is_empty() {
-            return Err("rules must not be empty".to_string());
-        }
-        let names: Vec<String> = arr
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(|s| s.to_string())
-                    .ok_or_else(|| "rules must be an array of strings".to_string())
-            })
-            .collect::<Result<_, _>>()?;
-        return Ok(Some(names));
-    }
-    Err("rules must be a string or array of strings".to_string())
+    crate::parse_run_data_object(data)
 }
 
 #[derive(Serialize)]
@@ -467,49 +398,6 @@ fn request_error_js(message: impl Into<String>) -> JsValue {
     errors
         .serialize(&js_error_serializer())
         .expect("BUG: serialize EngineError array")
-}
-
-fn run_data_value_from_json_value(value: serde_json::Value) -> Result<RunDataValue, String> {
-    use std::collections::BTreeMap;
-    match value {
-        serde_json::Value::String(s) => Ok(RunDataValue::String(s)),
-        serde_json::Value::Bool(b) => Ok(RunDataValue::Boolean(b)),
-        serde_json::Value::Number(n) => {
-            if n.is_i64() || n.is_u64() {
-                Ok(RunDataValue::String(n.to_string()))
-            } else {
-                Err("decimal values must be passed as strings to preserve exactness".to_string())
-            }
-        }
-        serde_json::Value::Object(obj) => {
-            if obj.is_empty() {
-                return Err("data value object must not be empty".to_string());
-            }
-            if obj.len() == 2 && obj.contains_key("value") && obj.contains_key("unit") {
-                return Err(
-                    "the {value, unit} object shape is not supported; use a unit map like {\"eur\": \"84\"}"
-                        .to_string(),
-                );
-            }
-            if obj.values().all(|v| v.is_string()) {
-                let map: BTreeMap<String, String> = obj
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            v.as_str()
-                                .expect("BUG: object values checked as strings")
-                                .to_string(),
-                        )
-                    })
-                    .collect();
-                return Ok(RunDataValue::MeasureMap(map));
-            }
-            Err("data value object must be a unit map with string magnitudes".to_string())
-        }
-        serde_json::Value::Null => Err("data value must not be null".to_string()),
-        serde_json::Value::Array(_) => Err("data value must not be an array".to_string()),
-    }
 }
 
 fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsValue> {

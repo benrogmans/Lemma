@@ -307,8 +307,8 @@ lemma server --prefix ./policies --watch
 AI assistants interact with Lemma specs via the Model Context Protocol:
 
 ```bash
-lemma mcp             # read-only (evaluate, list, show, source, check, guide)
-lemma mcp --admin     # also enable add_spec and other mutators
+lemma mcp             # read-only (run, list, show, source, check, guide)
+lemma mcp --write     # also enable add_spec and other mutators
 ```
 
 Authoring loop: `guide` → `check` (diagnostics) → `evaluate`. Resources expose `lemma://guide` and curated examples.
@@ -340,7 +340,7 @@ See [engine/packages/hex/README.md](engine/packages/hex/README.md) and [cli/docu
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.7</version>
+  <version>0.9.8</version>
 </dependency>
 ```
 

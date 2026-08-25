@@ -38,15 +38,6 @@ struct NumericConstraints {
     help: String,
 }
 
-/// Prompt title: `name [type]` unless type label equals the field name (adds nothing).
-fn prompt_label(data_name: &str, type_label: &str) -> String {
-    if type_label == data_name {
-        data_name.to_string()
-    } else {
-        format!("{data_name} [{type_label}]")
-    }
-}
-
 fn load_static_show(
     engine: &Engine,
     repo: Option<&str>,
@@ -335,10 +326,12 @@ fn prompt_value_for_type(
     lemma_type: &LemmaType,
     suggestion: Option<&LiteralValue>,
 ) -> Result<String> {
-    let type_str = lemma_type.to_string();
+    let input_label = lemma_type.label_for_data_input(data_name);
 
     match &lemma_type.specifications {
-        TypeSpecification::Boolean { .. } => prompt_boolean_data(data_name, suggestion),
+        TypeSpecification::Boolean { .. } => {
+            prompt_boolean_data(&input_label, data_name, suggestion)
+        }
         TypeSpecification::Text {
             options,
             length,
@@ -349,9 +342,8 @@ fn prompt_value_for_type(
                 if options.len() == 1 {
                     return Ok(options[0].clone());
                 }
-                let prompt_message = prompt_label(data_name, &type_str);
                 let mut prompt =
-                    Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
+                    Select::new(&input_label, options.clone()).with_help_message(help.as_str());
                 if let Some(lit) = suggestion {
                     if let ValueKind::Text(s) = &lit.value {
                         if let Some(idx) = options.iter().position(|o| o == s) {
@@ -367,13 +359,7 @@ fn prompt_value_for_type(
                     length: *length,
                     help: help.clone(),
                 };
-                prompt_text_data_with_constraints(
-                    data_name,
-                    &type_str,
-                    lemma_type,
-                    suggestion,
-                    &constraints,
-                )
+                prompt_text_data_with_constraints(&input_label, lemma_type, suggestion, &constraints)
             }
         }
         TypeSpecification::Measure {
@@ -401,7 +387,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_measure_data(data_name, &type_str, suggestion, units, &constraints)
+            prompt_measure_data(data_name, &input_label, suggestion, units, &constraints)
         }
         TypeSpecification::Number {
             minimum,
@@ -422,7 +408,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_number_data(data_name, &type_str, suggestion, &constraints)
+            prompt_number_data(&input_label, suggestion, &constraints)
         }
         TypeSpecification::Ratio {
             minimum,
@@ -441,7 +427,7 @@ fn prompt_value_for_type(
             };
             prompt_ratio_data(
                 data_name,
-                &type_str,
+                &input_label,
                 suggestion,
                 units,
                 ratio_spec.minimum_decimal(),
@@ -449,19 +435,19 @@ fn prompt_value_for_type(
                 help.as_str(),
             )
         }
-        TypeSpecification::Date { .. } => prompt_date_data(data_name, suggestion),
+        TypeSpecification::Date { .. } => prompt_date_data(&input_label, data_name, suggestion),
         TypeSpecification::Time { help, .. } => {
             let def = suggestion
                 .filter(|l| matches!(l.value, ValueKind::Time(_)))
                 .map(|l| l.to_string());
-            prompt_simple_text(data_name, &type_str, def.as_deref(), help.as_str(), "12:34:56")
+            prompt_simple_text(&input_label, def.as_deref(), help.as_str(), "12:34:56")
         }
         TypeSpecification::NumberRange { help, .. }
         | TypeSpecification::DateRange { help, .. }
         | TypeSpecification::TimeRange { help, .. }
         | TypeSpecification::MeasureRange { help, .. }
         | TypeSpecification::RatioRange { help, .. } => {
-            prompt_range_data(data_name, &type_str, lemma_type, suggestion, help.as_str())
+            prompt_range_data(data_name, lemma_type, suggestion, help.as_str())
         }
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Data '{}' has veto type which is not promptable", data_name)
@@ -472,15 +458,18 @@ fn prompt_value_for_type(
     }
 }
 
-fn prompt_date_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Result<String> {
+fn prompt_date_data(
+    prompt_title: &str,
+    data_name: &str,
+    suggestion: Option<&LiteralValue>,
+) -> Result<String> {
     let help_message = if suggestion.is_some() {
         "Use arrow keys to navigate, Enter to select (or accept suggestion)"
     } else {
         "Use arrow keys to navigate, Enter to select"
     };
 
-    let prompt_title = prompt_label(data_name, "date");
-    let mut ds = DateSelect::new(&prompt_title).with_help_message(help_message);
+    let mut ds = DateSelect::new(prompt_title).with_help_message(help_message);
 
     if let Some(lit) = suggestion {
         if let ValueKind::Date(d) = &lit.value {
@@ -497,7 +486,11 @@ fn prompt_date_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Resul
     Ok(format!("{}T00:00:00Z", date.format("%Y-%m-%d")))
 }
 
-fn prompt_boolean_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Result<String> {
+fn prompt_boolean_data(
+    prompt_title: &str,
+    data_name: &str,
+    suggestion: Option<&LiteralValue>,
+) -> Result<String> {
     let options = vec!["true", "false"];
 
     let default_index = match suggestion.and_then(|lit| match &lit.value {
@@ -518,7 +511,7 @@ fn prompt_boolean_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Re
         "Use arrow keys to select, Enter to confirm".to_string()
     };
 
-    let selected = Select::new(&prompt_label(data_name, "boolean"), options)
+    let selected = Select::new(prompt_title, options)
         .with_help_message(&help_message)
         .with_starting_cursor(default_index)
         .prompt()
@@ -528,14 +521,12 @@ fn prompt_boolean_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Re
 }
 
 fn prompt_text_data_with_constraints(
-    data_name: &str,
-    type_str: &str,
+    prompt_title: &str,
     lemma_type: &LemmaType,
     suggestion: Option<&LiteralValue>,
     constraints: &TextConstraints,
 ) -> Result<String> {
     let default_str = suggestion.map(|l| l.to_string());
-    let prompt_message = prompt_label(data_name, type_str);
     let example = lemma_type.example_value();
 
     let TextConstraints { length, help } = constraints.clone();
@@ -555,7 +546,7 @@ fn prompt_text_data_with_constraints(
         Ok(Validation::Valid)
     };
 
-    let mut prompt = Text::new(&prompt_message).with_validator(validator);
+    let mut prompt = Text::new(prompt_title).with_validator(validator);
     let help_message = if help.is_empty() {
         format!("Example: {}", example)
     } else {
@@ -569,17 +560,15 @@ fn prompt_text_data_with_constraints(
 
     prompt
         .prompt()
-        .context(format!("Failed to get value for {}", data_name))
+        .context(format!("Failed to get value for {}", prompt_title))
 }
 
 fn prompt_simple_text(
-    data_name: &str,
-    type_str: &str,
+    prompt_title: &str,
     default_value: Option<&str>,
     help: &str,
     example: &str,
 ) -> Result<String> {
-    let prompt_message = prompt_label(data_name, type_str);
     let validator = |input: &str| {
         if input.trim().is_empty() {
             Ok(Validation::Invalid("Value is required".into()))
@@ -587,7 +576,7 @@ fn prompt_simple_text(
             Ok(Validation::Valid)
         }
     };
-    let mut prompt = Text::new(&prompt_message).with_validator(validator);
+    let mut prompt = Text::new(prompt_title).with_validator(validator);
     let help_message = if help.is_empty() {
         format!("Example: {}", example)
     } else {
@@ -599,12 +588,11 @@ fn prompt_simple_text(
     }
     prompt
         .prompt()
-        .context(format!("Failed to get value for {}", data_name))
+        .context(format!("Failed to get value for {}", prompt_title))
 }
 
 fn prompt_range_data(
     data_name: &str,
-    type_str: &str,
     lemma_type: &LemmaType,
     suggestion: Option<&LiteralValue>,
     help: &str,
@@ -626,38 +614,33 @@ fn prompt_range_data(
         _ => unreachable!("BUG: prompt_range_data called with non-range type"),
     };
 
+    let start_title = lemma_type.label_for_data_input(&format!("{data_name}.start"));
+    let end_title = lemma_type.label_for_data_input(&format!("{data_name}.end"));
+
     let left_value = prompt_simple_text(
-        &format!("{}.start", data_name),
-        type_str,
+        &start_title,
         left_default.as_deref(),
         help,
         endpoint_example,
     )?;
-    let right_value = prompt_simple_text(
-        &format!("{}.end", data_name),
-        type_str,
-        right_default.as_deref(),
-        help,
-        endpoint_example,
-    )?;
+    let right_value =
+        prompt_simple_text(&end_title, right_default.as_deref(), help, endpoint_example)?;
 
     Ok(format!("{}...{}", left_value.trim(), right_value.trim()))
 }
 
 fn prompt_number_data(
-    data_name: &str,
-    type_str: &str,
+    prompt_title: &str,
     suggestion: Option<&LiteralValue>,
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let default_str = suggestion.map(|l| l.to_string());
-    let prompt_message = prompt_label(data_name, type_str);
-    prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "10")
+    prompt_decimal_input(prompt_title, default_str.as_deref(), constraints, "10")
 }
 
 fn prompt_measure_data(
     data_name: &str,
-    type_str: &str,
+    prompt_title: &str,
     suggestion: Option<&LiteralValue>,
     units: &lemma::MeasureUnits,
     constraints: &NumericConstraints,
@@ -670,11 +653,9 @@ fn prompt_measure_data(
         _ => None,
     });
 
-    let prompt_message = prompt_label(data_name, type_str);
-
     if units.is_empty() {
         let default_str = suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt());
-        return prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "7.65");
+        return prompt_decimal_input(prompt_title, default_str.as_deref(), constraints, "7.65");
     }
 
     let unit_names: Vec<String> = units.iter().map(|u| u.name.clone()).collect();
@@ -715,14 +696,13 @@ fn prompt_measure_data(
 
 fn prompt_ratio_data(
     data_name: &str,
-    type_str: &str,
+    prompt_title: &str,
     suggestion: Option<&LiteralValue>,
     units: &lemma::RatioUnits,
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
     help: &str,
 ) -> Result<String> {
-    let prompt_message = prompt_label(data_name, type_str);
     let selected_unit = if units.len() == 1 {
         units
             .iter()
@@ -746,7 +726,7 @@ fn prompt_ratio_data(
     };
 
     let value = prompt_decimal_input(
-        &prompt_message,
+        prompt_title,
         default_decimal.as_deref(),
         &NumericConstraints {
             minimum,
@@ -837,22 +817,37 @@ fn prompt_decimal_input(
 
 #[cfg(test)]
 mod tests {
-    use super::{next_prompt_name_from_results, prompt_label};
+    use super::next_prompt_name_from_results;
     use lemma::{DateTimeValue, Engine, SourceType, VetoType};
     use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
-    fn prompt_label_omits_bracket_when_type_equals_name() {
+    fn label_for_data_input_matches_show_types() {
+        let code = r#"
+spec s
+data age: number
+data gender_code: text
+data gender: gender_code
+rule use_age: age
+rule use_gender: gender
+"#;
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Path(Arc::new(std::path::PathBuf::from("t.lemma"))),
+                code.to_string(),
+            )])
+            .expect("plan");
+        let now = DateTimeValue::now();
+        let show = engine.show(None, "s", Some(&now)).expect("show");
+        let age = show.data.get("age").expect("age");
+        assert_eq!(age.lemma_type.label_for_data_input("age"), "age [number]");
+        let gender = show.data.get("gender").expect("gender");
         assert_eq!(
-            prompt_label("applicant_age", "applicant_age"),
-            "applicant_age"
-        );
-        assert_eq!(
-            prompt_label("gender", "gender_code"),
+            gender.lemma_type.label_for_data_input("gender"),
             "gender [gender_code]"
         );
-        assert_eq!(prompt_label("age", "number"), "age [number]");
     }
 
     fn run(

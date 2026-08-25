@@ -117,7 +117,7 @@ lemma format [paths...] [--check] [--stdout]
 ### `lemma server`: start HTTP server
 
 ```bash
-lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanations] [--eval-timeout SECONDS] [--cors]
+lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explain] [--eval-timeout SECONDS] [--cors]
 ```
 
 **Options:**
@@ -125,7 +125,7 @@ lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanatio
 - `--host <host>`: bind address (default: `127.0.0.1`)
 - `-p, --port <port>`: port (default: `8012`)
 - `--watch`: live-reload on `.lemma` file changes
-- `--explanations`: enable explanation generation (clients send `x-explanations` header; JSON shape [`api.v1.json`](../../../engine/schemas/api.v1.json))
+- `--explain`: enable explanation generation (clients send `x-explain` header; JSON shape [`api.v1.json`](../../../engine/schemas/api.v1.json))
 - `--eval-timeout <second>`: wall-clock timeout for a single evaluation request (default: `10`)
 - `--cors`: allow cross-origin browser requests from any origin (off by default)
 
@@ -168,12 +168,12 @@ lemma lsp
 Start the MCP server over stdio so AI assistants can work with workspace specs. Full setup guide: [MCP](../tools/mcp.md).
 
 ```bash
-lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
+lemma mcp [--prefix PATH] [--write] [--request-timeout SECONDS]
 ```
 
 **Options:**
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
-- `--admin`: enable write tools (read-only by default)
+- `--write`: enable write tools (read-only by default)
 - `--request-timeout <seconds>`: wall-clock timeout for a single request (default: `10`)
 
 ## Workspace
@@ -212,7 +212,7 @@ Resource limits control parse-time and planning-time budgets. These are security
 
 **Accept-Datetime (HTTP)**: clients send `Accept-Datetime` with the same formats as `--effective`: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO 8601 datetime. Empty or omitted → now. Invalid values are a bad request. Responses include `Vary: Accept-Datetime`. When the resolved spec row has an `effective_from`, the server also sets `Memento-Datetime` to that instant.
 
-**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and SDKs. Use `--explain` (CLI), `--explanations` (server) + `x-explanations` (client), or `explain: true` (SDK) to opt in. MCP `evaluate` always sets `explain: true` (no opt-out). Evaluate JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`api.v1.json`](../../../engine/schemas/api.v1.json). Bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
+**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and SDKs. Use `--explain` (CLI and server) + `x-explain` (HTTP client), or `explain: true` (SDK) to opt in. MCP `run` always includes explanations (no `explain` arg, no opt-out; deprecated alias `evaluate` same). Evaluate/run JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show` / MCP `show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`api.v1.json`](../../../engine/schemas/api.v1.json). Bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
 
 ## See Also
 

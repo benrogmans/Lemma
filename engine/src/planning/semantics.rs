@@ -50,7 +50,7 @@ use crate::parsing::ast::{
 use crate::Error;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::Hash;
 use std::str::FromStr;
@@ -3992,6 +3992,38 @@ impl LemmaType {
         }
     }
 
+    /// `age [number]` or `gender [gender_code]` — brackets omitted when type adds nothing.
+    #[must_use]
+    pub fn label_for_data_input(&self, input_key: &str) -> String {
+        let type_label = if let Some(parent) = self.extends.parent_name() {
+            parent.to_string()
+        } else {
+            let type_name = self.name();
+            if type_name == input_key {
+                self.specifications.to_string()
+            } else {
+                type_name
+            }
+        };
+        if type_label == input_key {
+            input_key.to_string()
+        } else {
+            format!("{input_key} [{type_label}]")
+        }
+    }
+
+    /// `Data age [number]: {detail}` for runtime data override vetoes.
+    #[must_use]
+    pub fn data_veto_message(&self, input_key: &str, detail: &str) -> String {
+        format!("Data {}: {}", self.label_for_data_input(input_key), detail)
+    }
+
+    /// Whether an empty [`RunDataValue`] should veto before parse (text may accept `""`).
+    #[must_use]
+    pub fn empty_runtime_input_vetoes(&self) -> bool {
+        !matches!(self.specifications, TypeSpecification::Text { .. })
+    }
+
     /// Return the conversion factor for a declared unit name on this measure type.
     pub fn measure_unit_factor(
         &self,
@@ -4909,12 +4941,16 @@ pub(crate) fn compare_semantic_times(
 pub fn conversion_target_to_semantic(
     ct: &ConversionTarget,
     unit_index: Option<&crate::planning::unit_index::UnitIndex>,
+    resolved_types: Option<&HashMap<String, Arc<LemmaType>>>,
 ) -> Result<SemanticConversionTarget, String> {
     match ct {
         ConversionTarget::Type(kind) => Ok(SemanticConversionTarget::Type(*kind)),
         ConversionTarget::Unit { unit_name } => {
             let index = unit_index.ok_or_else(|| format!("Unknown unit '{unit_name}'."))?;
-            let (bare, owning_type) = index.resolve(unit_name)?;
+            let (bare, owning_type) = match resolved_types {
+                Some(resolved) => index.resolve_with_named_types(unit_name, resolved)?,
+                None => index.resolve(unit_name)?,
+            };
             Ok(SemanticConversionTarget::Unit {
                 unit_name: bare,
                 owning_type,

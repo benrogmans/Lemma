@@ -68,7 +68,7 @@ pub mod http {
     #[derive(Clone)]
     struct AppState {
         engine: SharedEngine,
-        explanations_enabled: bool,
+        explain: bool,
         eval_timeout: Duration,
     }
 
@@ -101,13 +101,6 @@ pub mod http {
                 }),
             )
         })
-    }
-
-    #[derive(serde::Serialize)]
-    struct GetSpecResponse {
-        spec_set_id: String,
-        #[serde(flatten)]
-        show: lemma::Show,
     }
 
     /// Build Memento-Datetime, Vary for the resolved spec.
@@ -152,7 +145,7 @@ pub mod http {
         host: &str,
         port: u16,
         watch: bool,
-        explanations: bool,
+        explain: bool,
         workdir: PathBuf,
         eval_timeout_secs: u64,
         cors: bool,
@@ -172,7 +165,7 @@ pub mod http {
 
         let state = AppState {
             engine: shared_engine,
-            explanations_enabled: explanations,
+            explain,
             eval_timeout: Duration::from_secs(eval_timeout_secs),
         };
 
@@ -245,11 +238,7 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let effective = resolve_effective(q.effective.as_deref())?;
         let engine = engine_snapshot(&state).await;
-        let spec = lemma_openapi::generate_openapi_effective(
-            &engine,
-            state.explanations_enabled,
-            &effective,
-        );
+        let spec = lemma_openapi::generate_openapi_effective(&engine, state.explain, &effective);
         Ok(Json(spec))
     }
 
@@ -411,11 +400,11 @@ pub mod http {
         Path(path): Path<String>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let spec_set_id = parse_spec_path(&path);
+        let raw_path = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = engine_snapshot(&state).await;
 
-        let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
+        let spec_name = lemma::parse_spec_set_id(&raw_path).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -438,9 +427,8 @@ pub mod http {
                     })?;
 
                 let effective_from = show.effective_from.clone();
-                let body = GetSpecResponse { spec_set_id, show };
 
-                let mut response = Json(body).into_response();
+                let mut response = Json(show).into_response();
                 let headers_mut = response.headers_mut();
                 for (k, v) in spec_response_headers(effective_from.as_ref()) {
                     headers_mut.insert(k, v);
@@ -513,7 +501,7 @@ pub mod http {
         Ok(data_values)
     }
 
-    /// `POST /{*path}` — evaluate; path = specset id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = JSON or form data.
+    /// `POST /{*path}` — evaluate; path = spec name. `Accept-Datetime` for temporal, `?rules=` to limit. Body = JSON or form data.
     async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
@@ -521,10 +509,10 @@ pub mod http {
         headers: HeaderMap,
         body: Bytes,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let spec_set_id = parse_spec_path(&path);
+        let raw_path = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
 
-        let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
+        let spec_name = lemma::parse_spec_set_id(&raw_path).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -553,7 +541,7 @@ pub mod http {
             }
         };
 
-        let include_explanations = want_explanations(&state, &headers);
+        let include_explanations = want_explain(&state, &headers);
         let engine = engine_snapshot(&state).await;
 
         // Evaluate on a blocking thread with no lock held. Post-planning
@@ -621,10 +609,10 @@ pub mod http {
         Ok(axum_response)
     }
 
-    fn want_explanations(state: &AppState, headers: &HeaderMap) -> bool {
-        state.explanations_enabled
+    fn want_explain(state: &AppState, headers: &HeaderMap) -> bool {
+        state.explain
             && headers
-                .get("x-explanations")
+                .get("x-explain")
                 .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
                 .map(|s: &str| !s.trim().is_empty())
                 .unwrap_or(false)

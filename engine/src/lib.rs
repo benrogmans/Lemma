@@ -40,7 +40,9 @@ pub use engine::{
 pub use error::{EngineError, EngineErrorSource, Error, ErrorDetails, ErrorKind, RequestErrorKind};
 pub use evaluation::explanations::{format_explanation, Cause, Explanation, ExplanationNode};
 pub use evaluation::response::{Response, RuleResult};
-pub use evaluation::run_data::RunDataValue;
+pub use evaluation::run_data::{
+    parse_run_data_object, resolve_run_rules, run_data_value_from_json_value, RunDataValue,
+};
 pub use formatting::{format_parse_result, format_source, format_specs};
 pub use limits::{
     ResourceLimits, MAX_DATA_NAME_LENGTH, MAX_RULE_NAME_LENGTH, MAX_SPEC_NAME_LENGTH,
