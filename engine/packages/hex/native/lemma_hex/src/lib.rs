@@ -399,7 +399,7 @@ fn lemma_format<'a>(env: Env<'a>, code: String) -> NifResult<Term<'a>> {
 fn lemma_generate_openapi<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
-    explanations_enabled: bool,
+    explain: bool,
     effective_opt: Option<String>,
 ) -> NifResult<Term<'a>> {
     let engine = resource
@@ -414,7 +414,7 @@ fn lemma_generate_openapi<'a>(
         })?,
     };
 
-    let spec = lemma_openapi::generate_openapi_effective(&engine, explanations_enabled, &effective);
+    let spec = lemma_openapi::generate_openapi_effective(&engine, explain, &effective);
     let json = serde_json::to_vec(&spec).map_err(|e| {
         rustler::Error::RaiseTerm(Box::new(format!(
             "OpenAPI JSON serialization failed: {}",
@@ -672,8 +672,7 @@ fn mcp_read_resource<'a>(env: Env<'a>, uri: String) -> NifResult<Term<'a>> {
     }
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn mcp_evaluate<'a>(
+fn mcp_run_impl<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
     args_json: String,
@@ -683,7 +682,25 @@ fn mcp_evaluate<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    mcp_tool_result(env, lemma::mcp::evaluate(&engine, &args))
+    mcp_tool_result(env, lemma::mcp::run(&engine, &args))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn mcp_run<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+    args_json: String,
+) -> NifResult<Term<'a>> {
+    mcp_run_impl(env, resource, args_json)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn mcp_evaluate<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+    args_json: String,
+) -> NifResult<Term<'a>> {
+    mcp_run_impl(env, resource, args_json)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]

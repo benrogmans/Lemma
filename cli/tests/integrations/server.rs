@@ -59,7 +59,7 @@ rule result: x
 }
 
 #[test]
-fn test_get_with_x_explanations_header_returns_explanation_when_explanations_enabled() {
+fn test_post_with_x_explain_header_returns_explanation_when_explain_enabled() {
     let temp_dir = tempfile::tempdir().unwrap();
     let lemma_file = temp_dir.path().join("single.lemma");
     std::fs::write(
@@ -79,7 +79,7 @@ rule result: x
         .arg(temp_dir.path())
         .arg("--port")
         .arg(port.to_string())
-        .arg("--explanations")
+        .arg("--explain")
         .spawn()
         .unwrap();
 
@@ -94,7 +94,7 @@ rule result: x
     let url = format!("http://127.0.0.1:{}/single_spec", port);
     let resp = client
         .post(&url)
-        .header("x-explanations", "true")
+        .header("x-explain", "true")
         .header("Content-Type", "application/json")
         .body(r#"{"x":"42"}"#)
         .send()
@@ -107,7 +107,7 @@ rule result: x
 
     assert!(
         status.is_success(),
-        "POST with x-explanations should return 2xx, got {}",
+        "POST with x-explain should return 2xx, got {}",
         status
     );
     let results = body
@@ -118,7 +118,7 @@ rule result: x
         .expect("results should have 'result' rule");
     assert!(
         rule_result.get("explanation").is_some(),
-        "response should include explanation when x-explanations header sent: {:?}",
+        "response should include explanation when x-explain header sent: {:?}",
         body
     );
     assert_eq!(rule_result["number"].as_str(), Some("42"));
@@ -560,6 +560,16 @@ rule total: base
     let body: serde_json::Value = serde_json::from_str(&body_text)
         .unwrap_or_else(|e| panic!("invalid JSON: {e}; {body_text}"));
 
+    assert_eq!(
+        body["spec"].as_str(),
+        Some("pricing"),
+        "GET show body must be Show: {body}"
+    );
+    assert!(
+        body.get("spec_set_id").is_none(),
+        "GET show body must not include spec_set_id: {body}"
+    );
+
     let versions = body["versions"]
         .as_array()
         .unwrap_or_else(|| panic!("'versions' must be an array: {body}"));
@@ -728,7 +738,7 @@ rule r: n
     let rule = body["results"]["r"].as_object().expect("rule r in results");
     assert!(
         rule.get("explanation").is_none(),
-        "explanation must stay omitted without x-explanations: {rule:?}"
+        "explanation must stay omitted without x-explain: {rule:?}"
     );
     let missing = rule["missing_data"]
         .as_array()

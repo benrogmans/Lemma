@@ -20,14 +20,14 @@ defmodule Lemma.OpenAPI do
   @doc """
   Generates an OpenAPI 3.1 JSON document for the loaded specs (Lemma HTTP API shape).
 
-  Options: `:explanations` (boolean, default false), `:effective` (datetime string or nil for "now").
+  Options: `:explain` (boolean, default false), `:effective` (datetime string or nil for "now").
   """
   @spec generate_openapi(Lemma.engine(), keyword()) :: {:ok, map()} | {:error, term()}
   def generate_openapi(engine, opts \\ []) do
-    explanations = Keyword.get(opts, :explanations, false)
+    explain = Keyword.get(opts, :explain, false)
     effective = Keyword.get(opts, :effective)
 
-    case Lemma.Native.lemma_generate_openapi(engine, explanations, effective) do
+    case Lemma.Native.lemma_generate_openapi(engine, explain, effective) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
     end

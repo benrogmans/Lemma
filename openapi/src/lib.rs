@@ -85,15 +85,15 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
 ///
 /// Convenience wrapper around [`generate_openapi_effective`]. The document reflects
 /// only the specs and interfaces active at `DateTimeValue::now()`.
-pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
-    generate_openapi_effective(engine, explanations_enabled, &DateTimeValue::now())
+pub fn generate_openapi(engine: &Engine, explain: bool) -> Value {
+    generate_openapi_effective(engine, explain, &DateTimeValue::now())
 }
 
 /// Generate a complete OpenAPI 3.1 specification for a specific point in time.
 ///
 /// The specification includes:
 /// - `GET /` — list loaded specs (name, data/rule counts)
-/// - `/{spec_set_id}` GET (show: `spec_set_id`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
+/// - `/{spec}` GET (show: `spec`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
 ///   POST (evaluate: envelope `spec`, `effective`, `result`) with optional `Accept-Datetime` header
 /// - `?rules=` on POST only, to limit evaluated rules
 /// - `x-effective-from` / `x-effective-to` vendor extensions on each PathItem
@@ -103,20 +103,17 @@ pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
 /// CLI `lemma server` also exposes shell routes (`/openapi.json`, `/health`, `/docs`) that are
 /// intentionally omitted from the generated document.
 ///
-/// When `explanations_enabled` is true, the document adds the `x-explanations` header parameter
+/// When `explain` is true, the document adds the `x-explain` header parameter
 /// to evaluation operations and describes the optional `explanation` field on rule results.
 pub fn generate_openapi_effective(
     engine: &Engine,
-    explanations_enabled: bool,
+    explain: bool,
     effective: &DateTimeValue,
 ) -> Value {
     let mut paths = Map::new();
     let mut components_schemas = Map::new();
 
-    components_schemas.insert(
-        "LemmaRuleResult".to_string(),
-        build_rule_result_schema(explanations_enabled),
-    );
+    components_schemas.insert("LemmaRuleResult".to_string(), build_rule_result_schema());
 
     let repositories = engine.list();
     let workspace = repositories
@@ -152,7 +149,7 @@ pub fn generate_openapi_effective(
                 spec_name,
                 &show,
                 (ls.effective_from.as_ref(), ls.effective_to.as_ref()),
-                explanations_enabled,
+                explain,
             );
             paths.insert(format!("/{spec_name}"), artifacts.path_item);
             for (name, schema_value) in artifacts.component_schemas {
@@ -163,14 +160,14 @@ pub fn generate_openapi_effective(
 
     let mut tags = vec![json!({
         "name": "Specs",
-        "description": "Simple API to retrieve the list of Lemma specs"
+        "description": "List loaded specs"
     })];
     for spec_name in &unique_spec_names {
         let safe_tag = spec_name.replace('.', "_");
         tags.push(json!({
             "name": safe_tag,
             "x-displayName": spec_name,
-            "description": format!("GET show or POST evaluate for spec '{}'. Use ?rules= on POST to limit evaluated rules.", spec_name)
+            "description": format!("Show and evaluate `{spec_name}`")
         }));
     }
 
@@ -190,7 +187,7 @@ pub fn generate_openapi_effective(
         "openapi": "3.1.0",
         "info": {
             "title": "Lemma API",
-            "description": "Lemma is a declarative language for expressing business logic — pricing rules, tax calculations, eligibility criteria, contracts, and policies. Learn more at [LemmaBase.com](https://lemmabase.com).\n\n**Temporal resolution.** `GET /{spec}` describes **version boundaries**: each entry in `versions` carries the half-open `[effective_from, effective_to)` validity range of a temporal version. `POST /{spec}` treats the request's effective instant (from the `Accept-Datetime` header, or the evaluation envelope's `effective` field) as the **evaluation instant** used to pick the active version and compute the result.",
+            "description": "Lemma is a declarative language for business logic: pricing, tax, eligibility, contracts, and policies. This API lists, shows, and evaluates loaded specs. Learn more at [LemmaBase.com](https://lemmabase.com).",
             "version": version_label
         },
         "tags": tags,
@@ -242,11 +239,11 @@ fn index_path_item(engine: &Engine) -> Value {
     json!({
         "get": {
             "operationId": "list",
-            "summary": "List loaded repositories and specs",
+            "summary": "List specs",
             "tags": ["Specs"],
             "responses": {
                 "200": {
-                    "description": "Same JSON as Engine.list() (metadata only: name, effective_from, effective_to per spec row)",
+                    "description": "Loaded repositories and their specs",
                     "content": {
                         "application/json": {
                             "schema": {
@@ -254,15 +251,28 @@ fn index_path_item(engine: &Engine) -> Value {
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "repository": { "type": ["string", "null"] },
+                                        "repository": {
+                                            "type": ["string", "null"],
+                                            "description": "Repository name. Null for the workspace."
+                                        },
                                         "specs": {
                                             "type": "array",
+                                            "description": "Specs in this repository",
                                             "items": {
                                                 "type": "object",
                                                 "properties": {
-                                                    "name": { "type": "string" },
-                                                    "effective_from": { "type": ["string", "null"] },
-                                                    "effective_to": { "type": ["string", "null"] }
+                                                    "name": {
+                                                        "type": "string",
+                                                        "description": "Spec name"
+                                                    },
+                                                    "effective_from": {
+                                                        "type": ["string", "null"],
+                                                        "description": "When this version starts. Null if unbounded."
+                                                    },
+                                                    "effective_to": {
+                                                        "type": ["string", "null"],
+                                                        "description": "When this version ends (exclusive). Null if this is the latest."
+                                                    }
                                                 },
                                                 "required": ["name"]
                                             }
@@ -286,7 +296,7 @@ fn index_path_item(engine: &Engine) -> Value {
 
 fn error_response_schema() -> Value {
     json!({
-        "description": "Evaluation error",
+        "description": "Bad request",
         "content": {
             "application/json": {
                 "schema": {
@@ -321,78 +331,74 @@ fn not_found_response_schema() -> Value {
 fn memento_spec_response_headers() -> Value {
     json!({
         "Memento-Datetime": {
-            "description": "RFC 7089: datetime of the resolved spec version (absent for unversioned specs)",
+            "description": "`effective_from` of the resolved version, when versioned",
             "schema": { "type": "string" }
         },
         "Vary": {
-            "description": "Indicates negotiation on Accept-Datetime",
+            "description": "Varies with Accept-Datetime",
             "schema": { "type": "string", "example": "Accept-Datetime" }
         }
     })
 }
 
-/// GET `/{spec}` body: matches [cli::server::GetSpecResponse].
+/// GET `/{spec}` body: [`lemma::Show`].
 fn build_get_show_response() -> Value {
     json!({
         "type": "object",
-        "required": ["spec_set_id", "spec", "data", "rules", "meta", "start_line"],
+        "required": ["spec", "data", "rules", "meta", "start_line"],
         "properties": {
-            "spec_set_id": {
-                "type": "string",
-                "description": "Spec set identifier (path segments, e.g. org/product/pricing)"
-            },
             "spec": {
                 "type": "string",
-                "description": "Resolved spec name"
+                "description": "Spec name"
             },
             "commentary": {
                 "type": ["string", "null"],
-                "description": "Optional commentary from the spec source"
+                "description": "Docstring after the spec line"
             },
             "effective_from": {
                 "type": ["string", "null"],
-                "description": "Effective-from of the resolved temporal version, if any"
+                "description": "When this version starts. Null if unbounded."
             },
             "effective_to": {
                 "type": ["string", "null"],
-                "description": "Exclusive effective-to of the resolved temporal version, if any"
+                "description": "When this version ends (exclusive). Null if this is the latest."
             },
             "start_line": {
                 "type": "integer",
-                "description": "1-based line number of the spec declaration in source"
+                "description": "Line of the spec declaration (1-based)"
             },
             "source_type": {
-                "description": "How this spec was loaded (path, inline, registry, etc.)"
+                "description": "How this spec was loaded"
             },
             "data": {
                 "type": "object",
-                "description": "Data used by the spec's rules, mapped to type metadata, optional prefilled, and optional suggestion",
+                "description": "Inputs: types, prefilled values, and suggestions",
                 "additionalProperties": true
             },
             "rules": {
                 "type": "object",
-                "description": "Local rule names mapped to result types (full planning-time interface)",
+                "description": "Rules and their result types",
                 "additionalProperties": true
             },
             "meta": {
                 "type": "object",
-                "description": "Spec metadata key/value pairs",
+                "description": "Spec metadata",
                 "additionalProperties": true
             },
             "versions": {
                 "type": "array",
-                "description": "All loaded temporal versions for this spec name, each with a half-open [effective_from, effective_to) range",
+                "description": "All versions of this spec. Ranges are `[effective_from, effective_to)`.",
                 "items": {
                     "type": "object",
                     "required": ["effective_from", "effective_to"],
                     "properties": {
                         "effective_from": {
                             "type": ["string", "null"],
-                            "description": "Start of validity for this version; null when unbounded (no earlier version exists)"
+                            "description": "When this version starts. Null if unbounded."
                         },
                         "effective_to": {
                             "type": ["string", "null"],
-                            "description": "Exclusive end of validity (same instant as the next version's effective_from); null when this is the latest version and has no successor"
+                            "description": "When this version ends (exclusive). Null if this is the latest."
                         }
                     }
                 }
@@ -402,61 +408,78 @@ fn build_get_show_response() -> Value {
 }
 
 /// Single rule output: flat fields matching engine [`lemma::RuleResult`].
-fn build_rule_result_schema(explanations_enabled: bool) -> Value {
-    let mut explanation = json!({
-        "type": "object",
-        "description": "Structured explanation tree when explanations are enabled"
-    });
-    if explanations_enabled {
-        explanation["description"] = Value::String(
-            "Structured explanation tree (present when x-explanations is sent and server uses --explanations)"
-                .to_string(),
-        );
-    }
-
+fn build_rule_result_schema() -> Value {
     json!({
         "type": "object",
         "required": ["vetoed", "rule_type"],
         "properties": {
-            "vetoed": { "type": "boolean" },
+            "vetoed": {
+                "type": "boolean",
+                "description": "True when the rule has no value"
+            },
             "display": {
                 "type": "string",
-                "description": "Human-readable formatted value when not vetoed"
+                "description": "Formatted value when not vetoed"
             },
-            "veto_reason": { "type": "string" },
+            "veto_reason": {
+                "type": "string",
+                "description": "Why the rule vetoed"
+            },
             "rule_type": {
                 "type": "string",
-                "description": "Result type name (e.g. number, boolean, money)"
+                "description": "Result type (number, boolean, money, ...)"
             },
             "measure": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Named measure rule: unit name to magnitude string"
+                "description": "Measure value: unit name to magnitude"
             },
             "ratio": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Named ratio rule: unit name to magnitude string"
+                "description": "Ratio value: unit name to magnitude"
             },
-            "number": { "type": "string" },
-            "boolean": { "type": "boolean" },
-            "text": { "type": "string" },
-            "date": { "type": "object" },
-            "time": { "type": "object" },
+            "number": {
+                "type": "string",
+                "description": "Value when the result is this type"
+            },
+            "boolean": {
+                "type": "boolean",
+                "description": "Value when the result is this type"
+            },
+            "text": {
+                "type": "string",
+                "description": "Value when the result is this type"
+            },
+            "date": {
+                "type": "object",
+                "description": "Value when the result is this type"
+            },
+            "time": {
+                "type": "object",
+                "description": "Value when the result is this type"
+            },
             "calendar": {
                 "type": "object",
+                "description": "Value when the result is this type",
                 "properties": {
                     "value": { "type": "string" },
                     "unit": { "type": "string" }
                 }
             },
-            "range": { "type": "object" },
+            "range": {
+                "type": "object",
+                "description": "Value when the result is this type"
+            },
             "missing_data": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Input keys still unbound for this rule after overlay-aware pruning (same keys as Show.data)"
+                "description": "Unbound input names for this rule"
             },
-            "explanation": explanation
+            "explanation": {
+                "type": "object",
+                "description": "How this result was computed. Needs `--explain` and `x-explain`."
+            }
         }
     })
 }
@@ -481,23 +504,23 @@ fn build_evaluate_response_schema(show: &lemma::Show, rule_names: &[String]) -> 
         "properties": {
             "spec": {
                 "type": "string",
-                "description": "Spec set id that was evaluated"
+                "description": "Spec that was evaluated"
             },
             "effective": {
                 "type": "string",
-                "description": "Evaluation instant used for temporal resolution (matches request instant unless overridden)"
+                "description": "Datetime used to pick the version and evaluate"
             },
             "spec_effective_from": {
                 "type": "string",
-                "description": "Start of the resolved spec version's declared temporal window"
+                "description": "When the resolved version starts"
             },
             "spec_effective_to": {
                 "type": "string",
-                "description": "End of the resolved spec version's declared temporal window (absent if unbounded)"
+                "description": "When the resolved version ends (exclusive). Absent if unbounded."
             },
             "results": {
                 "type": "object",
-                "description": "Rule names to evaluation results (definition order in response; keys match ?rules= filter when set)",
+                "description": "Results by rule name. Honors `?rules=`.",
                 "properties": Value::Object(result_props)
             }
         }
@@ -536,7 +559,7 @@ fn build_spec_openapi_artifacts(
     spec_name: &str,
     show: &lemma::Show,
     effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
-    explanations_enabled: bool,
+    explain: bool,
 ) -> SpecOpenApiArtifacts {
     let data = collect_input_data_from_show(show);
     let rule_names: Vec<String> = show.rules.keys().cloned().collect();
@@ -571,7 +594,7 @@ fn build_spec_openapi_artifacts(
             &post_form_body_schema_name,
         ),
         &rule_names,
-        explanations_enabled,
+        explain,
         effective_range,
     );
 
@@ -581,12 +604,12 @@ fn build_spec_openapi_artifacts(
     }
 }
 
-fn x_explanations_header_parameter() -> Value {
+fn x_explain_header_parameter() -> Value {
     json!({
-        "name": "x-explanations",
+        "name": "x-explain",
         "in": "header",
         "required": false,
-        "description": "Set to request explanation objects in the response (server must be started with --explanations)",
+        "description": "Include explanations. Server needs `--explain`.",
         "schema": { "type": "string", "default": "true" }
     })
 }
@@ -596,7 +619,7 @@ fn accept_datetime_header_parameter() -> Value {
         "name": "Accept-Datetime",
         "in": "header",
         "required": false,
-        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit to evaluate at the request instant (now).",
+        "description": "Evaluate at this datetime. Omit for now.",
         "schema": { "type": "string", "format": "date-time" },
         "example": "Sat, 01 Jan 2025 00:00:00 GMT"
     })
@@ -607,7 +630,7 @@ fn build_spec_path_item_with_show_refs(
     spec_name: &str,
     component_names: (&str, &str, &str, &str),
     rule_names: &[String],
-    explanations_enabled: bool,
+    explain: bool,
     effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
 ) -> Value {
     let (
@@ -643,26 +666,24 @@ fn build_spec_path_item_with_show_refs(
         "name": "rules",
         "in": "query",
         "required": false,
-        "description": "Comma-separated list of rule names to evaluate; omit for all.",
+        "description": "Rules to evaluate, comma-separated. Omit for all.",
         "schema": { "type": "string" },
         "example": rules_example
     });
 
     let mut get_parameters: Vec<Value> = Vec::new();
     get_parameters.push(accept_datetime_header_parameter());
-    if explanations_enabled {
-        get_parameters.push(x_explanations_header_parameter());
+    if explain {
+        get_parameters.push(x_explain_header_parameter());
     }
 
-    let get_summary = "Show of resolved version (spec, data, rules, meta, versions)".to_string();
-    let post_summary = "Evaluate".to_string();
     let get_operation_id = format!("get_{}", spec_name);
     let post_operation_id = format!("post_{}", spec_name);
 
     let mut post_parameters: Vec<Value> = vec![rules_param];
     post_parameters.push(accept_datetime_header_parameter());
-    if explanations_enabled {
-        post_parameters.push(x_explanations_header_parameter());
+    if explain {
+        post_parameters.push(x_explain_header_parameter());
     }
 
     let datetime_or_null = |dt: Option<&DateTimeValue>| -> Value {
@@ -677,12 +698,12 @@ fn build_spec_path_item_with_show_refs(
         "x-effective-to": datetime_or_null(effective_to),
         "get": {
             "operationId": get_operation_id,
-            "summary": get_summary,
+            "summary": "Show spec",
             "tags": [tag],
             "parameters": get_parameters,
             "responses": {
                 "200": {
-                    "description": "Show of resolved version (spec_set_id, effective_from, data, rules, meta, versions).",
+                    "description": "Spec interface",
                     "headers": memento_spec_response_headers(),
                     "content": {
                         "application/json": {
@@ -696,7 +717,7 @@ fn build_spec_path_item_with_show_refs(
         },
         "post": {
             "operationId": post_operation_id,
-            "summary": post_summary,
+            "summary": "Evaluate",
             "tags": [tag],
             "parameters": post_parameters,
             "requestBody": {
@@ -713,7 +734,7 @@ fn build_spec_path_item_with_show_refs(
             },
             "responses": {
                 "200": {
-                    "description": "Evaluation envelope: spec, effective, result (per-rule RuleResultJson).",
+                    "description": "Evaluation results",
                     "headers": memento_spec_response_headers(),
                     "content": {
                         "application/json": {
@@ -1021,7 +1042,8 @@ mod tests {
         assert_ne!(get_ref, post_ref);
 
         let get_show = &spec["components"]["schemas"]["pricing_get_show"];
-        assert!(get_show["properties"]["spec_set_id"]["type"] == "string");
+        assert!(get_show["properties"]["spec"]["type"] == "string");
+        assert!(get_show["properties"].get("spec_set_id").is_none());
         assert!(get_show["properties"]["versions"].is_object());
         assert!(get_show["properties"]["start_line"]["type"] == "integer");
 
@@ -1079,7 +1101,7 @@ rule adult: age >= 18
     }
 
     #[test]
-    fn test_generate_openapi_explanations_enabled_adds_x_explanations_and_explanation_schema() {
+    fn test_generate_openapi_explain_adds_x_explain_and_explanation_schema() {
         let engine = create_engine_with_code(
             "spec pricing
             data quantity: 10
@@ -1088,7 +1110,7 @@ rule adult: age >= 18
         let spec = generate_openapi(&engine, true);
 
         let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
-        assert!(has_param(get_params, "x-explanations"));
+        assert!(has_param(get_params, "x-explain"));
 
         let rule_result = &spec["components"]["schemas"]["LemmaRuleResult"];
         assert!(rule_result["properties"]["explanation"].is_object());

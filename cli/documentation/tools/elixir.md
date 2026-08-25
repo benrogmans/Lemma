@@ -74,6 +74,8 @@ Format source code (no engine needed):
 | `Lemma.quality/1` | Structural quality recommendations across loaded specs (advisory only) |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 
+`Lemma.Mcp` wraps the engine MCP catalog (`run`, `list`, `show`, `source`, `check`, `guide`, resources). `run` returns Engine `Response` JSON with explanations always on. Write tools (`add_spec`, …) are CLI-only (`lemma mcp --write`).
+
 `Lemma.OpenAPI` is a separate module (HTTP OpenAPI document helpers via `lemma_openapi`). It is not part of the core `Lemma` engine table above.
 
 ## Engine lifecycle

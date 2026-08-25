@@ -122,7 +122,7 @@ enum Commands {
         watch: bool,
         /// Enable explanation generation
         #[arg(long)]
-        explanations: bool,
+        explain: bool,
         /// Wall-clock timeout for a single evaluation request, in second
         #[arg(long, default_value = "10", value_name = "SECONDS")]
         eval_timeout: u64,
@@ -142,9 +142,9 @@ enum Commands {
         /// Workspace directory or `.lemma` file (default: current directory)
         #[arg(long, value_name = "PATH")]
         prefix: Option<PathBuf>,
-        /// Enable admin tools: add_spec, update_spec, remove_spec, clear, install (read-only by default)
+        /// Enable write tools: add_spec, update_spec, remove_spec, clear, install (read-only by default)
         #[arg(long)]
-        admin: bool,
+        write: bool,
         /// Wall-clock timeout for a single request, in second
         #[arg(long, default_value = "10", value_name = "SECONDS")]
         request_timeout: u64,
@@ -303,7 +303,7 @@ fn main() {
             host,
             port,
             watch,
-            explanations,
+            explain,
             eval_timeout,
             cors,
         } => server_command(
@@ -311,16 +311,16 @@ fn main() {
             host,
             *port,
             *watch,
-            *explanations,
+            *explain,
             *eval_timeout,
             *cors,
         ),
         Commands::Lsp { stdio: _ } => lsp_command(),
         Commands::Mcp {
             prefix,
-            admin,
+            write,
             request_timeout,
-        } => mcp_command(workspace_dir(prefix.as_ref()), *admin, *request_timeout),
+        } => mcp_command(workspace_dir(prefix.as_ref()), *write, *request_timeout),
         Commands::Install {
             dependency,
             prefix,
@@ -639,7 +639,7 @@ fn server_command(
     host: &str,
     port: u16,
     watch: bool,
-    explanations: bool,
+    explain: bool,
     eval_timeout_secs: u64,
     cors: bool,
 ) -> Result<()> {
@@ -666,7 +666,7 @@ fn server_command(
             host,
             port,
             watch,
-            explanations,
+            explain,
             source.to_path_buf(),
             eval_timeout_secs,
             cors,
@@ -682,12 +682,12 @@ fn lsp_command() -> Result<()> {
     lemma_lsp::stdio::run_stdio(Some(workspace_files)).map_err(anyhow::Error::from)
 }
 
-fn mcp_command(workdir: &Path, admin: bool, request_timeout_secs: u64) -> Result<()> {
+fn mcp_command(workdir: &Path, write: bool, request_timeout_secs: u64) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
 
     let config = mcp::McpConfig {
-        admin,
+        write,
         request_timeout: std::time::Duration::from_secs(request_timeout_secs),
     };
 

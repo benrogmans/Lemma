@@ -1,6 +1,7 @@
-//! Unified ratio units: multiple `ratio` types per spec, shared builtin/custom units in the
-//! unit index, cross-type arithmetic/comparison, per-type `as` scoping, and expression-level
-//! (anonymous) ratios. Assertions use canonical `ValueKind` + `RationalInteger`, not display
+//! Unified ratio units: multiple `ratio` types per spec, shared builtin `percent` /
+//! `permille` in the unit index, unique custom unit names, cross-type
+//! arithmetic/comparison, per-type `as` scoping, and expression-level (anonymous)
+//! ratios. Assertions use canonical `ValueKind` + `RationalInteger`, not display
 //! substrings alone.
 
 use lemma::DateTimeValue;
@@ -339,7 +340,7 @@ rule margin_higher: margin_pct > insurance_pct
 }
 
 // -----------------------------------------------------------------------------
-// Section 3 — Per-type `as` scoping and shared custom units
+// Section 3 — Per-type `as` scoping and unique custom ratio units
 // -----------------------------------------------------------------------------
 
 #[test]
@@ -378,41 +379,25 @@ rule bad: margin as basis_points
 }
 
 #[test]
-fn shared_custom_unit_same_factor_two_types_number_as_ok() {
-    let code = r#"
-spec s
-data spread: ratio
-  -> unit basis_points: 10000
-data fee: ratio
-  -> unit basis_points: 10000
-rule from_number: 500 basis_points
-"#;
-    let mut engine = Engine::new();
-    load_ok(&mut engine, code, "shared_bps.lemma");
-
-    let response = run_spec(&engine, "s", HashMap::new());
-    assert_ratio_exact(
-        rule_value(&response, "from_number"),
-        "from_number",
-        "0.05",
-        Some("basis_points"),
-    );
-}
-
-#[test]
-fn conflicting_basis_points_factor_errors_at_load() {
+fn second_custom_ratio_unit_declarer_errors_at_load() {
     let code = r#"
 spec s
 data spread_a: ratio
   -> unit basis_points: 10000
 data spread_b: ratio
-  -> unit basis_points: 5000
+  -> unit basis_points: 10000
 rule out: spread_a
 "#;
     expect_load_error(
         code,
-        "conflict_bps.lemma",
-        &["spread_a", "spread_b", "basis_points"],
+        "unique_bps.lemma",
+        &[
+            "spread_a",
+            "spread_b",
+            "basis_points",
+            "defined on both",
+            "declared only once",
+        ],
     );
 }
 
@@ -433,41 +418,26 @@ rule out: margin
 }
 
 #[test]
-fn mixed_match_and_mismatch_factors_errors_on_first_mismatch() {
+fn second_custom_ratio_unit_declarer_among_three_types_errors() {
     let code = r#"
 spec s
-data spread_a: ratio
-  -> unit basis_points: 10000
-  -> unit ten_thousandth: 10000
-data spread_b: ratio
-  -> unit basis_points: 10000
-  -> unit ten_thousandth: 5000
-rule out: spread_a
+data a: ratio
+  -> unit thirds: 3
+data b: ratio
+  -> unit thirds: 3
+data c: ratio
+  -> unit thirds: 6
+rule out: a
 "#;
     expect_load_error(
         code,
-        "mixed_match_mismatch.lemma",
-        &["spread_a", "spread_b", "ten_thousandth"],
+        "three_types_unique.lemma",
+        &["thirds", "defined on both", "declared only once"],
     );
 }
 
 #[test]
-fn three_types_third_introduces_factor_conflict() {
-    let code = r#"
-spec s
-data a: ratio
-  -> unit thirds: 3
-data b: ratio
-  -> unit thirds: 3
-data c: ratio
-  -> unit thirds: 6
-rule out: a
-"#;
-    expect_load_error(code, "three_types_conflict.lemma", &["thirds"]);
-}
-
-#[test]
-fn three_types_third_introduces_factor_conflict_reordered() {
+fn second_custom_ratio_unit_declarer_reordered_errors() {
     let code = r#"
 spec s
 data c: ratio
@@ -478,7 +448,11 @@ data b: ratio
   -> unit thirds: 3
 rule out: a
 "#;
-    expect_load_error(code, "three_types_conflict_reordered.lemma", &["thirds"]);
+    expect_load_error(
+        code,
+        "three_types_unique_reordered.lemma",
+        &["thirds", "defined on both", "declared only once"],
+    );
 }
 
 // -----------------------------------------------------------------------------

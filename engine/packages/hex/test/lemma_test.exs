@@ -626,30 +626,59 @@ defmodule LemmaTest do
   end
 
   describe "mcp" do
-    test "list_tools includes evaluate list show source check guide" do
+    test "list_tools includes run evaluate list show source check guide" do
       assert {:ok, tools} = Lemma.Mcp.list_tools()
       names = Enum.map(tools, & &1["name"])
 
-      assert names == ["evaluate", "list", "show", "source", "check", "guide"]
+      assert names == ["run", "evaluate", "list", "show", "source", "check", "guide"]
       refute "add_spec" in names
       assert hd(tools)["inputSchema"]["required"] == ["spec"]
+      assert Enum.at(tools, 1)["name"] == "evaluate"
+      assert Enum.at(tools, 1)["description"] =~ "Deprecated"
     end
 
-    test "evaluate and list on a loaded engine" do
+    test "run and list on a loaded engine" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec)
 
       assert {:ok, text} =
-               Lemma.Mcp.evaluate(engine, %{
+               Lemma.Mcp.run(engine, %{
                  "spec" => "pricing",
-                 "rule" => "total",
-                 "data" => ["quantity=3"]
+                 "rules" => "total",
+                 "data" => %{"quantity" => 3}
                })
 
-      assert text =~ "total:"
-      assert text =~ "30"
+      response = Jason.decode!(text)
+      assert response["results"]["total"]["display"] == "30"
+      assert is_map(response["results"]["total"]["explanation"])
+
+      assert {:ok, alias_text} =
+               Lemma.Mcp.evaluate(engine, %{
+                 "spec" => "pricing",
+                 "rules" => "total",
+                 "data" => %{"quantity" => 3}
+               })
+
+      alias_response = Jason.decode!(alias_text)
+
+      assert alias_response["results"]["total"]["display"] ==
+               response["results"]["total"]["display"]
+
+      assert alias_response["results"]["total"]["explanation"]["body"] ==
+               response["results"]["total"]["explanation"]["body"]
+
       assert {:ok, list} = Lemma.Mcp.list(engine, %{})
       assert list =~ "pricing"
+    end
+
+    test "check success returns quality JSON array" do
+      assert {:ok, text} =
+               Lemma.Mcp.check(%{
+                 "sources" => [["ok.lemma", "spec ok\nrule r: 1\n"]]
+               })
+
+      recs = Jason.decode!(text)
+      assert is_list(recs)
     end
 
     test "check diagnostics for invalid source" do
@@ -662,6 +691,7 @@ defmodule LemmaTest do
     test "guide default is evaluate guide" do
       assert {:ok, text} = Lemma.Mcp.guide(%{})
       assert text =~ "Talk like a consultant"
+      assert text =~ "`run`"
     end
   end
 end

@@ -1,5 +1,5 @@
-//! Expression-scope unit index: bare names may have multiple owners.
-//! Optionally qualify; must qualify when ambiguous.
+//! Expression-scope unit index: one declarer per bare unit name.
+//! Qualify with Type.unit or alias.Type.unit (not alias.unit).
 
 use crate::planning::semantics::{LemmaType, TypeSpecification};
 use std::collections::{BTreeSet, HashMap};
@@ -114,7 +114,8 @@ impl UnitIndex {
 
     /// Merge one measure unit name from `resolved_type` into the index.
     ///
-    /// Applies replace-by-extends, same-family factor checks, and cross-kind ambiguity.
+    /// Keeps the declarer as bare owner when a child extends a parent. Rejects a second
+    /// independent declarer of the same unit name. Same-family factor checks unchanged.
     pub fn merge_measure_unit(
         &mut self,
         unit: String,
@@ -132,8 +133,8 @@ impl UnitIndex {
         }
 
         let resolved_ref = resolved_type.as_ref();
-        let mut replace_indices = Vec::new();
         let mut skip_insert = false;
+        let mut reclaim_indices = Vec::new();
         for (index, owner) in owners.iter().enumerate() {
             let existing_type = owner.owning_type.as_ref();
             let existing_name = owner.type_name.as_str();
@@ -151,9 +152,11 @@ impl UnitIndex {
             if existing_type.is_measure() && (current_extends_existing || existing_extends_current)
             {
                 if current_extends_existing {
-                    replace_indices.push(index);
-                } else {
+                    // Child registering inherited unit; declarer already owns bare name.
                     skip_insert = true;
+                } else {
+                    // Parent declarer arrived after child claimed inherited unit (HashMap order).
+                    reclaim_indices.push(index);
                 }
                 continue;
             }
@@ -194,12 +197,20 @@ impl UnitIndex {
                     });
                 }
             }
-            // Cross-type measure name clash: keep both owners (qualify at use).
+
+            if existing_type.is_measure() {
+                return Err(UnitMergeConflict::Ambiguous {
+                    unit,
+                    existing_name: existing_name.to_string(),
+                    new_name: type_name.to_string(),
+                });
+            }
         }
 
-        for index in replace_indices.into_iter().rev() {
+        for index in reclaim_indices.into_iter().rev() {
             owners.remove(index);
         }
+
         if !skip_insert {
             owners.push(UnitOwner {
                 owning_type: Arc::clone(resolved_type),
@@ -265,24 +276,30 @@ impl UnitIndex {
             if existing_type.name() == resolved_ref.name() {
                 continue;
             }
-            if let (
-                TypeSpecification::Ratio {
-                    units: existing_units,
-                    ..
-                },
-                TypeSpecification::Ratio {
-                    units: new_units, ..
-                },
-            ) = (&existing_type.specifications, &resolved_ref.specifications)
-            {
-                let same_factor = existing_units
-                    .iter()
-                    .find(|existing_unit| existing_unit.name == unit)
-                    .zip(new_units.iter().find(|new_unit| new_unit.name == unit))
-                    .is_some_and(|(existing_unit, new_unit)| existing_unit.value == new_unit.value);
-                if same_factor {
-                    skip_insert = true;
-                    continue;
+            // Builtin percent/permille are shared across named ratio types (same factors).
+            // Custom ratio unit names still have one independent declarer.
+            if matches!(unit.as_str(), "percent" | "permille") {
+                if let (
+                    TypeSpecification::Ratio {
+                        units: existing_units,
+                        ..
+                    },
+                    TypeSpecification::Ratio {
+                        units: new_units, ..
+                    },
+                ) = (&existing_type.specifications, &resolved_ref.specifications)
+                {
+                    let same_factor = existing_units
+                        .iter()
+                        .find(|existing_unit| existing_unit.name == unit)
+                        .zip(new_units.iter().find(|new_unit| new_unit.name == unit))
+                        .is_some_and(|(existing_unit, new_unit)| {
+                            existing_unit.value == new_unit.value
+                        });
+                    if same_factor {
+                        skip_insert = true;
+                        continue;
+                    }
                 }
             }
             return Err(UnitMergeConflict::AmbiguousRatio {
@@ -329,33 +346,30 @@ impl UnitIndex {
         match segments.len() {
             1 => match owners {
                 [] => Err(format!(
-                    "Unknown unit '{bare}' is not in scope for this spec"
+                    "Unknown unit '{bare}'. Declare it on a measure or ratio type, or import it with uses."
                 )),
                 [only] => Ok((bare, Arc::clone(&only.owning_type))),
                 many => Err(format!(
-                    "Unit '{bare}' is ambiguous. Qualify as one of: {}",
+                    "Unit '{bare}' matches more than one type. Write one of: {}",
                     format_qualifier_list(many, &bare)
                 )),
             },
             2 => {
-                let first = &segments[0];
-                let mut matches: Vec<&UnitOwner> = Vec::new();
-                for owner in owners {
-                    let type_name_match = owner.type_name == *first;
-                    let alias_sugar = owner.import_alias.as_deref() == Some(first.as_str())
-                        && owners_unique_under_alias(owners, first);
-                    if type_name_match || alias_sugar {
-                        matches.push(owner);
-                    }
-                }
+                // Type.unit only. Import-alias sugar (alias.unit) is rejected: use alias.Type.unit.
+                let type_name = &segments[0];
+                let mut matches: Vec<&UnitOwner> = owners
+                    .iter()
+                    .filter(|owner| owner.type_name == *type_name)
+                    .collect();
                 dedupe_owner_matches(&mut matches);
                 match matches.as_slice() {
                     [only] => Ok((bare, Arc::clone(&only.owning_type))),
                     [] => Err(format!(
-                        "Unknown unit '{unit_ref}' is not in scope for this spec"
+                        "Unknown unit '{unit_ref}'. Use Type.unit or alias.Type.unit \
+                         (for example units.mass.kilogram), not alias.unit."
                     )),
                     _ => Err(format!(
-                        "Unit '{unit_ref}' is ambiguous. Qualify as one of: {}",
+                        "Unit '{unit_ref}' matches more than one type. Write one of: {}",
                         format_qualifier_list(owners, &bare)
                     )),
                 }
@@ -373,14 +387,55 @@ impl UnitIndex {
                 match matches.as_slice() {
                     [only] => Ok((bare, Arc::clone(&only.owning_type))),
                     [] => Err(format!(
-                        "Unknown unit '{unit_ref}' is not in scope for this spec"
+                        "Unknown unit '{unit_ref}'. Declare it on a measure or ratio type, or import it with uses."
                     )),
-                    _ => Err(format!("Unit '{unit_ref}' matched multiple owners")),
+                    _ => Err(format!("Unit '{unit_ref}' matches more than one type.")),
                 }
             }
             _ => Err(format!(
-                "Invalid unit path '{unit_ref}'. Use unit, Type.unit, alias.unit, or alias.Type.unit"
+                "Invalid unit path '{unit_ref}'. Use unit, Type.unit, or alias.Type.unit"
             )),
+        }
+    }
+
+    /// Type.unit / alias.Type.unit when the named measure inherits the unit but is not the bare owner.
+    #[must_use]
+    pub fn resolve_via_named_measure_type(
+        unit_ref: &str,
+        resolved: &HashMap<String, Arc<LemmaType>>,
+    ) -> Option<(String, Arc<LemmaType>)> {
+        let segments: Vec<String> = unit_ref
+            .split('.')
+            .map(|segment| crate::parsing::ast::ascii_lowercase_logical_name(segment.to_string()))
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        let (type_name, bare) = match segments.as_slice() {
+            [type_name, bare] => (type_name.as_str(), bare.as_str()),
+            [_, type_name, bare] => (type_name.as_str(), bare.as_str()),
+            _ => return None,
+        };
+        let lemma_type = resolved.get(type_name)?;
+        if !lemma_type.is_measure() {
+            return None;
+        }
+        let names = lemma_type.measure_unit_names()?;
+        if !names.contains(&bare) {
+            return None;
+        }
+        Some((bare.to_string(), Arc::clone(lemma_type)))
+    }
+
+    /// Index resolve, then named-measure Type.unit fallback for extension binding.
+    pub fn resolve_with_named_types(
+        &self,
+        unit_ref: &str,
+        resolved: &HashMap<String, Arc<LemmaType>>,
+    ) -> Result<(String, Arc<LemmaType>), String> {
+        match self.resolve(unit_ref) {
+            Ok(hit) => Ok(hit),
+            Err(index_err) => {
+                Self::resolve_via_named_measure_type(unit_ref, resolved).ok_or(index_err)
+            }
         }
     }
 
@@ -418,14 +473,6 @@ fn type_declares_unit(lemma_type: &LemmaType, unit_name: &str) -> bool {
     }
 }
 
-fn owners_unique_under_alias(owners: &[UnitOwner], alias: &str) -> bool {
-    owners
-        .iter()
-        .filter(|owner| owner.import_alias.as_deref() == Some(alias))
-        .count()
-        == 1
-}
-
 fn dedupe_owner_matches(matches: &mut Vec<&UnitOwner>) {
     let mut seen = BTreeSet::new();
     matches.retain(|owner| {
@@ -443,9 +490,6 @@ fn format_qualifier_list(owners: &[UnitOwner], bare: &str) -> String {
         paths.insert(format!("{}.{}", owner.type_name, bare));
         if let Some(alias) = &owner.import_alias {
             paths.insert(format!("{}.{}.{}", alias, owner.type_name, bare));
-            if owners_unique_under_alias(owners, alias) {
-                paths.insert(format!("{alias}.{bare}"));
-            }
         }
     }
     paths.into_iter().collect::<Vec<_>>().join(", ")
@@ -485,6 +529,32 @@ mod tests {
     }
 
     #[test]
+    fn merge_parent_reclaims_inherited_unit_from_child() {
+        let mut index = UnitIndex::new();
+        let money = measure_type("money", "eur");
+        let money2 = Arc::new(LemmaType::new(
+            "money2".to_string(),
+            money.specifications.clone(),
+            TypeExtends::custom_local("money".to_string(), "money".to_string()),
+        ));
+        index
+            .merge_measure_unit("eur".into(), &money2, "money2", None, "money")
+            .expect("child first");
+        assert_eq!(
+            index.unique_owner("eur").map(|t| t.name()),
+            Some("money2".into())
+        );
+        index
+            .merge_measure_unit("eur".into(), &money, "money", None, "money")
+            .expect("parent reclaim");
+        assert_eq!(
+            index.unique_owner("eur").map(|t| t.name()),
+            Some("money".into()),
+            "declarer must reclaim bare ownership"
+        );
+    }
+
+    #[test]
     fn bare_unique_resolves() {
         let mut index = UnitIndex::new();
         let mass = measure_type("mass", "kilogram");
@@ -499,43 +569,72 @@ mod tests {
         let (bare, owner) = index.resolve("kilogram").expect("unique");
         assert_eq!(bare, "kilogram");
         assert_eq!(owner.name(), "mass");
-        let (bare, owner) = index.resolve("units.kilogram").expect("sugar");
+        let sugar_err = index
+            .resolve("units.kilogram")
+            .expect_err("import-alias sugar must be rejected");
+        assert!(
+            sugar_err.contains("Unknown") || sugar_err.contains("alias.Type.unit"),
+            "got: {sugar_err}"
+        );
+        let (bare, owner) = index.resolve("units.mass.kilogram").expect("full");
         assert_eq!(bare, "kilogram");
         assert_eq!(owner.name(), "mass");
-        let (bare, owner) = index.resolve("units.mass.kilogram").expect("full");
+        let (bare, owner) = index.resolve("mass.kilogram").expect("type.unit");
         assert_eq!(bare, "kilogram");
         assert_eq!(owner.name(), "mass");
     }
 
     #[test]
-    fn bare_ambiguous_requires_qualify() {
+    fn two_segment_import_alias_unit_rejected() {
+        let mut index = UnitIndex::new();
+        let mass = measure_type("mass", "kilogram");
+        index.insert_owner(
+            "kilogram".into(),
+            UnitOwner {
+                owning_type: Arc::clone(&mass),
+                type_name: "mass".into(),
+                import_alias: Some("units".into()),
+            },
+        );
+        assert!(
+            index.resolve("units.kilogram").is_err(),
+            "alias.unit sugar rejected even when unique under alias"
+        );
+        index
+            .resolve("units.mass.kilogram")
+            .expect("alias.Type.unit must resolve");
+    }
+
+    #[test]
+    fn merge_second_measure_declarer_rejected() {
         let mut index = UnitIndex::new();
         let a = measure_type("money_a", "eur");
         let b = measure_type("money_b", "eur");
-        index.insert_owner(
-            "eur".into(),
-            UnitOwner {
-                owning_type: a,
-                type_name: "money_a".into(),
-                import_alias: None,
-            },
+        index
+            .merge_measure_unit("eur".into(), &a, "money_a", None, "money_a")
+            .expect("first declarer");
+        let err = index
+            .merge_measure_unit("eur".into(), &b, "money_b", None, "money_b")
+            .expect_err("second independent eur declarer must Err");
+        match err {
+            UnitMergeConflict::Ambiguous {
+                unit,
+                existing_name,
+                new_name,
+            } => {
+                assert_eq!(unit, "eur");
+                assert!(
+                    (existing_name == "money_a" && new_name == "money_b")
+                        || (existing_name == "money_b" && new_name == "money_a"),
+                    "got {existing_name} / {new_name}"
+                );
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        assert!(
+            index.has_unique_owner("eur"),
+            "index must keep sole first declarer after rejected merge"
         );
-        index.insert_owner(
-            "eur".into(),
-            UnitOwner {
-                owning_type: b,
-                type_name: "money_b".into(),
-                import_alias: None,
-            },
-        );
-        assert!(index.unique_owner("eur").is_none());
-        assert!(!index.has_unique_owner("eur"));
-        let msg = index.resolve("eur").expect_err("ambiguous");
-        assert!(msg.contains("ambiguous") || msg.contains("Ambiguous") || msg.contains("Qualify"));
-        assert!(msg.contains("money_a.eur"));
-        assert!(msg.contains("money_b.eur"));
-        index.resolve("money_a.eur").expect("qualified a");
-        index.resolve("money_b.eur").expect("qualified b");
     }
 
     #[test]
@@ -582,7 +681,24 @@ mod tests {
             )
             .expect("second alias");
         assert_eq!(index.owners_for("percent").len(), 2);
-        index.resolve("alpha.percent").expect("alpha sugar");
-        index.resolve("beta.percent").expect("beta sugar");
+        assert!(
+            index.resolve("alpha.percent").is_err(),
+            "alias.unit sugar rejected for ratio units"
+        );
+        assert!(index.resolve("beta.percent").is_err());
+        index
+            .resolve("alpha.rate.percent")
+            .expect("alpha.Type.unit");
+        index.resolve("beta.rate.percent").expect("beta.Type.unit");
+        let type_unit_err = index
+            .resolve("rate.percent")
+            .expect_err("Type.unit ambiguous when same type_name appears under two aliases");
+        assert!(
+            type_unit_err.contains("more than one type")
+                || type_unit_err.contains("Write one of")
+                || type_unit_err.contains("ambiguous")
+                || type_unit_err.contains("Qualify"),
+            "got: {type_unit_err}"
+        );
     }
 }

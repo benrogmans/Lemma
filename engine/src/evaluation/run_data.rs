@@ -25,6 +25,126 @@ impl RunDataValue {
     pub fn string(value: impl Into<String>) -> Self {
         Self::String(value.into())
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::String(s) => s.trim().is_empty(),
+            Self::MeasureMap(map) | Self::RatioMap(map) => map.is_empty(),
+            Self::Boolean(_) => false,
+        }
+    }
+}
+
+/// Parse one JSON value into a [`RunDataValue`] (SDK / MCP / WASM wire shape).
+pub fn run_data_value_from_json_value(value: serde_json::Value) -> Result<RunDataValue, String> {
+    match value {
+        serde_json::Value::String(s) => Ok(RunDataValue::String(s)),
+        serde_json::Value::Bool(b) => Ok(RunDataValue::Boolean(b)),
+        serde_json::Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                Ok(RunDataValue::String(n.to_string()))
+            } else {
+                Err("decimal values must be passed as strings to preserve exactness".to_string())
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            if obj.is_empty() {
+                return Err("data value object must not be empty".to_string());
+            }
+            if obj.len() == 2 && obj.contains_key("value") && obj.contains_key("unit") {
+                return Err(
+                    "the {value, unit} object shape is not supported; use a unit map like {\"eur\": \"84\"}"
+                        .to_string(),
+                );
+            }
+            if obj.values().all(|v| v.is_string()) {
+                let map: BTreeMap<String, String> = obj
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            v.as_str()
+                                .expect("BUG: object values checked as strings")
+                                .to_string(),
+                        )
+                    })
+                    .collect();
+                return Ok(RunDataValue::MeasureMap(map));
+            }
+            Err("data value object must be a unit map with string magnitudes".to_string())
+        }
+        serde_json::Value::Null => Err("data value must not be null".to_string()),
+        serde_json::Value::Array(_) => Err("data value must not be an array".to_string()),
+    }
+}
+
+/// Convert SDK/MCP/WASM `data` object to string map for [`crate::Engine::run`].
+///
+/// Single-entry unit maps become convenience strings (`"84 eur"`). Multi-key maps
+/// are rejected until `Engine::run` accepts typed [`RunDataValue`] directly.
+pub fn parse_run_data_object(
+    data: &Option<serde_json::Value>,
+) -> Result<HashMap<String, String>, String> {
+    let Some(value) = data else {
+        return Ok(HashMap::new());
+    };
+    if value.is_null() {
+        return Ok(HashMap::new());
+    }
+    let map: HashMap<String, serde_json::Value> = serde_json::from_value(value.clone())
+        .map_err(|e| format!("data must be a plain object: {e}"))?;
+    map.into_iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, v)| {
+            let input = run_data_value_from_json_value(v)?;
+            match input {
+                RunDataValue::String(s) => Ok((k, s)),
+                RunDataValue::Boolean(b) => Ok((k, b.to_string())),
+                RunDataValue::MeasureMap(m) | RunDataValue::RatioMap(m) => {
+                    if m.len() == 1 {
+                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
+                        Ok((k, format!("{mag} {unit}")))
+                    } else {
+                        Err(format!(
+                            "data value '{k}' must be a convenience string for run"
+                        ))
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
+/// Resolve SDK/MCP/WASM `rules` (string or string array) for [`crate::Engine::run`].
+pub fn resolve_run_rules(rules: &Option<serde_json::Value>) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = rules else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(s) = value.as_str() {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("rules must not be empty".to_string());
+        }
+        return Ok(Some(vec![trimmed.to_string()]));
+    }
+    if let Some(arr) = value.as_array() {
+        if arr.is_empty() {
+            return Err("rules must not be empty".to_string());
+        }
+        let names: Vec<String> = arr
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "rules must be an array of strings".to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        return Ok(Some(names));
+    }
+    Err("rules must be a string or array of strings".to_string())
 }
 
 pub fn parse_data_value(
@@ -229,12 +349,26 @@ impl RunData {
                 }
             };
 
+            let input_key = data_path.input_key();
+
+            if raw_value.is_empty() && type_arc.empty_runtime_input_vetoes() {
+                run_data.bindings.insert(
+                    data_path,
+                    OperationResult::Veto(VetoType::computation(
+                        type_arc.data_veto_message(&input_key, "cannot be empty."),
+                    )),
+                );
+                continue;
+            }
+
             let literal_value = match parse_data_value(&raw_value, &type_arc, &data_source) {
                 Ok(value) => value,
                 Err(error) => {
                     run_data.bindings.insert(
                         data_path,
-                        OperationResult::Veto(VetoType::computation(error.message().to_string())),
+                        OperationResult::Veto(VetoType::computation(
+                            type_arc.data_veto_message(&input_key, error.message()),
+                        )),
                     );
                     continue;
                 }
@@ -244,10 +378,9 @@ impl RunData {
             if size > limits.max_data_value_bytes {
                 run_data.bindings.insert(
                     data_path,
-                    OperationResult::Veto(VetoType::computation(format!(
-                        "max_data_value_bytes (limit: {}, actual: {})",
-                        limits.max_data_value_bytes, size
-                    ))),
+                    OperationResult::Veto(VetoType::computation(
+                        type_arc.data_veto_message(&input_key, "exceeds the size limit."),
+                    )),
                 );
                 continue;
             }
@@ -259,7 +392,9 @@ impl RunData {
             ) {
                 run_data.bindings.insert(
                     data_path,
-                    OperationResult::Veto(VetoType::computation(message)),
+                    OperationResult::Veto(VetoType::computation(
+                        type_arc.data_veto_message(&input_key, &message),
+                    )),
                 );
                 continue;
             }

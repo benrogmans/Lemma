@@ -1545,22 +1545,20 @@ impl<'a> GraphBuilder<'a> {
         )
     }
 
-    fn unit_index_for_spec(&self, current_spec: &LemmaSpec) -> Option<&UnitIndex> {
-        self.local_types
-            .iter()
-            .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
-            .map(|(_, _, t)| &t.unit_index)
-    }
-
     fn resolve_unit_ref(
         &self,
         current_spec: &LemmaSpec,
         unit_ref: &str,
     ) -> Result<(String, Arc<LemmaType>), String> {
-        let index = self
-            .unit_index_for_spec(current_spec)
-            .ok_or_else(|| format!("Unknown unit '{unit_ref}' is not in scope for this spec"))?;
-        index.resolve(unit_ref)
+        let resolved = find_types_by_spec(&self.local_types, current_spec)
+            .ok_or_else(|| {
+                format!(
+                    "Unknown unit '{unit_ref}'. Declare it on a measure or ratio type, or import it with uses."
+                )
+            })?;
+        resolved
+            .unit_index
+            .resolve_with_named_types(unit_ref, &resolved.resolved)
     }
 
     fn process_meta_fields(&mut self, spec: &LemmaSpec) {
@@ -2863,28 +2861,29 @@ impl<'a> GraphBuilder<'a> {
                     .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
                     .map(|(_, _, t)| t);
                 let unit_index = resolved_spec_types.map(|dt| &dt.unit_index);
-                let semantic_target = match conversion_target_to_semantic(target, unit_index) {
-                    Ok(t) => t,
-                    Err(msg) => {
-                        // When there is no unit index (e.g. primitive context), surface the
-                        // conversion error without a "valid units" list.
-                        let full_msg = unit_index
-                            .map(|idx| {
-                                let mut valid: Vec<&str> = idx.keys().map(String::as_str).collect();
-                                valid.sort_unstable();
-                                format!("{} Valid units: {}", msg, valid.join(", "))
-                            })
-                            .unwrap_or(msg);
-                        self.errors.push(Error::validation_with_context(
-                            full_msg,
-                            expr.source_location.clone(),
-                            None::<String>,
-                            Some(self.main_spec),
-                            None,
-                        ));
-                        return None;
-                    }
-                };
+                let resolved_map = resolved_spec_types.map(|dt| &dt.resolved);
+                let semantic_target =
+                    match conversion_target_to_semantic(target, unit_index, resolved_map) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            let full_msg = unit_index
+                                .map(|idx| {
+                                    let mut valid: Vec<&str> =
+                                        idx.keys().map(String::as_str).collect();
+                                    valid.sort_unstable();
+                                    format!("{} Valid units: {}", msg, valid.join(", "))
+                                })
+                                .unwrap_or(msg);
+                            self.errors.push(Error::validation_with_context(
+                                full_msg,
+                                expr.source_location.clone(),
+                                None::<String>,
+                                Some(self.main_spec),
+                                None,
+                            ));
+                            return None;
+                        }
+                    };
 
                 Some(Expression::with_source(
                     ExpressionKind::UnitConversion(Arc::new(converted_value), semantic_target),
@@ -8242,8 +8241,8 @@ rule r: i.x
             let usd_type = resolved.unit_index.unique_owner("usd").unwrap();
             assert_eq!(
                 eur_type.name.as_deref(),
-                Some("money2"),
-                "more derived type (money2) should own inherited eur"
+                Some("money"),
+                "declarer money must own inherited eur, not extension"
             );
             assert_eq!(
                 usd_type.name.as_deref(),
@@ -8363,6 +8362,11 @@ rule r: i.x
             let resolved = resolver
                 .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
                 .expect("additive extension unit must resolve");
+            let money = resolved
+                .resolved
+                .get("money")
+                .expect("money resolved")
+                .clone();
             let money2 = resolved
                 .resolved
                 .get("money2")
@@ -8380,15 +8384,15 @@ rule r: i.x
             let usd_owner = resolved.unit_index.unique_owner("usd").expect("usd owner");
             assert_eq!(
                 eur_owner.name.as_deref(),
-                Some("money2"),
-                "most-derived type must own inherited eur"
+                Some("money"),
+                "declarer money must own eur, not extension money2"
             );
             assert_eq!(
                 usd_owner.name.as_deref(),
                 Some("money2"),
-                "most-derived type must own new usd"
+                "money2 must own new unit usd"
             );
-            assert_eq!(eur_owner.as_ref(), money2.as_ref());
+            assert_eq!(eur_owner.as_ref(), money.as_ref());
             assert_eq!(usd_owner.as_ref(), money2.as_ref());
         }
 
@@ -8684,13 +8688,15 @@ rule r: i.x
                 .collect::<Vec<_>>()
                 .join("; ");
             assert!(
-                error_msg.contains("hour") && error_msg.contains("conflicting factors"),
+                error_msg.contains("hour")
+                    && (error_msg.contains("different values")
+                        || error_msg.contains("conflicting factors")),
                 "expected conflicting factor error for hour, got: {error_msg}"
             );
         }
 
         #[test]
-        fn test_spec_level_duplicate_unit_names_allowed_at_index() {
+        fn test_spec_level_duplicate_unit_names_rejected() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money_a: measure
@@ -8708,19 +8714,23 @@ rule r: i.x
       -> unit meter: 1.0"#,
             );
 
-            let resolved = resolver
-                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-                .expect("duplicate bare unit names across types must load");
-            assert!(resolved.unit_index.unique_owner("eur").is_none());
-            assert!(resolved.unit_index.unique_owner("meter").is_none());
-            resolved
-                .unit_index
-                .resolve("money_a.eur")
-                .expect("qualify money_a");
-            resolved
-                .unit_index
-                .resolve("money_b.eur")
-                .expect("qualify money_b");
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "second independent declarer of same unit name must Error"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("eur")
+                    || error_msg.contains("meter")
+                    || error_msg.contains("usd"),
+                "expected duplicate unit name Error, got: {error_msg}"
+            );
         }
 
         #[test]
@@ -8753,7 +8763,7 @@ rule r: i.x
         }
 
         #[test]
-        fn test_same_ratio_unit_same_factor_across_types_allowed() {
+        fn test_same_ratio_unit_across_types_rejected() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data spread_a: ratio
@@ -8763,9 +8773,21 @@ rule r: i.x
       -> unit basis_points: 10000"#,
             );
 
-            resolver
-                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-                .expect("same unit name and factor across ratio types must be allowed");
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "second independent declarer of same ratio unit must Error"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("basis_points"),
+                "expected duplicate ratio unit Error, got: {error_msg}"
+            );
         }
 
         #[test]
@@ -9971,7 +9993,7 @@ pub struct ResolvedSpecTypes {
     /// Raw defaults retained after [`value_kind_from_raw_suggestion`] for cross-spec parent lookup during later specs.
     pub(crate) source_defaults: HashMap<String, RawSuggestion>,
 
-    /// Expression-scope units. Bare names may have multiple owners; qualify when ambiguous.
+    /// Expression-scope units. One declarer per bare unit name; qualify with Type.unit or alias.Type.unit.
     /// Binding aliases never appear as index keys.
     pub unit_index: crate::planning::unit_index::UnitIndex,
 }
@@ -10854,8 +10876,27 @@ impl<'a> TypeResolver<'a> {
                 .get(type_name.as_str())
                 .expect("BUG: type was resolved but not in registry");
             let merge_result = if type_arc.is_measure() {
-                if matches!(data_type_def.parent, ParentType::Qualified { .. }) {
-                    Ok(())
+                if let ParentType::Qualified { spec_alias, inner } = &data_type_def.parent {
+                    match Self::parent_units_for_qualified_extension(
+                        self,
+                        spec,
+                        data_type_def,
+                        already_resolved,
+                        at,
+                        spec_alias,
+                        inner,
+                    ) {
+                        Ok(None) => Ok(()),
+                        Ok(Some(parent_units)) => Self::merge_additive_measure_units(
+                            spec,
+                            &mut unit_index,
+                            type_arc,
+                            data_type_def,
+                            None,
+                            &parent_units,
+                        ),
+                        Err(error) => Err(error),
+                    }
                 } else {
                     Self::add_measure_units_to_index(
                         spec,
@@ -11007,12 +11048,81 @@ impl<'a> TypeResolver<'a> {
         import_alias: Option<String>,
     ) -> Result<(), Error> {
         if matches!(defined_by.parent, ParentType::Qualified { .. }) {
-            unreachable!("BUG: qualified import alias rows must not register units");
+            unreachable!(
+                "BUG: Qualified parents must use parent_units_for_qualified_extension + merge_additive_measure_units"
+            );
         }
         let measure_family = resolved_type
             .measure_family_name()
             .expect("BUG: add_measure_units_to_index requires measure type with family");
         for unit in Self::extract_units_from_type(&resolved_type.specifications) {
+            unit_index
+                .merge_measure_unit(
+                    unit,
+                    resolved_type,
+                    &defined_by.name,
+                    import_alias.clone(),
+                    measure_family,
+                )
+                .map_err(|conflict| {
+                    Self::unit_merge_conflict_to_error(conflict, defined_by, spec)
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Parent unit names for a Qualified extension; `None` if parent not resolved yet.
+    fn parent_units_for_qualified_extension(
+        resolver: &TypeResolver<'_>,
+        spec: &LemmaSpec,
+        defined_by: &DataTypeDef,
+        already_resolved: &ResolvedTypesMap<'_>,
+        at: &EffectiveDate,
+        spec_alias: &str,
+        inner: &ParentType,
+    ) -> Result<Option<BTreeSet<String>>, Error> {
+        let ParentType::Custom {
+            name: parent_type_name,
+        } = inner
+        else {
+            return Ok(None);
+        };
+        let spec_ref = ast::SpecRef::same_repository(spec_alias.to_string());
+        let (_, target_spec) =
+            resolver.resolve_spec_for_import(spec, &spec_ref, &defined_by.source, at)?;
+        let Some(imported_resolved) = already_resolved
+            .iter()
+            .find(|(_, imported, _)| discovery::same_loaded_spec(imported, target_spec))
+            .map(|(_, _, types)| types)
+        else {
+            return Ok(None);
+        };
+        let Some(parent_type) = imported_resolved.resolved.get(parent_type_name.as_str()) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            Self::extract_units_from_type(&parent_type.specifications)
+                .into_iter()
+                .collect(),
+        ))
+    }
+
+    /// Register only units the Qualified extension newly declares (not inherited from parent).
+    fn merge_additive_measure_units(
+        spec: &LemmaSpec,
+        unit_index: &mut UnitIndex,
+        resolved_type: &Arc<LemmaType>,
+        defined_by: &DataTypeDef,
+        import_alias: Option<String>,
+        parent_units: &BTreeSet<String>,
+    ) -> Result<(), Error> {
+        let measure_family = resolved_type
+            .measure_family_name()
+            .expect("BUG: additive measure registration requires family");
+        for unit in Self::extract_units_from_type(&resolved_type.specifications) {
+            if parent_units.contains(&unit) {
+                continue;
+            }
             unit_index
                 .merge_measure_unit(
                     unit,
@@ -11063,20 +11173,20 @@ impl<'a> TypeResolver<'a> {
                 existing_name,
                 new_name,
             } => format!(
-                "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
-                unit, existing_name, new_name
+                "Unit '{unit}' is defined on both '{existing_name}' and '{new_name}'. \
+                 Each unit name may be declared only once."
             ),
             UnitMergeConflict::ConflictingFactors { unit, family } => format!(
-                "Unit '{}' in measure family '{}' is defined with conflicting factors",
-                unit, family
+                "Unit '{unit}' has different values on related measure types in '{family}'. \
+                 Use the same unit value on each type, or use different unit names."
             ),
             UnitMergeConflict::AmbiguousRatio {
                 unit,
                 existing_name,
                 new_name,
             } => format!(
-                "Ambiguous unit '{}'. Defined in multiple ratio types: '{}' and '{}'",
-                unit, existing_name, new_name
+                "Unit '{unit}' is defined on both '{existing_name}' and '{new_name}'. \
+                 Each unit name may be declared only once."
             ),
         };
         Error::validation_with_context(

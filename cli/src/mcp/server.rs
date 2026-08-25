@@ -160,9 +160,9 @@ mod imp {
 
     /// Configuration for the MCP server.
     pub struct McpConfig {
-        /// When true, admin tools (`add_spec`, `update_spec`, `remove_spec`, `clear`, `install`)
+        /// When true, write tools (`add_spec`, `update_spec`, `remove_spec`, `clear`, `install`)
         /// are advertised and allowed. When false (default), the server is read-only.
-        pub admin: bool,
+        pub write: bool,
         /// Wall-clock budget for handling a single request. Requests that
         /// exceed it get a JSON-RPC internal error; the worker finishes the
         /// stale request in the background and its late response is discarded.
@@ -172,7 +172,7 @@ mod imp {
     impl Default for McpConfig {
         fn default() -> Self {
             Self {
-                admin: false,
+                write: false,
                 request_timeout: Duration::from_secs(10),
             }
         }
@@ -181,7 +181,7 @@ mod imp {
     struct McpServer {
         engine: Engine,
         config: McpConfig,
-        /// Workspace directory for admin persist (add / update / remove / clear / install).
+        /// Workspace directory for write persist (add / update / remove / clear / install).
         workdir: PathBuf,
         registry: Box<dyn lemma::Registry>,
         /// Set after a successful legacy `initialize`. Process-scoped (stdio lifetime).
@@ -192,12 +192,12 @@ mod imp {
     fn validated_write_path(workdir: &Path, source_path: &Path) -> Result<PathBuf, McpError> {
         if source_path.as_os_str().is_empty() {
             return Err(McpError::invalid_params(
-                "source_id path must be non-empty".to_string(),
+                "attribute path must be non-empty".to_string(),
             ));
         }
         if source_path.is_absolute() {
             return Err(McpError::invalid_params(
-                "source_id must be a relative path within the workspace".to_string(),
+                "attribute must be a relative path within the workspace".to_string(),
             ));
         }
         for component in source_path.components() {
@@ -205,12 +205,12 @@ mod imp {
                 Component::Normal(_) | Component::CurDir => {}
                 Component::ParentDir => {
                     return Err(McpError::invalid_params(
-                        "source_id must not contain '..'".to_string(),
+                        "attribute must not contain '..'".to_string(),
                     ));
                 }
                 _ => {
                     return Err(McpError::invalid_params(
-                        "source_id must be a relative path within the workspace".to_string(),
+                        "attribute must be a relative path within the workspace".to_string(),
                     ));
                 }
             }
@@ -457,7 +457,7 @@ mod imp {
                 .as_array_mut()
                 .expect("BUG: lemma::mcp::list_tools serializes as an array");
 
-            if self.config.admin {
+            if self.config.write {
                 tools.push(serde_json::json!({
                     "name": "add_spec",
                     "description": "Load Lemma source as one or more specs (persists). Prefer check first; check alone does not load. On failure returns structured diagnostics. After success, call source and present that formatted text in chat for user verify; do not paste the unformatted draft.",
@@ -468,12 +468,12 @@ mod imp {
                                 "type": "string",
                                 "description": "The complete Lemma code to add"
                             },
-                            "source_id": {
+                            "attribute": {
                                 "type": "string",
-                                "description": "Stable id for this source (e.g. pricing.lemma)"
+                                "description": "Source label (path or @owner/repo), e.g. pricing.lemma"
                             }
                         },
-                        "required": ["code", "source_id"]
+                        "required": ["code", "attribute"]
                     }
                 }));
                 tools.push(serde_json::json!({
@@ -490,9 +490,9 @@ mod imp {
                                 "type": "string",
                                 "description": "The complete new Lemma source"
                             },
-                            "source_id": {
+                            "attribute": {
                                 "type": "string",
-                                "description": "Stable id for this source (e.g. pricing.lemma)"
+                                "description": "Source label (path or @owner/repo), e.g. pricing.lemma"
                             },
                             "repository": {
                                 "type": "string",
@@ -503,7 +503,7 @@ mod imp {
                                 "description": "Effective datetime of the version to replace"
                             }
                         },
-                        "required": ["spec", "code", "source_id"]
+                        "required": ["spec", "code", "attribute"]
                     }
                 }));
                 tools.push(serde_json::json!({
@@ -603,10 +603,10 @@ mod imp {
 
             match tool_name {
                 "add_spec" | "update_spec" | "remove_spec" | "clear" | "install"
-                    if !self.config.admin =>
+                    if !self.config.write =>
                 {
                     Err(McpError::invalid_params(
-                        "Admin tools are disabled. Start the server with --admin to enable them."
+                        "Write tools are disabled. Start the server with --write to enable them."
                             .to_string(),
                     ))
                 }
@@ -615,7 +615,7 @@ mod imp {
                 "remove_spec" => self.tool_remove_spec(arguments),
                 "clear" => self.tool_clear(arguments),
                 "install" => self.tool_install(arguments),
-                "evaluate" => map_tool_result(lemma::mcp::evaluate(&self.engine, arguments)),
+                "run" | "evaluate" => map_tool_result(lemma::mcp::run(&self.engine, arguments)),
                 "list" => self.tool_list(arguments),
                 "show" => map_tool_result(lemma::mcp::show(&self.engine, arguments)),
                 "source" => map_tool_result(lemma::mcp::source(&self.engine, arguments)),
@@ -1108,37 +1108,20 @@ mod imp {
                 ));
             }
 
-            let source_id = args["source_id"]
+            let attribute = args["attribute"]
                 .as_str()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| McpError::invalid_params("Missing 'source_id' field".to_string()))?;
+                .ok_or_else(|| McpError::invalid_params("Missing 'attribute' field".to_string()))?;
 
-            let source_type = lemma::SourceType::from_binding_label(source_id)
+            let source_type = lemma::SourceType::from_binding_label(attribute)
                 .map_err(McpError::invalid_params)?;
 
             Ok((code, source_type))
         }
 
         fn tool_list(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let mut output = match lemma::mcp::list(&self.engine, args) {
-                Ok(text) => text,
-                Err(error) => return map_tool_result(Err(error)),
-            };
-
-            let workspace_empty = self
-                .engine
-                .list()
-                .into_iter()
-                .find(|repository_group| repository_group.repository.is_none())
-                .expect("BUG: workspace repository must exist after Engine::new")
-                .specs
-                .is_empty();
-            if self.config.admin && workspace_empty {
-                output.push_str("\n\nUse the 'add_spec' tool to load workspace Lemma source.");
-            }
-
-            Ok(text_content(output))
+            map_tool_result(lemma::mcp::list(&self.engine, args))
         }
     }
 
@@ -1214,8 +1197,8 @@ mod imp {
 
         info!("Starting Lemma MCP server v{}", SERVER_VERSION);
         info!("Protocol version: {}", PROTOCOL_VERSION);
-        if config.admin {
-            info!("Admin mode enabled (--admin)");
+        if config.write {
+            info!("Write mode enabled (--write)");
         } else {
             info!("Read-only mode (default)");
         }
@@ -1402,11 +1385,11 @@ mod imp {
             )
         }
 
-        fn admin_server(workdir: PathBuf) -> McpServer {
+        fn write_server(workdir: PathBuf) -> McpServer {
             McpServer::new(
                 Engine::new(),
                 McpConfig {
-                    admin: true,
+                    write: true,
                     ..McpConfig::default()
                 },
                 workdir,
@@ -1574,7 +1557,7 @@ mod imp {
         #[test]
         fn install_writes_file_and_loads() {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = admin_server(dir.path().to_path_buf());
+            let mut s = write_server(dir.path().to_path_buf());
             let resp = s
                 .handle_request(tools_call(
                     1,
@@ -1607,7 +1590,7 @@ mod imp {
         #[test]
         fn install_force_must_be_bool() {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = admin_server(dir.path().to_path_buf());
+            let mut s = write_server(dir.path().to_path_buf());
             for bad in [serde_json::json!("true"), serde_json::json!(1)] {
                 let resp = s
                     .handle_request(tools_call(
@@ -1625,7 +1608,7 @@ mod imp {
         #[test]
         fn install_skips_unchanged() {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = admin_server(dir.path().to_path_buf());
+            let mut s = write_server(dir.path().to_path_buf());
             let first = s
                 .handle_request(tools_call(
                     1,
@@ -1654,7 +1637,7 @@ mod imp {
         #[test]
         fn install_missing_registry_spec_errors() {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = admin_server(dir.path().to_path_buf());
+            let mut s = write_server(dir.path().to_path_buf());
             let resp = s
                 .handle_request(tools_call(
                     1,
@@ -1678,7 +1661,7 @@ mod imp {
         #[test]
         fn install_non_at_id_reaches_registry() {
             let dir = tempfile::tempdir().unwrap();
-            let mut s = admin_server(dir.path().to_path_buf());
+            let mut s = write_server(dir.path().to_path_buf());
             let resp = s
                 .handle_request(tools_call(
                     1,
@@ -1709,7 +1692,7 @@ mod imp {
             fs::create_dir_all(other.parent().unwrap()).unwrap();
             fs::write(&other, &fixture).unwrap();
 
-            let mut s = admin_server(dir.path().to_path_buf());
+            let mut s = write_server(dir.path().to_path_buf());
             let resp = s
                 .handle_request(tools_call(
                     1,

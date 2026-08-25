@@ -15,12 +15,12 @@ Never present your interpretation as the truth ("that counts as…", "that's fin
 **Setup**
 
 1. **`list`**: learn available specs. Never invent spec names.
-2. **`show`** the chosen spec once. Do not call show again between asks. Never turn show into a questionnaire.
-3. **`evaluate`** one target `rule`. Read `missing_data` (name, type, help, suggest). `missing_data` is inputs still needed, not a queue order and not a script.
+2. **`show`** the chosen spec once. Do not call show again between asks. Never turn show into a questionnaire. Keep that Show for type/help/suggest lookups.
+3. **`run`** one target via `rules` (string or array). Response is Engine JSON (`results`, always with `explanation`). Per-rule `missing_data` is unbound input **keys** only — look up type, help, and suggest on the Show from step 2. Prefer tool `run` (deprecated alias `evaluate` still works).
 
 **After every user turn (primary loop)**
 
-4. Bind every `missing_data` field that utterance decides, including clear entailments across fields. Supply bindings and re-evaluate.
+4. Bind every `missing_data` field that utterance decides, including clear entailments across fields. Supply bindings in `data` (JSON object) and re-`run`.
 5. Do not ask again about a topic the user already settled with a broader claim. Synonym probes of the same claim are forbidden.
 6. **Ambiguous polarity** → do not bind; re-ask that one input clearly.
 7. **Broad / over-answer** that covers a topic → bind all fields that claim settles; do not keep grilling that topic.
@@ -29,13 +29,13 @@ Never present your interpretation as the truth ("that counts as…", "that's fin
 **When inputs remain (fallback)**
 
 9. Ask **one** natural question aimed at the next undecided *topic* (or the single blocking input). Prefer what a consultant would ask. At most one unanswered question in flight. Help may inform meaning; ask normally.
-10. If the missing list is huge, you may evaluate the next undecided intermediate gate to learn which topic to ask, still without dumping the schema.
+10. If the missing list is huge, you may `run` the next undecided intermediate gate to learn which topic to ask, still without dumping the schema.
 
 **When the rule answers (verify before done)**
 
 11. Do not treat the first complete evaluation as final. Present a short table the user can check:
     - **Details**: each input in readable wording (help label or plain language), with the value you used.
     - **Answer**: the outcome for their question and any other derived answers you relied on.
-12. Close with a statement, not a question: e.g. tell the user to say if anything requires adjustment. If they correct something, update the data, re-evaluate, and verify again. Only then treat the outcome as final.
+12. Close with a statement, not a question: e.g. tell the user to say if anything requires adjustment. If they correct something, update the data, re-`run`, and verify again. Only then treat the outcome as final.
 
 Repeat the intake loop until the rule answers, then verify, then stop.

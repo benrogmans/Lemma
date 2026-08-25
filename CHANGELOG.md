@@ -2,6 +2,34 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.9.8] - 2026-08-26
+
+0.9.8 aligns MCP with SDK `run`, requires one declaring type per unit name, and unifies HTTP explain with CLI `--explain`.
+
+### Added
+
+- **Hex `Lemma.Mcp.run/2`**: same catalog as CLI MCP `run`. `evaluate/2` remains as a deprecated alias.
+- **MCP `repository`**: optional on `run`, `show`, and `source` (with `spec` for a repo spec, or `repository` alone for a whole repo).
+
+### Changed
+
+- **Unit uniqueness**: a unit name may be declared on only one type in scope. A second independent `-> unit` with the same name is a planning error. Extensions inherit; bare binds the declarer; use `Type.unit` or `alias.Type.unit` for the extension.
+- **Import-alias unit sugar**: `alias.unit` (e.g. `units.kilogram`) is rejected. Write `alias.Type.unit` (`units.mass.kilogram`).
+- **Custom ratio units**: same uniqueness as measures. Builtin `percent` / `permille` stay shared across named ratio types when factors match.
+- **MCP `run`**: renamed from `evaluate` (deprecated alias kept). Args match SDK `run`: `rules` (string or array; `rule` rejected), JSON `data` object (not `name=value` strings). Returns Engine `Response` JSON; explanations always on (no `explain` arg).
+- **MCP `--write`**: replaces `--admin` for write tools (`add_spec`, `update_spec`, `remove_spec`, `clear`, `install`). `attribute` replaces `source_id`.
+- **MCP `check`**: success is `quality()` JSON array. Engine failures on `run` / `show` / `source` return `EngineError` JSON with `isError`.
+- **HTTP `--explain`**: `lemma server --explain` and client header `x-explain` replace `--explanations` / `x-explanations`. Hex `Lemma.OpenAPI.generate_openapi` option is `:explain`.
+- **HTTP GET `/{spec}`**: body is `Show` JSON (no `spec_set_id` wrapper).
+- **Runtime data vetoes**: reasons are `Data field [type]: …`. Empty non-text input vetoes before parse. Interactive prompts use the same field `[type]` labels.
+- **LLM authoring method**: Method fragment rewritten (inventory then distill, hard stop before write, resources of truth).
+
+### Removed
+
+- **`lemma mcp --admin`**: use `--write`.
+- **`alias.unit` qualification**: use `Type.unit` or `alias.Type.unit`.
+- **`lemma server --explanations`**: use `--explain`. Header `x-explanations` → `x-explain`.
+
 ## [0.9.7] - 2026-08-23
 
 0.9.7 aligns Learn docs with the LLM authoring guide, fixes release packaging for crates.io and Open VSX, and corrects SDK and reference documentation.

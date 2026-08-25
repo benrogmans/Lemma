@@ -20,39 +20,54 @@ pub struct ResourceDefinition {
     pub description: String,
 }
 
+fn run_input_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "spec": {
+                "type": "string",
+                "description": "Spec set id, e.g. pricing"
+            },
+            "repository": {
+                "type": "string",
+                "description": "Optional repository qualifier (e.g. lemma, @org/repo). Omit for workspace."
+            },
+            "rules": {
+                "description": "Optional: one rule name (string) or several (string array). Omit for all rules.",
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                ]
+            },
+            "data": {
+                "type": "object",
+                "description": "Optional input bindings. Integers as numbers; decimals as strings; unit maps as {\"eur\": \"84\"}. Partial is fine.",
+                "additionalProperties": true
+            },
+            "effective": {
+                "type": "string",
+                "description": "Optional: evaluate at a specific effective datetime (e.g. '2026', '2026-03', '2026-03-04', '2026-03-04T10:30:00Z')"
+            }
+        },
+        "required": ["spec"]
+    })
+}
+
 pub fn list_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
+            name: "run",
+            description: "Evaluate rules (Engine Response JSON, same as SDK run / lemma run --json -x). Always includes explanation trees. Pass `rules` to target one or more rules; omit for all. For human intake: call guide (default = evaluate guide; not topic full), then list, show once, run. missing_data is unbound input keys only — look up type/help/suggest on the Show already fetched. Primary loop: after each user turn, bind every field that utterance decides (entailments), re-run; ask at most one open topic-question when something remains. Never ask the user what the policy means. Never dispose interpretation as truth; use “should” when a judgment call cannot be answered. When the rule answers, present details+answer in domain language for user verify (no tooling jargon to the user) before treating as done. No questionnaire dumps. No re-call show between asks. Do not dump every show data field into run.",
+            input_schema: run_input_schema(),
+        },
+        ToolDefinition {
             name: "evaluate",
-            description: "Evaluate rules. Pass `rule` to target one rule; omit for all. For human intake: call guide (default = evaluate guide; not topic full), then list, show once, evaluate. missing_data lines include name, type, and help. Primary loop: after each user turn, bind every field that utterance decides (entailments), re-evaluate; ask at most one open topic-question when something remains. Never ask the user what the policy means. Never dispose interpretation as truth; use “should” when a judgment call cannot be answered. When the rule answers, present details+answer in domain language for user verify (no tooling jargon to the user) before treating as done. No questionnaire dumps. No re-call show between asks. Do not dump every show data field into evaluate. Returns display values, unit maps, reasoning, and missing_data when inputs are still needed.",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "spec": {
-                        "type": "string",
-                        "description": "Spec set id, e.g. pricing"
-                    },
-                    "rule": {
-                        "type": "string",
-                        "description": "Optional: name of a specific rule to evaluate. Omit to evaluate all rules."
-                    },
-                    "data": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional data values as 'name=value' (e.g. ['price=100', 'measure=5']). Partial is fine.",
-                        "default": []
-                    },
-                    "effective": {
-                        "type": "string",
-                        "description": "Optional: evaluate at a specific effective datetime (e.g. '2026', '2026-03', '2026-03-04', '2026-03-04T10:30:00Z')"
-                    }
-                },
-                "required": ["spec"]
-            }),
+            description: "Deprecated alias of `run`. Same arguments and Response JSON. Prefer `run`.",
+            input_schema: run_input_schema(),
         },
         ToolDefinition {
             name: "list",
-            description: "List loaded specs by repository (name, effective_from, effective_to). Call this first when you do not already know the exact spec name. Do not invent or guess spec names. For human intake call guide (default evaluate guide), then show once and evaluate.",
+            description: "List loaded specs by repository (name, effective_from, effective_to). Call this first when you do not already know the exact spec name. Do not invent or guess spec names. For human intake call guide (default evaluate guide), then show once and run. When the workspace is empty and write mode is enabled, use add_spec to load Lemma source.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -60,13 +75,17 @@ pub fn list_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "show",
-            description: "Return JSON Show for a spec: data catalog (types, constraints, suggestions, units, help) and rule output types. Call once after list. Static interface — not a required-input list, not a questionnaire, not something to re-call between evaluate/ask turns. Human intake: call guide (default = evaluate guide).",
+            description: "Return JSON Show for a spec: data catalog (types, constraints, suggestions, units, help) and rule output types. Call once after list. Static interface — not a required-input list, not a questionnaire, not something to re-call between run/ask turns. Human intake: call guide (default = evaluate guide).",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "spec": {
                         "type": "string",
                         "description": "Spec set id, e.g. pricing"
+                    },
+                    "repository": {
+                        "type": "string",
+                        "description": "Optional repository qualifier (e.g. lemma, @org/repo). Omit for workspace."
                     },
                     "effective": {
                         "type": "string",
@@ -78,17 +97,17 @@ pub fn list_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "source",
-            description: "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded units stdlib) for the whole repo, or `spec` for a workspace spec. After add_spec / update_spec, call this and paste the result in chat for user verify; do not present the draft you authored.",
+            description: "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded units stdlib) for the whole repo, or `spec` for a workspace or repository spec. After add_spec / update_spec, call this and paste the result in chat for user verify; do not present the draft you authored.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "repository": {
                         "type": "string",
-                        "description": "Repository qualifier (e.g. lemma). When set, returns formatted source for the entire repository."
+                        "description": "Repository qualifier (e.g. lemma). Alone: whole repository. With `spec`: that repo's spec."
                     },
                     "spec": {
                         "type": "string",
-                        "description": "Workspace spec set id (when repository is omitted)"
+                        "description": "Spec set id (workspace when repository omitted)"
                     },
                     "effective": {
                         "type": "string",
@@ -99,7 +118,7 @@ pub fn list_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "check",
-            description: "Validate Lemma sources (does not load). On success confirms syntax is valid. Call add_spec to load after check passes. On failure returns structured diagnostics (kind, message, suggestion, source line/column). Sources resolve cross-file `uses` within the batch. A leading `@` label loads as a dependency. Lemma has no `#` or `//` comments; commentary is valid only as a docstring immediately after the `spec` line. Before drafting new specs, call guide with topic full (or method then data). Finish Interrogate first: do not call check or add_spec in the same turn as the first policy questions; wait for answers or an explicit acceptance that the source already states the gaps.",
+            description: "Validate Lemma sources (does not load). On success returns JSON quality recommendations array (empty if none). Call add_spec to load after check passes. On failure returns structured diagnostics (kind, message, suggestion, source line/column). Sources resolve cross-file `uses` within the batch. A leading `@` label loads as a dependency. Lemma has no `#` or `//` comments; commentary is valid only as a docstring immediately after the `spec` line. Before drafting new specs, call guide with topic full (or method then data). Finish Interrogate first: do not call check or add_spec in the same turn as the first policy questions; wait for answers or an explicit acceptance that the source already states the gaps.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {

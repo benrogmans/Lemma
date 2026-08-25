@@ -16,7 +16,7 @@ Point the server at a workspace directory (or a single `.lemma` file) with `--pr
 
 ## Connect
 
-All of these clients start Lemma as a local stdio MCP server. Replace `/path/to/workspace` with your project directory. Add `--admin` to the args only when the assistant should create, update, remove, or install registry dependencies (see [Read-only vs write](#read-only-vs-write)).
+All of these clients start Lemma as a local stdio MCP server. Replace `/path/to/workspace` with your project directory. Add `--write` to the args only when the assistant should create, update, remove, or install registry dependencies (see [Read-only vs write](#read-only-vs-write)).
 
 Shared shape:
 
@@ -105,14 +105,14 @@ The server already ships authoring and evaluate guidance for the model. For lear
 
 By default the server is read-only: evaluate and inspect, no changes to the engine or disk.
 
-Pass `--admin` when you want the assistant to load or replace specs, remove them, clear the workspace load, or `install` (download into `lemma_deps/` and load). Only enable that for workspaces and agents you trust.
+Pass `--write` when you want the assistant to load or replace specs, remove them, clear the workspace load, or `install` (download into `lemma_deps/` and load). Only enable that for workspaces and agents you trust.
 
 ## How to work
 
 1. Install the CLI and set `--prefix` to your specs directory.
 2. Connect Claude, Gemini CLI, or Cursor as above (restart the client after config changes).
 3. Ask questions against your specs; ask for explanations when you care how a rule fired.
-4. For drafting new specs, enable `--admin` and ask the assistant to validate, then update the workspace when you are ready.
+4. For drafting new specs, enable `--write` and ask the assistant to validate, then update the workspace when you are ready.
 
 ## See also
 

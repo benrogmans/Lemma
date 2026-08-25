@@ -200,7 +200,7 @@ rule r: n
     assert!(rr.vetoed, "5 < 10 must veto rule r");
     assert_eq!(
         rr.veto_reason.as_deref(),
-        Some("5 is below minimum 10"),
+        Some("Data n [number]: 5 is below minimum 10"),
         "got: {:?}",
         rr.veto_reason
     );
@@ -222,7 +222,7 @@ rule r: n
     assert!(rr.vetoed, "10 > 5 must veto rule r");
     assert_eq!(
         rr.veto_reason.as_deref(),
-        Some("10 is above maximum 5"),
+        Some("Data n [number]: 10 is above maximum 5"),
         "got: {:?}",
         rr.veto_reason
     );
@@ -462,7 +462,7 @@ rule r: z
     assert!(rr.vetoed, "2 < child min 3 must veto");
     assert_eq!(
         rr.veto_reason.as_deref(),
-        Some("2 is below minimum 3"),
+        Some("Data z [y]: 2 is below minimum 3"),
         "child min veto must name 2 and 3, got: {:?}",
         rr.veto_reason
     );
@@ -474,7 +474,7 @@ rule r: z
     assert!(rr.vetoed, "11 > inherited max 10 must veto");
     assert_eq!(
         rr.veto_reason.as_deref(),
-        Some("11 is above maximum 10"),
+        Some("Data z [y]: 11 is above maximum 10"),
         "inherited max veto must name 11 and 10, got: {:?}",
         rr.veto_reason
     );
@@ -497,7 +497,7 @@ rule r: small_number
     assert!(rr.vetoed, "overridden max 100 must reject 200");
     assert_eq!(
         rr.veto_reason.as_deref(),
-        Some("200 is above maximum 100"),
+        Some("Data small_number [big_number]: 200 is above maximum 100"),
         "child max veto must name 200 and 100, got: {:?}",
         rr.veto_reason
     );
@@ -581,7 +581,7 @@ rule r: person_age
     assert!(rr.vetoed, "200 > 150 must veto via inherited max");
     assert_eq!(
         rr.veto_reason.as_deref(),
-        Some("200 is above maximum 150"),
+        Some("Data person_age [age]: 200 is above maximum 150"),
         "inherited max veto must name 200 and 150, got: {:?}",
         rr.veto_reason
     );

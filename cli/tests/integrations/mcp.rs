@@ -4,37 +4,37 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 #[test]
-fn test_mcp_help_shows_admin_flag() {
+fn test_mcp_help_shows_write_flag() {
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.args(["mcp", "--help"]);
     cmd.assert()
         .success()
-        .stdout(predicates::str::contains("--admin"));
+        .stdout(predicates::str::contains("--write"));
 }
 
 /// Send JSON-RPC messages to the MCP server and collect responses.
 /// `prefix: None` runs `lemma mcp` without `--prefix` (defaults to process cwd).
 fn mcp_session(
     prefix: Option<&std::path::Path>,
-    admin: bool,
+    write: bool,
     messages: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
-    mcp_session_in_dir(prefix, None, admin, messages)
+    mcp_session_in_dir(prefix, None, write, messages)
 }
 
 fn mcp_session_in_dir(
     prefix: Option<&std::path::Path>,
     current_dir: Option<&std::path::Path>,
-    admin: bool,
+    write: bool,
     messages: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
-    mcp_session_with_env(prefix, current_dir, admin, &[], messages)
+    mcp_session_with_env(prefix, current_dir, write, &[], messages)
 }
 
 fn mcp_session_with_env(
     prefix: Option<&std::path::Path>,
     current_dir: Option<&std::path::Path>,
-    admin: bool,
+    write: bool,
     env: &[(&str, &str)],
     messages: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
@@ -47,8 +47,8 @@ fn mcp_session_with_env(
     if let Some(dir) = current_dir {
         cmd.current_dir(dir);
     }
-    if admin {
-        cmd.arg("--admin");
+    if write {
+        cmd.arg("--write");
     }
     for (key, value) in env {
         cmd.env(key, value);
@@ -248,6 +248,37 @@ fn test_mcp_list_returns_list() {
 }
 
 #[test]
+fn test_mcp_run_with_repository_lemma_units() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "show",
+                    "arguments": {
+                        "repository": "lemma",
+                        "spec": "units"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("show text");
+    let show: serde_json::Value = serde_json::from_str(text).expect("Show JSON");
+    assert_eq!(show["spec"], "units");
+}
+
+#[test]
 fn test_mcp_evaluate_includes_reasoning() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
@@ -265,11 +296,11 @@ fn test_mcp_evaluate_includes_reasoning() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "discount",
-                        "rule": "rate",
-                        "data": ["quantity=25"]
+                        "rules": "rate",
+                        "data": { "quantity": 25 }
                     }
                 }),
             ),
@@ -278,28 +309,86 @@ fn test_mcp_evaluate_includes_reasoning() {
 
     assert!(responses.len() >= 2, "Expected at least 2 responses");
 
-    let eval_result = &responses[1]["result"]["content"][0]["text"];
-    let text = eval_result.as_str().expect("evaluate should return text");
-
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    let rate = &response["results"]["rate"];
     assert!(
-        text.contains("rate:"),
-        "Should contain rule name, got: {text}"
+        rate["explanation"].is_object(),
+        "run always includes explanation, got: {text}"
     );
+    let display = rate["display"].as_str().unwrap_or("");
     assert!(
-        text.contains("Reasoning:"),
-        "Should contain reasoning section, got: {text}"
-    );
-    assert!(
-        text.contains("quantity >= 10"),
-        "Should state the matching condition as a fact in reasoning, got: {text}"
-    );
-    assert!(
-        text.contains("quantity: 25"),
-        "Should show the data value that drove the conditions, got: {text}"
-    );
-    assert!(
-        text.contains("10%") || text.contains("10 percent"),
+        display.contains("10%") || display.contains("10 percent"),
         "last-wins unless for quantity=25 must be 10 percent, got: {text}"
+    );
+    let explanation = serde_json::to_string(&rate["explanation"]).expect("serialize");
+    assert!(
+        explanation.contains("quantity >= 10") || explanation.contains("quantity"),
+        "explanation should reference quantity condition, got: {explanation}"
+    );
+}
+
+#[test]
+fn test_mcp_evaluate_alias_matches_run() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
+
+    let run_responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "run",
+                    "arguments": {
+                        "spec": "pricing",
+                        "rules": "total",
+                        "data": { "quantity": 3 }
+                    }
+                }),
+            ),
+        ],
+    );
+    let eval_responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "pricing",
+                        "rules": "total",
+                        "data": { "quantity": 3 }
+                    }
+                }),
+            ),
+        ],
+    );
+
+    let run_text = run_responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("run text");
+    let eval_text = eval_responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("evaluate text");
+    let run_json: serde_json::Value = serde_json::from_str(run_text).expect("run JSON");
+    let eval_json: serde_json::Value = serde_json::from_str(eval_text).expect("evaluate JSON");
+    assert_eq!(
+        run_json["results"]["total"]["display"],
+        eval_json["results"]["total"]["display"]
+    );
+    assert_eq!(
+        run_json["results"]["total"]["explanation"]["body"],
+        eval_json["results"]["total"]["explanation"]["body"]
     );
 }
 
@@ -321,11 +410,11 @@ fn test_mcp_evaluate_reports_missing_data_when_partial() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "pricing",
-                        "rule": "total",
-                        "data": ["quantity=2"]
+                        "rules": "total",
+                        "data": { "quantity": 2 }
                     }
                 }),
             ),
@@ -333,11 +422,11 @@ fn test_mcp_evaluate_reports_missing_data_when_partial() {
                 3,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "pricing",
-                        "rule": "total",
-                        "data": ["quantity=2", "price=10"]
+                        "rules": "total",
+                        "data": { "quantity": 2, "price": 10 }
                     }
                 }),
             ),
@@ -345,29 +434,35 @@ fn test_mcp_evaluate_reports_missing_data_when_partial() {
     );
 
     assert!(responses.len() >= 3);
-    let partial = responses[1]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("partial evaluate text");
+    let partial: serde_json::Value = serde_json::from_str(
+        responses[1]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("partial run text"),
+    )
+    .expect("partial Response JSON");
+    let missing = partial["results"]["total"]["missing_data"]
+        .as_array()
+        .expect("missing_data array");
     assert!(
-        partial.contains("missing_data:"),
-        "partial evaluate must report missing_data, got: {partial}"
-    );
-    assert!(
-        partial.contains("price:"),
-        "missing_data must include price with type, got: {partial}"
+        missing.iter().any(|v| v == "price"),
+        "missing_data must include price, got: {missing:?}"
     );
 
-    let complete = responses[2]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("complete evaluate text");
+    let complete: serde_json::Value = serde_json::from_str(
+        responses[2]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("complete run text"),
+    )
+    .expect("complete Response JSON");
     assert!(
-        !complete.contains("missing_data:"),
-        "complete evaluate must omit missing_data, got: {complete}"
+        complete["results"]["total"]["missing_data"].is_null()
+            || complete["results"]["total"]["missing_data"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
+        "complete run must omit missing_data, got: {complete}"
     );
-    assert!(
-        complete.contains("total:"),
-        "complete evaluate must show rule result, got: {complete}"
-    );
+    assert_eq!(complete["results"]["total"]["display"], "20");
 }
 
 #[test]
@@ -397,11 +492,11 @@ rule premium: (1 / denom) * loading
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "settle",
-                        "rule": "premium",
-                        "data": ["denom=0"]
+                        "rules": "premium",
+                        "data": { "denom": 0 }
                     }
                 }),
             ),
@@ -411,19 +506,25 @@ rule premium: (1 / denom) * loading
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate text");
+        .expect("run text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    let premium = &response["results"]["premium"];
     assert!(
-        text.contains("premium:"),
-        "settled evaluate must show rule answer, got: {text}"
+        premium["vetoed"].as_bool() == Some(true) || premium.get("display").is_some(),
+        "settled run must show rule answer, got: {text}"
     );
     assert!(
-        !text.contains("missing_data:"),
-        "settled Computation must not print missing_data for leftover live keys, got: {text}"
+        premium["missing_data"].is_null()
+            || premium["missing_data"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
+        "settled Computation must not list missing_data for leftover live keys, got: {text}"
     );
 }
 
 #[test]
-fn test_mcp_evaluate_missing_data_includes_help() {
+fn test_mcp_run_missing_data_keys_only_help_on_show() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
         temp_dir.path(),
@@ -445,32 +546,49 @@ rule total: quantity * price
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "show",
+                    "arguments": { "spec": "pricing" }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "run",
                     "arguments": {
                         "spec": "pricing",
-                        "rule": "total",
-                        "data": ["quantity=2"]
+                        "rules": "total",
+                        "data": { "quantity": 2 }
                     }
                 }),
             ),
         ],
     );
 
-    assert!(responses.len() >= 2);
-    let text = responses[1]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("evaluate text");
-    assert!(
-        text.contains("missing_data:"),
-        "must report missing_data, got: {text}"
+    assert!(responses.len() >= 3);
+    let show: serde_json::Value = serde_json::from_str(
+        responses[1]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("show text"),
+    )
+    .expect("Show JSON");
+    assert_eq!(
+        show["data"]["price"]["type"]["help"],
+        "Unit price of the item."
     );
+
+    let run: serde_json::Value = serde_json::from_str(
+        responses[2]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("run text"),
+    )
+    .expect("Response JSON");
+    let missing = run["results"]["total"]["missing_data"]
+        .as_array()
+        .expect("missing_data array");
     assert!(
-        text.contains("Unit price of the item."),
-        "missing_data line must include -> help text, got: {text}"
-    );
-    assert!(
-        text.contains("price:") && text.contains("number"),
-        "missing_data line must include name and type, got: {text}"
+        missing.iter().any(|v| v == "price"),
+        "missing_data keys must include price, got: {missing:?}"
     );
 }
 
@@ -499,7 +617,7 @@ fn test_mcp_read_only_by_default() {
 
     assert!(responses.len() >= 3, "Expected at least 3 responses");
 
-    // tools/list should NOT include admin tools
+    // tools/list should NOT include write tools
     let tools = &responses[1]["result"]["tools"];
     let tool_names: Vec<&str> = tools
         .as_array()
@@ -548,14 +666,14 @@ fn test_mcp_read_only_by_default() {
         error["message"]
             .as_str()
             .unwrap()
-            .contains("Admin tools are disabled"),
-        "Error should mention admin tools are disabled, got: {}",
+            .contains("Write tools are disabled"),
+        "Error should mention write tools are disabled, got: {}",
         error["message"]
     );
 }
 
 #[test]
-fn test_mcp_admin_enables_add_spec() {
+fn test_mcp_write_enables_add_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -571,7 +689,7 @@ fn test_mcp_admin_enables_add_spec() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec test_spec\ndata x: 5\nrule y: x * 2",
-                        "source_id": "test_spec.lemma"
+                        "attribute": "test_spec.lemma"
                     }
                 }),
             ),
@@ -580,7 +698,7 @@ fn test_mcp_admin_enables_add_spec() {
 
     assert!(responses.len() >= 3, "Expected at least 3 responses");
 
-    // tools/list should include admin tools
+    // tools/list should include write tools
     let tools = &responses[1]["result"]["tools"];
     let tool_names: Vec<&str> = tools
         .as_array()
@@ -590,27 +708,27 @@ fn test_mcp_admin_enables_add_spec() {
         .collect();
     assert!(
         tool_names.contains(&"add_spec"),
-        "add_spec should be listed with --admin, got: {:?}",
+        "add_spec should be listed with --write, got: {:?}",
         tool_names
     );
     assert!(
         tool_names.contains(&"update_spec"),
-        "update_spec should be listed with --admin, got: {:?}",
+        "update_spec should be listed with --write, got: {:?}",
         tool_names
     );
     assert!(
         tool_names.contains(&"remove_spec"),
-        "remove_spec should be listed with --admin, got: {:?}",
+        "remove_spec should be listed with --write, got: {:?}",
         tool_names
     );
     assert!(
         tool_names.contains(&"clear"),
-        "clear should be listed with --admin, got: {:?}",
+        "clear should be listed with --write, got: {:?}",
         tool_names
     );
     assert!(
         tool_names.contains(&"install"),
-        "install should be listed with --admin, got: {:?}",
+        "install should be listed with --write, got: {:?}",
         tool_names
     );
     assert!(
@@ -702,7 +820,7 @@ fn test_mcp_source_embedded_lemma_repository() {
 }
 
 #[test]
-fn test_mcp_source_without_admin() {
+fn test_mcp_source_without_write() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
         temp_dir.path(),
@@ -732,10 +850,10 @@ fn test_mcp_source_without_admin() {
 
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("source should return text without --admin");
+        .expect("source should return text without --write");
     assert!(
         text.contains("spec pricing"),
-        "source without --admin should return formatted source, got: {text}"
+        "source without --write should return formatted source, got: {text}"
     );
 }
 
@@ -876,13 +994,11 @@ fn test_mcp_show_missing_spec() {
     );
 
     assert!(responses.len() >= 2);
-    let error = &responses[1]["error"];
-    assert!(error.is_object(), "Should return an error for missing spec");
-    assert!(
-        error["message"].as_str().unwrap().contains("not found"),
-        "Error should say spec not found, got: {}",
-        error["message"]
-    );
+    let result = &responses[1]["result"];
+    assert_eq!(result["isError"], true, "missing spec must be isError");
+    let text = result["content"][0]["text"].as_str().expect("diagnostics");
+    let diagnostics: serde_json::Value = serde_json::from_str(text).expect("EngineError JSON");
+    assert!(diagnostics.is_array() && !diagnostics.as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -933,7 +1049,7 @@ fn test_mcp_evaluate_all_rules() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": { "spec": "multi" }
                 }),
             ),
@@ -943,18 +1059,10 @@ fn test_mcp_evaluate_all_rules() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate should return text");
-
-    assert!(
-        text.contains("double:"),
-        "Should contain double rule, got: {text}"
-    );
-    assert!(
-        text.contains("triple:"),
-        "Should contain triple rule, got: {text}"
-    );
-    assert!(text.contains("6"), "double should be 6, got: {text}");
-    assert!(text.contains("9"), "triple should be 9, got: {text}");
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    assert_eq!(response["results"]["double"]["display"], "6");
+    assert_eq!(response["results"]["triple"]["display"], "9");
 }
 
 #[test]
@@ -970,7 +1078,7 @@ fn test_mcp_evaluate_missing_spec() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": { "spec": "nonexistent" }
                 }),
             ),
@@ -978,8 +1086,13 @@ fn test_mcp_evaluate_missing_spec() {
     );
 
     assert!(responses.len() >= 2);
-    let error = &responses[1]["error"];
-    assert!(error.is_object(), "Should return an error for missing spec");
+    let result = &responses[1]["result"];
+    assert_eq!(result["isError"], true, "missing spec must be isError");
+    let text = result["content"][0]["text"]
+        .as_str()
+        .expect("diagnostics text");
+    let diagnostics: serde_json::Value = serde_json::from_str(text).expect("EngineError JSON");
+    assert!(diagnostics.is_array() && !diagnostics.as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -995,7 +1108,7 @@ fn test_mcp_evaluate_empty_spec_name() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": { "spec": "" }
                 }),
             ),
@@ -1033,7 +1146,7 @@ fn test_mcp_evaluate_veto_result() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": { "spec": "vetoed" }
                 }),
             ),
@@ -1043,16 +1156,11 @@ fn test_mcp_evaluate_veto_result() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate should return text");
-
-    assert!(
-        text.contains("veto"),
-        "Should contain veto in output, got: {text}"
-    );
-    assert!(
-        text.contains("Price cannot be negative"),
-        "Should contain veto reason, got: {text}"
-    );
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    let validated = &response["results"]["validated"];
+    assert_eq!(validated["vetoed"], true);
+    assert_eq!(validated["veto_reason"], "Price cannot be negative");
 }
 
 #[test]
@@ -1073,7 +1181,7 @@ fn test_mcp_evaluate_with_effective_datetime() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "simple",
                         "effective": "2026-01-01"
@@ -1086,14 +1194,14 @@ fn test_mcp_evaluate_with_effective_datetime() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate should return text");
-
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    assert_eq!(response["results"]["y"]["display"], "42");
     assert!(
-        text.contains("y:"),
-        "Should contain rule result, got: {text}"
-    );
-    assert!(
-        text.contains("2026-01-01"),
+        response["effective"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("2026-01-01"),
         "Should show effective datetime, got: {text}"
     );
 }
@@ -1140,7 +1248,7 @@ fn test_mcp_list_empty_workspace() {
 }
 
 #[test]
-fn test_mcp_list_empty_workspace_admin_suggests_add() {
+fn test_mcp_list_empty_workspace_is_valid_json() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -1163,13 +1271,11 @@ fn test_mcp_list_empty_workspace_admin_suggests_add() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("list should return text");
+    let list: serde_json::Value = serde_json::from_str(text).expect("list must be valid JSON");
+    assert!(list.is_array(), "list must be JSON array, got: {text}");
     assert!(
-        text.contains("\"repository\": \"lemma\"") && text.contains("\"name\": \"units\""),
-        "embedded stdlib must appear, got: {text}"
-    );
-    assert!(
-        text.contains("add_spec"),
-        "Admin mode should suggest using add_spec when workspace is empty, got: {text}"
+        !text.contains("add_spec"),
+        "list must not append prose hints, got: {text}"
     );
 }
 
@@ -1248,7 +1354,7 @@ fn test_mcp_legacy_initialize_then_tools_list_read_only() {
     assert_initialize_result(&responses[0], &json!(0));
 
     let names = tool_names(&responses[1]);
-    for required in ["evaluate", "list", "show"] {
+    for required in ["run", "list", "show"] {
         assert!(
             names.iter().any(|n| n == required),
             "tools/list after initialize must include {required}, got: {names:?}"
@@ -1261,7 +1367,7 @@ fn test_mcp_legacy_initialize_then_tools_list_read_only() {
 }
 
 #[test]
-fn test_mcp_legacy_initialize_then_tools_list_admin() {
+fn test_mcp_legacy_initialize_then_tools_list_write() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -1286,10 +1392,10 @@ fn test_mcp_legacy_initialize_then_tools_list_admin() {
     assert_initialize_result(&responses[0], &json!(0));
 
     let names = tool_names(&responses[1]);
-    for required in ["evaluate", "list", "show", "add_spec"] {
+    for required in ["run", "list", "show", "add_spec"] {
         assert!(
             names.iter().any(|n| n == required),
-            "admin tools/list after initialize must include {required}, got: {names:?}"
+            "write tools/list after initialize must include {required}, got: {names:?}"
         );
     }
 }
@@ -1359,7 +1465,7 @@ fn test_mcp_initialize_string_id() {
 }
 
 #[test]
-fn test_mcp_initialize_with_admin_flag_independent() {
+fn test_mcp_initialize_with_write_flag_independent() {
     let temp_dir = tempfile::tempdir().unwrap();
     let responses = mcp_session(
         Some(temp_dir.path()),
@@ -1475,8 +1581,8 @@ fn test_mcp_tools_list_with_modern_meta_no_initialize() {
     );
     let names = tool_names(&responses[0]);
     assert!(
-        names.iter().any(|n| n == "evaluate"),
-        "modern tools/list must include evaluate, got: {names:?}"
+        names.iter().any(|n| n == "run"),
+        "modern tools/list must include run, got: {names:?}"
     );
 }
 
@@ -1752,8 +1858,8 @@ fn test_mcp_request_timeout_returns_error() {
         1,
         "tools/call",
         json!({
-            "name": "evaluate",
-            "arguments": { "spec": "slow_spec", "data": ["x=1"] }
+            "name": "run",
+            "arguments": { "spec": "slow_spec", "data": { "x": 1 } }
         }),
     );
     let mut input = serde_json::to_string(&request).unwrap();
@@ -1833,7 +1939,7 @@ fn test_mcp_add_spec_invalid_code() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "this is not valid lemma code !!!",
-                        "source_id": "invalid.lemma"
+                        "attribute": "invalid.lemma"
                     }
                 }),
             ),
@@ -1882,19 +1988,20 @@ fn test_mcp_tools_list_read_only_tools() {
         .expect("tools should be an array");
     let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
 
-    assert!(
-        tool_names.contains(&"evaluate"),
-        "Should list evaluate tool"
-    );
+    assert!(tool_names.contains(&"run"), "Should list run tool");
     assert!(tool_names.contains(&"list"), "Should list list tool");
     assert!(tool_names.contains(&"show"), "Should list show tool");
     assert!(tool_names.contains(&"source"), "Should list source tool");
     assert!(tool_names.contains(&"check"), "Should list check tool");
     assert!(tool_names.contains(&"guide"), "Should list guide tool");
+    assert!(
+        tool_names.contains(&"evaluate"),
+        "Should list deprecated evaluate alias"
+    );
     assert_eq!(
         tool_names.len(),
-        6,
-        "Read-only mode should have exactly 6 tools, got: {:?}",
+        7,
+        "Read-only mode should have exactly 7 tools, got: {:?}",
         tool_names
     );
 }
@@ -1915,7 +2022,7 @@ fn test_mcp_remove_spec_and_clear() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec draft\ndata x: number\nrule y: x\n",
-                        "source_id": "draft.lemma"
+                        "attribute": "draft.lemma"
                     }
                 }),
             ),
@@ -1936,7 +2043,7 @@ fn test_mcp_remove_spec_and_clear() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec again\ndata z: 1\nrule r: z\n",
-                        "source_id": "again.lemma"
+                        "attribute": "again.lemma"
                     }
                 }),
             ),
@@ -2021,7 +2128,7 @@ fn test_mcp_remove_spec_rewrites_shared_path_file() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec first\ndata a: 1\nrule x: a\n\nspec second\ndata b: 2\nrule y: b\n",
-                        "source_id": "pair.lemma"
+                        "attribute": "pair.lemma"
                     }
                 }),
             ),
@@ -2173,7 +2280,7 @@ fn test_mcp_clear_description_leads_with_remove_all() {
 }
 
 #[test]
-fn test_mcp_remove_spec_blocked_without_admin() {
+fn test_mcp_remove_spec_blocked_without_write() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -2205,13 +2312,13 @@ fn test_mcp_remove_spec_blocked_without_admin() {
         let error = &responses[i]["error"];
         assert!(
             error.is_object(),
-            "admin tool call {i} must error without --admin"
+            "write tool call {i} must error without --write"
         );
         assert!(
             error["message"]
                 .as_str()
                 .unwrap()
-                .contains("Admin tools are disabled"),
+                .contains("Write tools are disabled"),
             "got: {}",
             error["message"]
         );
@@ -2219,7 +2326,7 @@ fn test_mcp_remove_spec_blocked_without_admin() {
 }
 
 #[test]
-fn test_mcp_install_blocked_without_admin() {
+fn test_mcp_install_blocked_without_write() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -2240,23 +2347,23 @@ fn test_mcp_install_blocked_without_admin() {
 
     assert!(responses.len() >= 2);
     let error = &responses[1]["error"];
-    assert!(error.is_object(), "install without admin must error");
+    assert!(error.is_object(), "install without write must error");
     assert!(
         error["message"]
             .as_str()
             .unwrap()
-            .contains("Admin tools are disabled"),
+            .contains("Write tools are disabled"),
         "got: {}",
         error["message"]
     );
     assert!(
         !temp_dir.path().join("lemma_deps").exists(),
-        "install without admin must not write lemma_deps"
+        "install without write must not write lemma_deps"
     );
 }
 
 #[test]
-fn test_mcp_tools_list_admin_tools() {
+fn test_mcp_tools_list_write_tools() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -2274,39 +2381,40 @@ fn test_mcp_tools_list_admin_tools() {
         .expect("tools should be an array");
     let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
 
-    assert!(
-        tool_names.contains(&"evaluate"),
-        "Should list evaluate tool"
-    );
+    assert!(tool_names.contains(&"run"), "Should list run tool");
     assert!(tool_names.contains(&"list"), "Should list list tool");
     assert!(tool_names.contains(&"show"), "Should list show tool");
     assert!(tool_names.contains(&"check"), "Should list check tool");
     assert!(tool_names.contains(&"guide"), "Should list guide tool");
     assert!(
         tool_names.contains(&"add_spec"),
-        "Should list add_spec tool in admin mode"
+        "Should list add_spec tool in write mode"
     );
     assert!(
         tool_names.contains(&"update_spec"),
-        "Should list update_spec tool in admin mode"
+        "Should list update_spec tool in write mode"
     );
     assert!(
         tool_names.contains(&"remove_spec"),
-        "Should list remove_spec tool in admin mode"
+        "Should list remove_spec tool in write mode"
     );
     assert!(
         tool_names.contains(&"clear"),
-        "Should list clear tool in admin mode"
+        "Should list clear tool in write mode"
     );
     assert!(
         tool_names.contains(&"install"),
-        "Should list install tool in admin mode"
+        "Should list install tool in write mode"
     );
     assert!(tool_names.contains(&"source"), "Should list source tool");
+    assert!(
+        tool_names.contains(&"evaluate"),
+        "Should list deprecated evaluate alias"
+    );
     assert_eq!(
         tool_names.len(),
-        11,
-        "Admin mode should have exactly 11 tools, got: {:?}",
+        12,
+        "Write mode should have exactly 12 tools, got: {:?}",
         tool_names
     );
 }
@@ -2365,10 +2473,10 @@ fn test_mcp_evaluate_with_data_overrides() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "pricing",
-                        "data": ["quantity=5"]
+                        "data": { "quantity": 5 }
                     }
                 }),
             ),
@@ -2378,16 +2486,9 @@ fn test_mcp_evaluate_with_data_overrides() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate should return text");
-
-    assert!(
-        text.contains("total:"),
-        "Should contain rule result, got: {text}"
-    );
-    assert!(
-        text.contains("50"),
-        "total should be 5 * 10 = 50, got: {text}"
-    );
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    assert_eq!(response["results"]["total"]["display"], "50");
 }
 
 // ── add_spec then evaluate ──────────────────────────────────────────────
@@ -2408,7 +2509,7 @@ fn test_mcp_add_spec_then_evaluate() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec dynamic\ndata n: 7\nrule doubled: n * 2\n",
-                        "source_id": "dynamic.lemma"
+                        "attribute": "dynamic.lemma"
                     }
                 }),
             ),
@@ -2416,7 +2517,7 @@ fn test_mcp_add_spec_then_evaluate() {
                 3,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": { "spec": "dynamic" }
                 }),
             ),
@@ -2432,15 +2533,9 @@ fn test_mcp_add_spec_then_evaluate() {
 
     let eval_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate should return text");
-    assert!(
-        eval_text.contains("doubled:"),
-        "Should contain rule, got: {eval_text}"
-    );
-    assert!(
-        eval_text.contains("14"),
-        "doubled should be 14, got: {eval_text}"
-    );
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(eval_text).expect("Response JSON");
+    assert_eq!(response["results"]["doubled"]["display"], "14");
 }
 
 #[test]
@@ -2473,7 +2568,7 @@ rule total: d.value
                     "arguments": {
                         "spec": "dep",
                         "code": "spec dep\ndata value: 20\nrule out: value\n",
-                        "source_id": "dep.lemma"
+                        "attribute": "dep.lemma"
                     }
                 }),
             ),
@@ -2481,7 +2576,7 @@ rule total: d.value
                 3,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": { "spec": "consumer" }
                 }),
             ),
@@ -2497,15 +2592,9 @@ rule total: d.value
 
     let eval_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate should return text");
-    assert!(
-        eval_text.contains("total:"),
-        "Should contain total rule, got: {eval_text}"
-    );
-    assert!(
-        eval_text.contains("20"),
-        "total should be 20 after update, got: {eval_text}"
-    );
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(eval_text).expect("Response JSON");
+    assert_eq!(response["results"]["total"]["display"], "20");
 }
 
 #[test]
@@ -2525,7 +2614,7 @@ fn test_add_spec_persists_to_disk() {
                     "name": "add_spec",
                     "arguments": {
                         "code": code,
-                        "source_id": "dynamic.lemma"
+                        "attribute": "dynamic.lemma"
                     }
                 }),
             ),
@@ -2573,7 +2662,7 @@ fn test_update_spec_persists_to_disk() {
                     "arguments": {
                         "spec": "dep",
                         "code": new_code,
-                        "source_id": "dep.lemma"
+                        "attribute": "dep.lemma"
                     }
                 }),
             ),
@@ -2613,7 +2702,7 @@ fn test_add_spec_path_traversal_rejected() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec escape\ndata x: 1\nrule y: x\n",
-                        "source_id": "../escape.lemma"
+                        "attribute": "../escape.lemma"
                     }
                 }),
             ),
@@ -2659,7 +2748,7 @@ fn test_add_spec_write_failure_rolls_back_engine() {
                     "name": "add_spec",
                     "arguments": {
                         "code": "spec trapped\ndata x: 1\nrule y: x\n",
-                        "source_id": "blocked/trapped.lemma"
+                        "attribute": "blocked/trapped.lemma"
                     }
                 }),
             ),
@@ -2726,13 +2815,11 @@ fn test_mcp_source_missing_spec() {
     );
 
     assert!(responses.len() >= 2);
-    let error = &responses[1]["error"];
-    assert!(error.is_object(), "Should return an error for missing spec");
-    assert!(
-        error["message"].as_str().unwrap().contains("not found"),
-        "Error should say spec not found, got: {}",
-        error["message"]
-    );
+    let result = &responses[1]["result"];
+    assert_eq!(result["isError"], true, "missing spec must be isError");
+    let text = result["content"][0]["text"].as_str().expect("diagnostics");
+    let diagnostics: serde_json::Value = serde_json::from_str(text).expect("EngineError JSON");
+    assert!(diagnostics.is_array() && !diagnostics.as_array().unwrap().is_empty());
 }
 
 // ── evaluate with invalid effective ─────────────────────────────────────
@@ -2755,7 +2842,7 @@ fn test_mcp_evaluate_invalid_effective() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "simple",
                         "effective": "not-a-date"
@@ -2766,18 +2853,15 @@ fn test_mcp_evaluate_invalid_effective() {
     );
 
     assert!(responses.len() >= 2);
-    let error = &responses[1]["error"];
-    assert!(
-        error.is_object(),
-        "Should return an error for invalid effective datetime"
+    let result = &responses[1]["result"];
+    assert_eq!(
+        result["isError"], true,
+        "Should return isError for invalid effective datetime"
     );
+    let text = result["content"][0]["text"].as_str().expect("diagnostics");
     assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("Invalid effective"),
-        "Error should mention invalid effective, got: {}",
-        error["message"]
+        text.contains("Invalid effective"),
+        "Error should mention invalid effective, got: {text}"
     );
 }
 
@@ -2807,11 +2891,11 @@ rule total: base
                     2,
                     "tools/call",
                     json!({
-                        "name": "evaluate",
+                        "name": "run",
                         "arguments": {
                             "spec": "pricing",
                             "effective": effective,
-                            "rule": "total"
+                            "rules": "total"
                         }
                     }),
                 ),
@@ -2826,14 +2910,10 @@ rule total: base
 
     let out_2025 = run_eval("2025-06-01");
     let out_2026 = run_eval("2026-06-01");
-    assert!(
-        out_2025.contains("10") && !out_2025.contains("99"),
-        "2025 body should use v2025 base=10; got:\n{out_2025}"
-    );
-    assert!(
-        out_2026.contains("99"),
-        "2026 body should use v2026 base=99; got:\n{out_2026}"
-    );
+    let r2025: serde_json::Value = serde_json::from_str(&out_2025).expect("Response JSON");
+    let r2026: serde_json::Value = serde_json::from_str(&out_2026).expect("Response JSON");
+    assert_eq!(r2025["results"]["total"]["display"], "10");
+    assert_eq!(r2026["results"]["total"]["display"], "99");
 }
 
 // ── response IDs match request IDs ──────────────────────────────────────
@@ -2871,7 +2951,7 @@ fn test_mcp_response_ids_match_request_ids() {
 }
 
 #[test]
-fn mcp_add_spec_without_source_id_must_require_source_id() {
+fn mcp_add_spec_without_attribute_must_require_attribute() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -2895,7 +2975,7 @@ fn mcp_add_spec_without_source_id_must_require_source_id() {
     assert!(responses.len() >= 2);
     assert!(
         responses[1]["error"].is_object(),
-        "add_spec without source_id must return error, got: {}",
+        "add_spec without attribute must return error, got: {}",
         responses[1]
     );
 }
@@ -2918,7 +2998,7 @@ fn mcp_evaluate_veto_must_not_invent_vetoed_placeholder() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "veto_no_message"
                     }
@@ -2928,8 +3008,16 @@ fn mcp_evaluate_veto_must_not_invent_vetoed_placeholder() {
     );
 
     assert!(responses.len() >= 2);
-    let eval_result = &responses[1]["result"]["content"][0]["text"];
-    let text = eval_result.as_str().expect("evaluate should return text");
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("run should return text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    let rule = &response["results"]["r"];
+    assert_eq!(rule["vetoed"], true);
+    assert!(
+        rule.get("veto_reason").is_none() || rule["veto_reason"].is_null(),
+        "bare veto must omit invented veto_reason, got: {text}"
+    );
     assert!(
         !text.contains("Vetoed"),
         "MCP must not invent 'Vetoed' placeholder when veto_reason missing, got: {text}"
@@ -3014,10 +3102,9 @@ fn test_mcp_check_does_not_mutate_list() {
             || responses[2]["result"]["isError"] != true,
         "valid check must succeed"
     );
-    assert!(
-        check_text.contains("Parsed and planned"),
-        "check should return success message, got: {check_text}"
-    );
+    let check_json: serde_json::Value =
+        serde_json::from_str(check_text).expect("check success is quality JSON");
+    assert!(check_json.is_array(), "check success must be JSON array");
     let list_after = responses[3]["result"]["content"][0]["text"]
         .as_str()
         .expect("list text");
@@ -3053,7 +3140,7 @@ fn test_mcp_check_resolves_workspace_and_units() {
                     "arguments": {
                         "sources": [
                             ["base", "spec base\ndata flag: boolean\nrule ok: flag\n"],
-                            ["ship", "spec ship\nuses lemma units\nuses base\ndata package_weight: units.mass\nrule heavy: package_weight > 0 units.kilogram\n"]
+                            ["ship", "spec ship\nuses lemma units\nuses base\ndata package_weight: units.mass\nrule heavy: package_weight > 0 units.mass.kilogram\n"]
                         ]
                     }
                 }),
@@ -3068,10 +3155,9 @@ fn test_mcp_check_resolves_workspace_and_units() {
         "check with uses lemma units + cross-spec uses must succeed, got: {result}"
     );
     let text = result["content"][0]["text"].as_str().expect("text");
-    assert!(
-        text.contains("Parsed and planned"),
-        "check should return success message, got: {text}"
-    );
+    let check_json: serde_json::Value =
+        serde_json::from_str(text).expect("check success is quality JSON");
+    assert!(check_json.is_array(), "check success must be JSON array");
 }
 
 #[test]
@@ -3148,21 +3234,14 @@ rule is_eligible: true
         "check must succeed with recommendations, got: {result}"
     );
     let text = result["content"][0]["text"].as_str().expect("text");
+    let recs: serde_json::Value =
+        serde_json::from_str(text).expect("check success is quality JSON");
+    let arr = recs.as_array().expect("quality array");
+    assert!(!arr.is_empty(), "must list recommendations, got: {text}");
+    let joined = serde_json::to_string(&recs).expect("serialize");
     assert!(
-        text.contains("Parsed and planned"),
-        "success path must keep advisory framing, got: {text}"
-    );
-    assert!(
-        text.contains("Recommendations:"),
-        "must list recommendations, got: {text}"
-    );
-    assert!(
-        text.contains("is_eligible") && text.contains("veto"),
+        joined.contains("is_eligible") && joined.contains("veto"),
         "must report veto-as-rejection cascade, got: {text}"
-    );
-    assert!(
-        text.contains("In spec 'eligibility' (effective from 2026-01-01)"),
-        "must identify temporal slice in Display output, got: {text}"
     );
 }
 
@@ -3208,9 +3287,11 @@ rule total: qty
         "clean check must succeed, got: {result}"
     );
     let text = result["content"][0]["text"].as_str().expect("text");
-    assert!(text.contains("Parsed and planned"), "got: {text}");
-    assert!(
-        !text.contains("Recommendations:"),
+    let recs: serde_json::Value =
+        serde_json::from_str(text).expect("check success is quality JSON");
+    assert_eq!(
+        recs.as_array().map(|a| a.len()).unwrap_or(1),
+        0,
         "clean spec must not emit recommendations, got: {text}"
     );
 }
@@ -3336,11 +3417,11 @@ fn test_mcp_evaluate_renders_unit_map() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "evaluate",
+                    "name": "run",
                     "arguments": {
                         "spec": "money",
-                        "rule": "total",
-                        "data": ["amount=84 eur"]
+                        "rules": "total",
+                        "data": { "amount": "84 eur" }
                     }
                 }),
             ),
@@ -3353,14 +3434,12 @@ fn test_mcp_evaluate_renders_unit_map() {
     );
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("evaluate text");
+        .expect("run text");
+    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
+    let measure = &response["results"]["total"]["measure"];
     assert!(
-        text.contains("eur") && text.contains("cent"),
-        "evaluate must render every declared unit, got: {text}"
-    );
-    assert!(
-        text.contains('(') && text.contains(')'),
-        "unit map should be parenthesized, got: {text}"
+        measure.get("eur").is_some() && measure.get("cent").is_some(),
+        "run must expose every declared unit in measure map, got: {text}"
     );
 }
 

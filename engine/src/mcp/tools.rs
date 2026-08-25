@@ -1,108 +1,48 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::documentation::{GuideTopic, EVALUATE_GUIDE};
 use crate::engine::{resolve_effective as resolve_effective_datetime, Engine};
-use crate::format_explanation;
-use crate::mcp::error::{map_engine_error, ToolError};
+use crate::mcp::error::ToolError;
+use crate::parse_run_data_object;
 use crate::parsing::ast::DateTimeValue;
 use crate::parsing::source::SourceType;
+use crate::resolve_run_rules;
 use crate::spec_set_id::parse_spec_set_id;
 
-pub fn evaluate(engine: &Engine, args: &Value) -> Result<String, ToolError> {
+/// Evaluate a spec. Always explains (`Engine::run(..., true)`). No `explain` arg.
+pub fn run(engine: &Engine, args: &Value) -> Result<String, ToolError> {
+    require_object(args)?;
+    reject_explain_arg(args)?;
+    if args.get("rule").is_some() {
+        return Err(ToolError::invalid_arguments(
+            "Unknown field 'rule'. Use 'rules' (string or string array).",
+        ));
+    }
+
     let spec_set_id = required_string(args, "spec")?;
     if spec_set_id.is_empty() {
         return Err(ToolError::invalid_arguments("Spec set id cannot be empty"));
     }
-    let spec_name = parse_spec_set_id(spec_set_id).map_err(map_engine_error)?;
-    let rule_names = optional_rule_names(args)?;
-    let data_values = parse_data(args)?;
+    let spec_name = parse_spec_set_id(spec_set_id).map_err(engine_error_to_diagnostics)?;
+    let repository = optional_nonempty_string(args, "repository")?;
     let now = resolve_effective(args)?;
-    let rules = if rule_names.is_empty() {
-        None
-    } else {
-        Some(rule_names.as_slice())
-    };
+    let data_values =
+        parse_run_data_object(&args.get("data").cloned()).map_err(ToolError::invalid_arguments)?;
+    let rule_names =
+        resolve_run_rules(&args.get("rules").cloned()).map_err(ToolError::invalid_arguments)?;
+    let rules = rule_names.as_deref();
+
     let response = engine
-        .run(None, &spec_name, Some(&now), data_values, rules, true)
-        .map_err(map_engine_error)?;
+        .run(repository, &spec_name, Some(&now), data_values, rules, true)
+        .map_err(engine_error_to_diagnostics)?;
 
-    let show_for_missing = if response
-        .results
-        .values()
-        .any(|result| result.awaits_missing_data())
-    {
-        Some(
-            engine
-                .show(None, &spec_name, Some(&now))
-                .unwrap_or_else(|error| {
-                    panic!("BUG: show must succeed after evaluate for '{spec_set_id}': {error}")
-                }),
-        )
-    } else {
-        None
-    };
+    Ok(serde_json::to_string_pretty(&response)
+        .unwrap_or_else(|error| panic!("BUG: Response must serialize: {error}")))
+}
 
-    let mut output = String::new();
-    output.push_str(&format!("spec: {spec_set_id}\n"));
-    output.push_str(&format!("effective: {now}\n"));
-    output.push('\n');
-
-    for result in response.results.values() {
-        output.push_str(&format!("{}: ", result.rule.name));
-        if result.vetoed {
-            if let Some(reason) = result.veto_reason.as_deref() {
-                output.push_str(reason);
-            }
-        } else {
-            let display = result.display().unwrap_or_else(|| {
-                panic!(
-                    "BUG: rule '{}' evaluated without display after evaluation",
-                    result.rule.name
-                )
-            });
-            output.push_str(display);
-            if let Some(value) = &result.value {
-                if let Some(measure) = &value.measure {
-                    append_unit_map(&mut output, measure);
-                } else if let Some(ratio) = &value.ratio {
-                    append_unit_map(&mut output, ratio);
-                }
-            }
-        }
-        output.push('\n');
-
-        if result.awaits_missing_data() {
-            let show = show_for_missing
-                .as_ref()
-                .expect("BUG: any awaiting rule requires show_for_missing after evaluate");
-            output.push_str("missing_data:\n");
-            for name in result.missing_data() {
-                let entry = show.data.get(name).unwrap_or_else(|| {
-                    panic!("BUG: missing_data key {name:?} must exist in show.data after evaluate")
-                });
-                let type_name = entry.lemma_type.specifications.to_string();
-                let help = entry.lemma_type.specifications.help();
-                if help.is_empty() {
-                    output.push_str(&format!("  {name}: {type_name}\n"));
-                } else {
-                    output.push_str(&format!("  {name}: {type_name} — {help}\n"));
-                }
-            }
-        }
-
-        if let Some(explanation) = &result.explanation {
-            let steps = format_explanation(explanation);
-            if !steps.is_empty() {
-                output.push_str("\nReasoning:\n");
-                output.push_str(&steps);
-                output.push('\n');
-            }
-        }
-    }
-
-    Ok(output)
+/// Deprecated alias of [`run`]. Same args and Response JSON.
+pub fn evaluate(engine: &Engine, args: &Value) -> Result<String, ToolError> {
+    run(engine, args)
 }
 
 pub fn list(engine: &Engine, args: &Value) -> Result<String, ToolError> {
@@ -113,33 +53,39 @@ pub fn list(engine: &Engine, args: &Value) -> Result<String, ToolError> {
 }
 
 pub fn show(engine: &Engine, args: &Value) -> Result<String, ToolError> {
+    let repository = optional_nonempty_string(args, "repository")?;
     let spec_set_id = required_string(args, "spec")?;
     if spec_set_id.is_empty() {
         return Err(ToolError::invalid_arguments("Spec set id cannot be empty"));
     }
-    let spec_name = parse_spec_set_id(spec_set_id).map_err(map_engine_error)?;
+    let spec_name = parse_spec_set_id(spec_set_id).map_err(engine_error_to_diagnostics)?;
     let now = resolve_effective(args)?;
     let show = engine
-        .show(None, &spec_name, Some(&now))
-        .map_err(map_engine_error)?;
+        .show(repository, &spec_name, Some(&now))
+        .map_err(engine_error_to_diagnostics)?;
     Ok(serde_json::to_string_pretty(&show)
         .unwrap_or_else(|error| panic!("BUG: show response must serialize: {error}")))
 }
 
 pub fn source(engine: &Engine, args: &Value) -> Result<String, ToolError> {
     require_object(args)?;
-    if let Some(repository) = optional_nonempty_string(args, "repository")? {
-        return engine
-            .source(Some(repository), None, None)
-            .map_err(map_engine_error);
+    let repository = optional_nonempty_string(args, "repository")?;
+    let spec = optional_nonempty_string(args, "spec")?;
+    match (repository, spec) {
+        (Some(repo), None) => engine
+            .source(Some(repo), None, None)
+            .map_err(engine_error_to_diagnostics),
+        (repo, Some(spec_set_id)) => {
+            let spec_name = parse_spec_set_id(spec_set_id).map_err(engine_error_to_diagnostics)?;
+            let now = resolve_effective(args)?;
+            engine
+                .source(repo, Some(&spec_name), Some(&now))
+                .map_err(engine_error_to_diagnostics)
+        }
+        (None, None) => Err(ToolError::invalid_arguments(
+            "Missing 'spec' or 'repository' field",
+        )),
     }
-    let spec_set_id = required_string(args, "spec")
-        .map_err(|_| ToolError::invalid_arguments("Missing 'spec' or 'repository' field"))?;
-    let spec_name = parse_spec_set_id(spec_set_id).map_err(map_engine_error)?;
-    let now = resolve_effective(args)?;
-    engine
-        .source(None, Some(&spec_name), Some(&now))
-        .map_err(map_engine_error)
 }
 
 pub fn check(args: &Value) -> Result<String, ToolError> {
@@ -182,21 +128,8 @@ pub fn check(args: &Value) -> Result<String, ToolError> {
     }
 
     let recommendations = engine.quality();
-    let mut text = String::from(
-        "Parsed and planned. Syntax is valid; this does not verify the policy is correct.",
-    );
-    const MAX_RECOMMENDATIONS: usize = 20;
-    if !recommendations.is_empty() {
-        text.push_str("\n\nRecommendations:");
-        for (i, rec) in recommendations.iter().take(MAX_RECOMMENDATIONS).enumerate() {
-            text.push_str(&format!("\n{}. {}", i + 1, rec));
-        }
-        let omitted = recommendations.len().saturating_sub(MAX_RECOMMENDATIONS);
-        if omitted > 0 {
-            text.push_str(&format!("\n… and {omitted} more"));
-        }
-    }
-    Ok(text)
+    Ok(serde_json::to_string_pretty(&recommendations)
+        .unwrap_or_else(|error| panic!("BUG: quality recommendations must serialize: {error}")))
 }
 
 pub fn guide(args: &Value) -> Result<String, ToolError> {
@@ -216,6 +149,19 @@ pub fn guide(args: &Value) -> Result<String, ToolError> {
             Ok(topic.section_text().to_string())
         }
     }
+}
+
+fn engine_error_to_diagnostics(error: crate::Error) -> ToolError {
+    ToolError::diagnostics(std::slice::from_ref(&error))
+}
+
+fn reject_explain_arg(args: &Value) -> Result<(), ToolError> {
+    if args.get("explain").is_some() {
+        return Err(ToolError::invalid_arguments(
+            "MCP run always includes explanations; do not pass 'explain'",
+        ));
+    }
+    Ok(())
 }
 
 fn require_object(args: &Value) -> Result<(), ToolError> {
@@ -259,61 +205,164 @@ fn optional_nonempty_string<'a>(
     }
 }
 
-fn optional_rule_names(args: &Value) -> Result<Vec<String>, ToolError> {
-    match args.get("rule") {
-        None | Some(Value::Null) => Ok(Vec::new()),
-        Some(Value::String(rule)) => {
-            let trimmed = rule.trim();
-            if trimmed.is_empty() {
-                Ok(Vec::new())
-            } else {
-                Ok(vec![trimmed.to_string()])
-            }
-        }
-        Some(_) => Err(ToolError::invalid_arguments("'rule' must be a string")),
-    }
-}
-
-fn parse_data(args: &Value) -> Result<HashMap<String, String>, ToolError> {
-    match args.get("data") {
-        None | Some(Value::Null) => Ok(HashMap::new()),
-        Some(Value::Array(entries)) => {
-            let mut data = HashMap::new();
-            for (i, entry) in entries.iter().enumerate() {
-                let Some(raw) = entry.as_str() else {
-                    return Err(ToolError::invalid_arguments(format!(
-                        "data[{i}] must be a string 'name=value'"
-                    )));
-                };
-                let Some((name, value)) = raw.split_once('=') else {
-                    return Err(ToolError::invalid_arguments(format!(
-                        "data[{i}] must be 'name=value', got '{raw}'"
-                    )));
-                };
-                data.insert(name.to_string(), value.to_string());
-            }
-            Ok(data)
-        }
-        Some(_) => Err(ToolError::invalid_arguments(
-            "'data' must be an array of 'name=value' strings",
-        )),
-    }
-}
-
 fn resolve_effective(args: &Value) -> Result<DateTimeValue, ToolError> {
     match args.get("effective") {
-        None | Some(Value::Null) => resolve_effective_datetime(None).map_err(map_engine_error),
-        Some(Value::String(raw)) => resolve_effective_datetime(Some(raw)).map_err(map_engine_error),
+        None | Some(Value::Null) => {
+            resolve_effective_datetime(None).map_err(engine_error_to_diagnostics)
+        }
+        Some(Value::String(raw)) => {
+            resolve_effective_datetime(Some(raw)).map_err(engine_error_to_diagnostics)
+        }
         Some(_) => Err(ToolError::invalid_arguments("'effective' must be a string")),
     }
 }
 
-fn append_unit_map(output: &mut String, map: &std::collections::BTreeMap<String, String>) {
-    let parts: Vec<String> = map
-        .iter()
-        .map(|(unit, magnitude)| format!("{unit} {magnitude}"))
-        .collect();
-    output.push_str(" (");
-    output.push_str(&parts.join(", "));
-    output.push(')');
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn load_pricing() -> Engine {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Path(Arc::new(PathBuf::from("pricing.lemma"))),
+                "spec pricing\ndata quantity: number\nrule total: quantity * 10\n".to_string(),
+            )])
+            .expect("load");
+        engine
+    }
+
+    #[test]
+    fn run_returns_response_json_with_explanation() {
+        let engine = load_pricing();
+        let text = run(
+            &engine,
+            &serde_json::json!({
+                "spec": "pricing",
+                "rules": "total",
+                "data": { "quantity": 3 }
+            }),
+        )
+        .expect("run");
+        let value: Value = serde_json::from_str(&text).expect("Response JSON");
+        assert_eq!(value["results"]["total"]["display"], "30");
+        assert!(value["results"]["total"]["explanation"].is_object());
+    }
+
+    #[test]
+    fn run_rejects_explain_arg() {
+        let engine = load_pricing();
+        let err = run(
+            &engine,
+            &serde_json::json!({
+                "spec": "pricing",
+                "explain": false
+            }),
+        )
+        .expect_err("explain forbidden");
+        assert!(matches!(err, ToolError::InvalidArguments(_)));
+    }
+
+    #[test]
+    fn run_rejects_legacy_rule_field() {
+        let engine = load_pricing();
+        let err = run(
+            &engine,
+            &serde_json::json!({
+                "spec": "pricing",
+                "rule": "total"
+            }),
+        )
+        .expect_err("rule forbidden");
+        assert!(matches!(err, ToolError::InvalidArguments(_)));
+    }
+
+    #[test]
+    fn run_rules_array() {
+        let engine = load_pricing();
+        let text = run(
+            &engine,
+            &serde_json::json!({
+                "spec": "pricing",
+                "rules": ["total"],
+                "data": { "quantity": 2 }
+            }),
+        )
+        .expect("run");
+        let value: Value = serde_json::from_str(&text).expect("Response JSON");
+        assert_eq!(value["results"]["total"]["display"], "20");
+    }
+
+    #[test]
+    fn show_accepts_repository() {
+        let engine = Engine::new();
+        let text = show(
+            &engine,
+            &serde_json::json!({
+                "repository": "lemma",
+                "spec": "units"
+            }),
+        )
+        .expect("show lemma units");
+        let value: Value = serde_json::from_str(&text).expect("Show JSON");
+        assert_eq!(value["spec"], "units");
+    }
+
+    #[test]
+    fn missing_spec_is_diagnostics() {
+        let engine = Engine::new();
+        let err =
+            run(&engine, &serde_json::json!({ "spec": "nonexistent" })).expect_err("missing spec");
+        match err {
+            ToolError::Diagnostics(text) => {
+                let value: Value = serde_json::from_str(&text).expect("EngineError JSON");
+                assert!(value.is_array());
+                assert!(!value.as_array().expect("array").is_empty());
+            }
+            other => panic!("expected Diagnostics, got {other}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_aliases_run() {
+        let engine = load_pricing();
+        let a = run(
+            &engine,
+            &serde_json::json!({
+                "spec": "pricing",
+                "data": { "quantity": 1 }
+            }),
+        )
+        .expect("run");
+        let b = evaluate(
+            &engine,
+            &serde_json::json!({
+                "spec": "pricing",
+                "data": { "quantity": 1 }
+            }),
+        )
+        .expect("evaluate");
+        let va: Value = serde_json::from_str(&a).expect("run JSON");
+        let vb: Value = serde_json::from_str(&b).expect("evaluate JSON");
+        assert_eq!(
+            va["results"]["total"]["display"],
+            vb["results"]["total"]["display"]
+        );
+        assert_eq!(
+            va["results"]["total"]["explanation"]["body"],
+            vb["results"]["total"]["explanation"]["body"]
+        );
+    }
+
+    #[test]
+    fn check_success_is_quality_json() {
+        let text = check(&serde_json::json!({
+            "sources": [["ok.lemma", "spec ok\nrule r: 1\n"]]
+        }))
+        .expect("check");
+        let value: Value = serde_json::from_str(&text).expect("quality JSON");
+        assert!(value.is_array());
+    }
 }

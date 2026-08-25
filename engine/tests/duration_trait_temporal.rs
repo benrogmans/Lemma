@@ -445,12 +445,12 @@ rule value: 14:30:00 + 2 eur"#,
 fn temporal_past_without_visible_duration_typedef_rejected() {
     let code = r#"spec test
 rule value: past 7 day"#;
-    expect_plan_error(code, "not in scope");
+    expect_plan_error(code, "Unknown unit");
 }
 
 #[test]
 fn temporal_explicit_now_minus_duration_range_without_visible_typedef_rejected() {
     let code = r#"spec test
 rule value: now - 7 day...now"#;
-    expect_plan_error(code, "not in scope");
+    expect_plan_error(code, "Unknown unit");
 }

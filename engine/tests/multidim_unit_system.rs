@@ -213,8 +213,10 @@ data velocity: measure -> unit mps: velocity/second"#;
         .collect::<Vec<_>>()
         .join("; ");
     assert!(
-        combined.contains("Unknown unit") || combined.contains("not in scope"),
-        "expected unknown-unit-in-scope rejection, got: {combined}"
+        combined.contains("Unknown unit")
+            || combined.contains("Declare it")
+            || combined.contains("import it with uses"),
+        "expected unknown-unit rejection, got: {combined}"
     );
 }
 
