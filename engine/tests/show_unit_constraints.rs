@@ -171,7 +171,7 @@ rule out: r
     let unit = ratio_unit(&entry.lemma_type.specifications, "basis_points");
     assert_eq!(unit.minimum_decimal(), Some(decimal_lit("500")));
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     let units = json["units"].as_array().expect("units array");
     let bps = units
         .iter()
@@ -274,10 +274,11 @@ rule r: mass
     load(&mut engine, code, "roundtrip.lemma");
     let now = DateTimeValue::now();
     let show = engine.show(None, "s", Some(&now)).expect("show");
-    let json = serde_json::to_string(&show).expect("serialize");
-    let round_tripped: lemma::Show = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(show, round_tripped);
-    let entry = round_tripped.data.get("mass").expect("mass");
+    let api_show = lemma::api::Show::from(&show);
+    let json = serde_json::to_string(&api_show).expect("serialize");
+    let round_tripped: lemma::api::Show = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(api_show, round_tripped);
+    let entry = show.data.get("mass").expect("mass");
     let gram = quantity_unit(&entry.lemma_type.specifications, "gram");
     assert_eq!(gram.minimum_decimal(), Some(decimal_lit("1000")));
 }
@@ -335,7 +336,7 @@ fn compound_measure_maximum_converts_per_unit_across_units() {
         "per-unit maxima must represent the same canonical bound"
     );
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     let units = json["units"].as_array().expect("units array");
     let usd_json = units
         .iter()

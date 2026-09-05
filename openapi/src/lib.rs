@@ -206,23 +206,25 @@ struct InputData {
     /// The resolved Lemma type for this data.
     lemma_type: LemmaType,
     /// Spec literal or literal `with` binding.
-    prefilled: Option<lemma::RuleResultValue>,
+    fill: Option<lemma::RuleResultValue>,
     /// Suggestion from `-> suggest ...` (UI hint only; never commits at evaluation).
     suggestion: Option<lemma::RuleResultValue>,
 }
 
-/// Collect all local input data from a pre-built schema.
+/// Collect local eval inputs from a pre-built show.
 ///
 /// Only includes data local to the spec (no dot-separated cross-spec
-/// paths like `calc.price`). Already sorted alphabetically by `show()`.
+/// paths like `calc.price`) that at least one remaining rule needs
+/// (`needed_by_rules` non-empty). Reuse-only catalog slots stay out of
+/// generated request bodies. Already sorted by `show()`.
 fn collect_input_data_from_show(show: &lemma::Show) -> Vec<InputData> {
     show.data
         .iter()
-        .filter(|(name, _)| !name.contains('.'))
+        .filter(|(name, entry)| !name.contains('.') && !entry.needed_by_rules.is_empty())
         .map(|(name, entry)| InputData {
             name: name.clone(),
             lemma_type: entry.lemma_type.clone(),
-            prefilled: entry.prefilled.clone(),
+            fill: entry.fill.clone(),
             suggestion: entry.suggestion.clone(),
         })
         .collect()
@@ -372,7 +374,7 @@ fn build_get_show_response() -> Value {
             },
             "data": {
                 "type": "object",
-                "description": "Inputs: types, prefilled values, and suggestions",
+                "description": "Inputs: types, filled values, and suggestions",
                 "additionalProperties": true
             },
             "rules": {
@@ -784,12 +786,12 @@ fn build_post_request_schema(data: &[InputData]) -> Value {
     let mut required = Vec::new();
 
     for data in data {
-        let default_for_docs = data.prefilled.as_ref().or(data.suggestion.as_ref());
+        let default_for_docs = data.fill.as_ref().or(data.suggestion.as_ref());
         properties.insert(
             data.name.clone(),
             build_post_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.prefilled.is_none() {
+        if data.fill.is_none() {
             required.push(Value::String(data.name.clone()));
         }
     }
@@ -844,12 +846,12 @@ fn build_post_form_request_schema(data: &[InputData]) -> Value {
     let mut required = Vec::new();
 
     for data in data {
-        let default_for_docs = data.prefilled.as_ref().or(data.suggestion.as_ref());
+        let default_for_docs = data.fill.as_ref().or(data.suggestion.as_ref());
         properties.insert(
             data.name.clone(),
             build_post_form_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.prefilled.is_none() {
+        if data.fill.is_none() {
             required.push(Value::String(data.name.clone()));
         }
     }

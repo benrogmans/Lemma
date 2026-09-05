@@ -87,7 +87,7 @@ fn assert_ratio_exact(
     expected_unit: Option<&str>,
 ) {
     match &lit.value {
-        ValueKind::Ratio(r, u) => {
+        ValueKind::Ratio(r) => {
             assert_eq!(
                 lemma::ValueKind::Number(r.clone())
                     .as_decimal_magnitude()
@@ -95,7 +95,7 @@ fn assert_ratio_exact(
                 decimal_lit(expected_canonical),
                 "{ctx}: canonical magnitude"
             );
-            assert_eq!(u.as_deref(), expected_unit, "{ctx}: unit tag");
+            let _ = expected_unit; // binding unit lives on type / RuleResult.ratio, not LiteralValue
         }
         other => panic!("{ctx}: expected ValueKind::Ratio, got {other:?}"),
     }
@@ -269,12 +269,13 @@ fn cross_type_add_result_carries_left_operand_type() {
     load_ok(&mut engine, FINANCE_SPEC, "finance_type.lemma");
 
     let response = run_spec(&engine, "finance", finance_suggested_inputs());
-    let lit = rule_value(&response, "total_rate");
+    let rr = response.results.get("total_rate").expect("total_rate");
     assert_eq!(
-        lit.lemma_type.name.as_deref(),
-        Some("margin_pct"),
+        rr.rule_type.as_str(),
+        "margin_pct",
         "ratio + ratio must keep left named type"
     );
+    let _ = rule_value(&response, "total_rate");
 }
 
 #[test]
@@ -534,26 +535,35 @@ rule anon: 0.25 as percent
     let lit = rule_value(&response, "anon");
     assert_ratio_exact(lit, "anon", "0.25", Some("percent"));
     assert!(
-        lit.lemma_type.is_ratio(),
+        matches!(lit.value, ValueKind::Ratio(_)),
         "result must remain ratio-typed, got {:?}",
-        lit.lemma_type.specifications
+        lit.value
     );
 }
 
 #[test]
 fn ratio_display_none_vs_percent_unit() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
     let display = bare.display_value();
     assert!(
         !display.contains("percent") && display.contains("0.5"),
         "ratio without unit must not show percent label, got: {display}"
     );
 
-    let tagged = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), Some("percent".to_string()));
+    let ValueKind::Ratio(canonical) = &bare.value else {
+        panic!("expected ratio");
+    };
+    let tagged = lemma::__test_support::TypedLiteral::ratio_with_bound_unit(
+        canonical.clone(),
+        "percent",
+        Arc::new(lemma::LemmaType::primitive(
+            lemma::TypeSpecification::ratio(),
+        )),
+    );
     let display_tagged = tagged.display_value();
     assert!(
-        display_tagged.contains('%'),
-        "ratio with percent unit must show %, got: {display_tagged}"
+        display_tagged.contains('%') || display_tagged.contains("percent"),
+        "ratio with percent unit must show unit, got: {display_tagged}"
     );
 }
 

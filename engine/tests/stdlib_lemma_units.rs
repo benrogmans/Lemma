@@ -260,20 +260,17 @@ rule x: 1 mebibyte as byte"#,
 }
 
 #[test]
-fn show_omits_stdlib_typedefs_with_no_rules() {
+fn show_lists_stdlib_typedefs_with_empty_needed_by_rules() {
     let engine = Engine::new();
     let show = engine
         .show(Some("lemma"), "units", None)
         .expect("show lemma units");
     assert!(
-        show.data.is_empty(),
-        "units has no rules so show.data must be empty; keys: {:?}",
-        show.data.keys().collect::<Vec<_>>()
+        show.rules.is_empty(),
+        "units has no rules; rules: {:?}",
+        show.rules.keys().collect::<Vec<_>>()
     );
-    let source = engine
-        .source(Some("lemma"), Some("units"), None)
-        .expect("source lemma units");
-    for expected in [
+    let expected = [
         "duration",
         "length",
         "mass",
@@ -294,10 +291,26 @@ fn show_omits_stdlib_typedefs_with_no_rules() {
         "substance",
         "luminous_intensity",
         "calendar",
-    ] {
+    ];
+    for name in expected {
+        let entry = show.data.get(name).unwrap_or_else(|| {
+            panic!(
+                "expected typedef {name} in show.data; keys: {:?}",
+                show.data.keys().collect::<Vec<_>>()
+            )
+        });
         assert!(
-            source.contains(expected),
-            "expected typedef {expected} in units source"
+            entry.needed_by_rules.is_empty(),
+            "{name} must have empty needed_by_rules"
+        );
+    }
+    let source = engine
+        .source(Some("lemma"), Some("units"), None)
+        .expect("source lemma units");
+    for name in expected {
+        assert!(
+            source.contains(name),
+            "expected typedef {name} in units source"
         );
     }
 }

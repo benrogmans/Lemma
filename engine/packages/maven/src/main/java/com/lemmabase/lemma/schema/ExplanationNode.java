@@ -1,4 +1,7 @@
-package com.lemmabase.lemma;
+package com.lemmabase.lemma.schema;
+
+import com.lemmabase.lemma.JsonReading;
+import com.lemmabase.lemma.LemmaBugError;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -28,7 +31,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Cause read(JsonParser p) throws IOException {
+    public static Cause read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "Cause");
       String condition = null;
       String value = null;
@@ -66,7 +69,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static ConversionStep read(JsonParser p) throws IOException {
+    public static ConversionStep read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ConversionStep");
       String role = null;
       String text = null;
@@ -120,7 +123,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Rule read(JsonParser p) throws IOException {
+    public static Rule read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Rule");
       String name = null;
       String result = null;
@@ -172,7 +175,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Compose read(JsonParser p) throws IOException {
+    public static Compose read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Compose");
       String expression = null;
       List<ExplanationNode> operands = null;
@@ -215,7 +218,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Data read(JsonParser p) throws IOException {
+    public static Data read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Data");
       String name = null;
       String display = null;
@@ -257,7 +260,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static DataUnused read(JsonParser p) throws IOException {
+    public static DataUnused read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.DataUnused");
       String name = null;
       while (p.nextToken() != JsonToken.END_OBJECT) {
@@ -298,7 +301,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Conversion read(JsonParser p) throws IOException {
+    public static Conversion read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Conversion");
       String expression = null;
       List<ConversionStep> steps = null;
@@ -345,7 +348,7 @@ public sealed interface ExplanationNode {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Veto read(JsonParser p) throws IOException {
+    public static Veto read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Veto");
       String message = null;
       while (p.nextToken() != JsonToken.END_OBJECT) {
@@ -375,7 +378,7 @@ public sealed interface ExplanationNode {
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  static ExplanationNode read(JsonParser p) throws IOException {
+  public static ExplanationNode read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "ExplanationNode");
     String json = JsonReading.bufferObjectAsString(p);
     String type = JsonReading.findTag(json, "type");

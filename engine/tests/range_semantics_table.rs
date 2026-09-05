@@ -61,7 +61,28 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
 }
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
-    eval_literal(code, spec_name, rule_name).to_string()
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let effective = default_effective();
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&effective),
+            HashMap::new(),
+            Some(&[rule_name.to_string()]),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> String {

@@ -212,6 +212,44 @@ export async function test() {
       assert(threwAbove, 'max_sources beyond f64 safe integer range must throw');
     });
 
+    await run('Engine.snapshot round-trip restores list and run', () => {
+      const source = new Engine();
+      source.load(`
+spec snap_demo
+data x: number
+rule y: x + 1
+`);
+      const bytes = source.snapshot();
+      assert(bytes instanceof Uint8Array, 'snapshot must return Uint8Array');
+      assert(bytes.length > 0, 'snapshot must be non-empty');
+      const restored = Engine.fromSnapshot(bytes);
+      assert(
+        JSON.stringify(restored.list()) === JSON.stringify(source.list()),
+        'list must match after fromSnapshot'
+      );
+      const runSource = source.run({ spec: 'snap_demo', data: { x: 41 } });
+      const runRestored = restored.run({ spec: 'snap_demo', data: { x: 41 } });
+      const dropExplanation = (rule) => {
+        const { explanation: _explanation, ...rest } = rule;
+        return rest;
+      };
+      assert(
+        JSON.stringify(dropExplanation(runRestored.results.y)) ===
+          JSON.stringify(dropExplanation(runSource.results.y)),
+        'run rule y must match after fromSnapshot'
+      );
+      let threwCorrupt = false;
+      try {
+        const corrupt = new Uint8Array(bytes);
+        corrupt[0] = 0x58;
+        Engine.fromSnapshot(corrupt);
+      } catch (err) {
+        threwCorrupt = true;
+        assert(err && typeof err === 'object', 'corrupt snapshot throws EngineError object');
+      }
+      assert(threwCorrupt, 'corrupt snapshot must throw');
+    });
+
     await run('embedded lemma in list + source', () => {
       const fresh = new Engine();
       const groups = fresh.list();
@@ -234,6 +272,24 @@ data x: 3
 rule y: x + 1`);
       const r = runEx(fresh, 'inline_only', null, {}, null);
       assert(ruleNumber(r.results.y) === 4, 'inline load run');
+    });
+
+    await run('update upserts identities from code', () => {
+      const fresh = new Engine();
+      fresh.load({
+        'pricing.lemma': `spec pricing
+data quantity: 1
+rule total: quantity * 10`,
+      });
+      fresh.update(
+        null,
+        `spec pricing
+data quantity: 1
+rule total: quantity * 20`,
+        'pricing.lemma',
+      );
+      const r = runEx(fresh, 'pricing', null, {}, null);
+      assert(ruleNumber(r.results.total) === 20, 'update must change rule result');
     });
 
     await run('load list of label-code pairs', () => {
@@ -440,21 +496,98 @@ rule doubled: n * 2`,
       }
     });
 
-    await run('fetch rejects empty registry id', async () => {
+    await run('install rejects empty LemmaBase id', async () => {
       let threw = false;
       try {
-        await engine.fetch('   ');
+        await engine.install('   ');
       } catch (e) {
         threw = true;
         assert(Array.isArray(e), 'rejection must be array of EngineError');
         assert(e.length >= 1);
         for (const err of e) assertEngineError(err);
         assert(
-          e.some((err) => err.kind === 'request'),
-          'expected request error for empty id'
+          e.some((err) => err.kind === 'registry' || err.kind === 'request'),
+          'expected registry/request error for empty id'
         );
       }
       assert(threw);
+    });
+
+    await run('install via stubbed global fetch', async () => {
+      const fixturesDir = join(__dirname, '..', '..', 'tests', 'registry_fixtures');
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input) => {
+        const url = typeof input === 'string' ? input : input.url;
+        assert(
+          url === 'https://lemmabase.com/@iso/countries.lemma',
+          `unexpected fetch URL: ${url}`,
+        );
+        const content = readFileSync(join(fixturesDir, '@iso', 'countries.lemma'), 'utf-8');
+        return new Response(content, { status: 200 });
+      };
+      try {
+        const result = await engine.install('@iso/countries');
+        assert(typeof result.source === 'string' && result.source.includes('alpha2'),
+          'source must contain alpha2');
+        assert(result.id === '@iso/countries', `id must be @iso/countries, got ${result.id}`);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    await run('install missing id via stubbed fetch → not_found', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input) => {
+        const url = typeof input === 'string' ? input : input.url;
+        assert(
+          url === 'https://lemmabase.com/@no/such-package.lemma',
+          `unexpected fetch URL: ${url}`,
+        );
+        return new Response('not found', { status: 404 });
+      };
+      try {
+        let threw = false;
+        try {
+          await engine.install('@no/such-package');
+        } catch (e) {
+          threw = true;
+          assert(Array.isArray(e), 'rejection must be array of EngineError');
+          assert(e.length >= 1);
+          for (const err of e) assertEngineError(err);
+          assert(
+            e.some((err) => err.kind === 'registry' && err.registry_kind === 'not_found'),
+            `expected registry not_found, got: ${JSON.stringify(e.map((x) => ({ kind: x.kind, registry_kind: x.registry_kind })))}`,
+          );
+        }
+        assert(threw, 'install of missing id must throw');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    await run('install with rejecting fetch → network_error', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => {
+        throw new Error('connection refused');
+      };
+      try {
+        let threw = false;
+        try {
+          await engine.install('@iso/countries');
+        } catch (e) {
+          threw = true;
+          assert(Array.isArray(e), 'rejection must be array of EngineError');
+          assert(e.length >= 1);
+          for (const err of e) assertEngineError(err);
+          assert(
+            e.some((err) => err.kind === 'registry' && err.registry_kind === 'network_error'),
+            `expected registry network_error, got: ${JSON.stringify(e.map((x) => ({ kind: x.kind, registry_kind: x.registry_kind })))}`,
+          );
+        }
+        assert(threw, 'install with rejecting fetch must throw');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
 
     await run('invalid measure unit override completes with veto', () => {

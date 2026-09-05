@@ -48,7 +48,7 @@ cargo deny check --config .cargo/deny.toml
    cargo precommit --fuzz
    ```
 
-   That is what CI runs. Bare `cargo precommit` is a faster local shortcut (same gate without fuzz). The gate: versions-verify, Hex `mix precommit`, VS Code `npm precommit`, fmt, clippy (`--all-features`), `cargo check -p lemma-engine --no-default-features`, nextest (including ignored benches), WASM npm build+test, Maven `./mvnw -B verify` (after `lemma_jni` build), cargo-deny, `cargo coverage all --check`, then with `--fuzz` 30 minutes total across `engine/fuzz` targets. Requires `cargo-nextest`, `cargo-deny`, Elixir/Mix, Node.js, `wasm-pack`, and a **JDK 21+**; `--fuzz` also needs nightly and `cargo-fuzz`. Regenerate coverage with `cargo coverage all` when engine/cli sources change (`cargo-llvm-cov` required). `cargo nextest` alone is Rust tests only.
+   That is what CI runs. Bare `cargo precommit` is a faster local shortcut (same gate without fuzz). The gate: versions-verify, Hex `mix precommit`, VS Code `npm precommit`, fmt, clippy (`--all-features`), nextest (including ignored benches), WASM npm build+test, Maven `./mvnw -B verify` (after `lemma_jni` build), cargo-deny, `cargo coverage all --check`, then with `--fuzz` 30 minutes total across `engine/fuzz` targets. Requires `cargo-nextest`, `cargo-deny`, Elixir/Mix, Node.js, `wasm-pack`, and a **JDK 21+**; `--fuzz` also needs nightly and `cargo-fuzz`. Regenerate coverage with `cargo coverage all` when engine/cli sources change (`cargo-llvm-cov` required). `cargo nextest` alone is Rust tests only.
 
 ### Release version (maintainers)
 

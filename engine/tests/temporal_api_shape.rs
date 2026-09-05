@@ -2,7 +2,7 @@
 //!
 //! Tell-tale for the object form: a `"year"` key anywhere in the JSON document.
 
-use lemma::{DateTimeValue, Engine, Show};
+use lemma::{DateTimeValue, Engine};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -112,7 +112,7 @@ fn show_effective_fields_are_json_strings() {
     let engine = load(TWO_VERSION_SPEC, "policy.lemma");
     let effective = DateTimeValue::from_str("2024-06-01").expect("effective");
     let show = engine.show(None, "policy", Some(&effective)).expect("show");
-    let json = serde_json::to_value(&show).expect("serialize Show");
+    let json = serde_json::to_value(lemma::api::Show::from(&show)).expect("serialize Show");
     assert_no_year_key(&json, "show");
     assert_json_string(&json, "effective_from");
     assert_json_string(&json, "effective_to");
@@ -125,7 +125,7 @@ fn show_versions_entries_are_json_strings() {
     let engine = load(TWO_VERSION_SPEC, "policy.lemma");
     let effective = DateTimeValue::from_str("2024-06-01").expect("effective");
     let show = engine.show(None, "policy", Some(&effective)).expect("show");
-    let json = serde_json::to_value(&show).expect("serialize Show");
+    let json = serde_json::to_value(lemma::api::Show::from(&show)).expect("serialize Show");
     let versions = json["versions"]
         .as_array()
         .expect("versions must be an array");
@@ -148,7 +148,7 @@ fn latest_version_omits_effective_to_key() {
     let engine = load(TWO_VERSION_SPEC, "policy.lemma");
     let effective = DateTimeValue::from_str("2025-07-01").expect("effective");
     let show = engine.show(None, "policy", Some(&effective)).expect("show");
-    let json = serde_json::to_value(&show).expect("serialize Show");
+    let json = serde_json::to_value(lemma::api::Show::from(&show)).expect("serialize Show");
     assert_json_string(&json, "effective_from");
     assert_key_absent(&json, "effective_to");
 
@@ -195,7 +195,8 @@ fn rule_result_date_and_time_are_json_strings() {
             false,
         )
         .expect("run");
-    let json = serde_json::to_value(&response).expect("serialize Response");
+    let json =
+        serde_json::to_value(lemma::api::Response::from(&response)).expect("serialize Response");
     assert_no_year_key(&json, "response");
     assert_json_string(&json["results"]["the_date"], "date");
     assert_json_string(&json["results"]["the_time"], "time");
@@ -208,7 +209,7 @@ fn date_and_time_type_bounds_are_json_strings() {
     let engine = load(TEMPORAL_BOUNDS_SPEC, "bounds.lemma");
     let now = DateTimeValue::now();
     let show = engine.show(None, "bounds", Some(&now)).expect("show");
-    let json = serde_json::to_value(&show).expect("serialize Show");
+    let json = serde_json::to_value(lemma::api::Show::from(&show)).expect("serialize Show");
     assert_no_year_key(&json, "show");
 
     for name in ["start", "when"] {
@@ -229,7 +230,8 @@ fn date_range_and_time_range_values_have_string_endpoints() {
     let response = engine
         .run(None, "ranges", Some(&now), HashMap::new(), None, false)
         .expect("run");
-    let json = serde_json::to_value(&response).expect("serialize Response");
+    let json =
+        serde_json::to_value(lemma::api::Response::from(&response)).expect("serialize Response");
     assert_no_year_key(&json, "response");
 
     let window = &json["results"]["the_window"]["range"];
@@ -259,7 +261,8 @@ fn response_effective_remains_display_string() {
             false,
         )
         .expect("run");
-    let json = serde_json::to_value(&response).expect("serialize Response");
+    let json =
+        serde_json::to_value(lemma::api::Response::from(&response)).expect("serialize Response");
     assert_eq!(
         json["effective"],
         serde_json::Value::String(effective.to_string())
@@ -272,7 +275,7 @@ fn date_granularity_absent_from_api() {
     let engine = load(TWO_VERSION_SPEC, "policy.lemma");
     let effective = DateTimeValue::from_str("2024-06-01").expect("effective");
     let show = engine.show(None, "policy", Some(&effective)).expect("show");
-    let show_json = serde_json::to_value(&show).expect("Show");
+    let show_json = serde_json::to_value(lemma::api::Show::from(&show)).expect("Show");
     let show_text = serde_json::to_string(&show_json).expect("Show text");
     assert!(
         !show_text.contains("granularity"),
@@ -289,7 +292,8 @@ fn date_granularity_absent_from_api() {
             false,
         )
         .expect("run");
-    let response_text = serde_json::to_string(&response).expect("Response text");
+    let response_text =
+        serde_json::to_string(&lemma::api::Response::from(&response)).expect("Response text");
     assert!(
         !response_text.contains("granularity"),
         "DateGranularity must not appear in the API output: {response_text}"
@@ -301,7 +305,7 @@ fn show_deserializes_from_iso_string_temporal_fields() {
     let engine = load(TWO_VERSION_SPEC, "policy.lemma");
     let effective = DateTimeValue::from_str("2024-06-01").expect("effective");
     let show = engine.show(None, "policy", Some(&effective)).expect("show");
-    let show_json = serde_json::to_string(&show).expect("serialize");
+    let show_json = serde_json::to_string(&lemma::api::Show::from(&show)).expect("serialize");
     let show_value: serde_json::Value = serde_json::from_str(&show_json).expect("parse");
     assert!(
         show_value["effective_from"].is_string(),
@@ -309,7 +313,7 @@ fn show_deserializes_from_iso_string_temporal_fields() {
         show_value["effective_from"]
     );
 
-    let restored: Show = serde_json::from_str(&show_json)
+    let restored: lemma::api::Show = serde_json::from_str(&show_json)
         .expect("Show must deserialize from ISO-8601 string temporal fields");
     assert_eq!(
         restored.effective_from.as_ref().map(|d| d.to_string()),

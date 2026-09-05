@@ -22,9 +22,7 @@ fn dummy_rule(name: &str) -> EvaluatedRule {
         name: name.to_string(),
         path: RulePath::new(vec![], name.to_string()),
         source_location: dummy_source(),
-        rule_type: crate::planning::semantics::primitive_boolean_arc()
-            .as_ref()
-            .clone(),
+        rule_type: std::sync::Arc::clone(crate::planning::semantics::primitive_boolean_arc()),
     }
 }
 
@@ -33,6 +31,7 @@ fn number_rule_result(name: &str, value: Decimal) -> RuleResult {
         dummy_rule(name),
         &OperationResult::from_literal(LiteralValue::number_from_decimal(value)),
         crate::planning::semantics::primitive_number_arc().as_ref(),
+        &crate::planning::unit_family::FamilyUnitCatalog::default(),
         None,
         Vec::new(),
     )
@@ -53,7 +52,7 @@ fn test_response_serialization() {
         results,
     };
 
-    let json = serde_json::to_string(&response).unwrap();
+    let json = serde_json::to_string(&crate::api::Response::from(&response)).unwrap();
     let deserialized: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized["spec"], "test_spec");
     assert!(deserialized["results"]
@@ -79,8 +78,10 @@ fn response_number_json_is_scalar() {
         spec_effective_to: None,
         results,
     };
-    let json: serde_json::Value =
-        serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(
+        &serde_json::to_string(&crate::api::Response::from(&response)).unwrap(),
+    )
+    .unwrap();
     let number = &json["results"]["double"]["number"];
     assert!(!number.is_array());
     assert_eq!(number.as_str(), Some("20"));

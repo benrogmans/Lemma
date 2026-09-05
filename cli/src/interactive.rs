@@ -387,7 +387,14 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_measure_data(data_name, &input_label, suggestion, units, &constraints)
+            prompt_measure_data(
+                data_name,
+                &input_label,
+                suggestion,
+                lemma_type,
+                units,
+                &constraints,
+            )
         }
         TypeSpecification::Number {
             minimum,
@@ -425,14 +432,19 @@ fn prompt_value_for_type(
                 units: units.clone(),
                 help: help.clone(),
             };
+            let constraints = NumericConstraints {
+                minimum: ratio_spec.minimum_decimal(),
+                maximum: ratio_spec.maximum_decimal(),
+                decimals: *decimals,
+                help: help.clone(),
+            };
             prompt_ratio_data(
                 data_name,
                 &input_label,
                 suggestion,
+                lemma_type,
                 units,
-                ratio_spec.minimum_decimal(),
-                ratio_spec.maximum_decimal(),
-                help.as_str(),
+                &constraints,
             )
         }
         TypeSpecification::Date { .. } => prompt_date_data(&input_label, data_name, suggestion),
@@ -642,19 +654,21 @@ fn prompt_measure_data(
     data_name: &str,
     prompt_title: &str,
     suggestion: Option<&LiteralValue>,
+    lemma_type: &LemmaType,
     units: &lemma::MeasureUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
-    let parsed = suggestion.and_then(|lit| match &lit.value {
-        ValueKind::Measure(n, signature) => Some((
-            n.clone(),
-            signature.first().map(|(n, _)| n.as_str()).unwrap_or(""),
-        )),
+    let default_unit = suggestion.and_then(|lit| match &lit.value {
+        ValueKind::Measure(_) => lemma_type
+            .measure_runtime_signature()
+            .first()
+            .map(|(name, _)| name.clone()),
         _ => None,
     });
 
     if units.is_empty() {
-        let default_str = suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt());
+        let default_str =
+            suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt(lemma_type));
         return prompt_decimal_input(prompt_title, default_str.as_deref(), constraints, "7.65");
     }
 
@@ -664,7 +678,7 @@ fn prompt_measure_data(
     } else {
         let prompt_msg = format!("Select unit for {}", data_name);
         let mut select = Select::new(&prompt_msg, unit_names);
-        if let Some((_, def_unit)) = parsed {
+        if let Some(def_unit) = default_unit.as_deref() {
             if let Some(idx) = units.iter().position(|u| u.name == def_unit) {
                 select = select.with_starting_cursor(idx);
             }
@@ -674,7 +688,7 @@ fn prompt_measure_data(
             .context(format!("Failed to get unit for {}", data_name))?
     };
 
-    let numeric_default = suggestion.and_then(|lit| lit.magnitude_in_unit(&unit));
+    let numeric_default = suggestion.and_then(|lit| lit.magnitude_in_unit(lemma_type, &unit));
 
     let value_constraints = NumericConstraints {
         help: if constraints.help.is_empty() {
@@ -698,10 +712,9 @@ fn prompt_ratio_data(
     data_name: &str,
     prompt_title: &str,
     suggestion: Option<&LiteralValue>,
+    lemma_type: &LemmaType,
     units: &lemma::RatioUnits,
-    minimum: Option<Decimal>,
-    maximum: Option<Decimal>,
-    help: &str,
+    constraints: &NumericConstraints,
 ) -> Result<String> {
     let selected_unit = if units.len() == 1 {
         units
@@ -720,20 +733,15 @@ fn prompt_ratio_data(
         .context(format!("Failed to get ratio unit for {}", data_name))?
     };
     let default_decimal = if selected_unit == "(none)" {
-        suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt())
+        suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt(lemma_type))
     } else {
-        suggestion.and_then(|lit| lit.magnitude_in_unit(&selected_unit))
+        suggestion.and_then(|lit| lit.magnitude_in_unit(lemma_type, &selected_unit))
     };
 
     let value = prompt_decimal_input(
         prompt_title,
         default_decimal.as_deref(),
-        &NumericConstraints {
-            minimum,
-            maximum,
-            decimals: None,
-            help: help.to_string(),
-        },
+        constraints,
         "0.10",
     )?;
 
@@ -1069,5 +1077,30 @@ rule other: need
         provided.insert("need".to_string(), "42".to_string());
         let collected = HashMap::new();
         next_prompt_name_from_results(std::slice::from_ref(other), &provided, &collected);
+    }
+
+    #[test]
+    fn next_prompt_asks_control_before_gated_body() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Volatile,
+                r#"
+spec demo
+data expensive: number
+data flag: boolean
+rule main: expensive unless flag then 0
+"#
+                .to_string(),
+            )])
+            .expect("load");
+
+        let response = run(&engine, "demo", HashMap::new(), None);
+        let empty = HashMap::new();
+        assert_eq!(
+            next_prompt_name_from_results(response.results.values(), &empty, &empty),
+            Some("flag".to_string()),
+            "interactive must ask flag before gated expensive"
+        );
     }
 }

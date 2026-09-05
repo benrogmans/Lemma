@@ -135,15 +135,13 @@ rule total: d.value
     engine
         .update(
             None,
-            "dep",
-            Some(&now),
-            SourceType::Volatile,
             r#"
 spec dep
 data value: 20
 rule out: value
 "#
             .to_string(),
+            SourceType::Volatile,
         )
         .expect("update dep while consumer depends on it");
 
@@ -185,9 +183,6 @@ rule total: d.value
 
     let bad = engine.update(
         None,
-        "dep",
-        Some(&now),
-        SourceType::Volatile,
         r#"
 spec dep
 uses missing: nonexistent_spec
@@ -195,6 +190,7 @@ data value: 99
 rule out: value + missing.x
 "#
         .to_string(),
+        SourceType::Volatile,
     );
     assert!(bad.is_err(), "update with broken deps must fail");
 

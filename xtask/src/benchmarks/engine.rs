@@ -114,6 +114,7 @@ pub fn run(root: &Path) -> Result<(), String> {
 
     run_engine_criterion_bench(root, "lemma-engine", "evaluate")?;
     let memory_stdout = run_memory_bench(root)?;
+    let snapshot_stdout = run_snapshot_bench(root)?;
     let outputs_stdout = run_outputs_bench(root)?;
     let outputs_report: OutputsReport = serde_json::from_str(outputs_stdout.trim())
         .map_err(|error| format!("outputs bench stdout was not valid JSON: {error}"))?;
@@ -160,6 +161,7 @@ pub fn run(root: &Path) -> Result<(), String> {
 
     let accuracy = compute_accuracy(&outputs_by_spec, &python_by_spec)?;
     let memory_rows = parse_memory_bench_stdout(&memory_stdout)?;
+    let snapshot_rows = parse_snapshot_bench_stdout(&snapshot_stdout)?;
     let env = capture_environment(root)?;
     let python_version = capture_stdout("python3", &["--version"], None)?;
 
@@ -172,6 +174,7 @@ pub fn run(root: &Path) -> Result<(), String> {
         python_by_spec: &python_by_spec,
         accuracy: &accuracy,
         memory_rows: &memory_rows,
+        snapshot_rows: &snapshot_rows,
     })?;
 
     write_report(root, RESULTS_RELATIVE, &report)
@@ -258,6 +261,80 @@ fn parse_memory_bench_stdout(stdout: &str) -> Result<Vec<MemoryRow>, String> {
             "memory bench reported {} rows, expected {}",
             rows.len(),
             FIXTURES.len()
+        ));
+    }
+    Ok(rows)
+}
+
+/// Rungs of the logistics ladder the snapshot bench must report, in order.
+const SNAPSHOT_LADDER: [usize; 4] = [1050, 6300, 18900, 126000];
+
+fn run_snapshot_bench(root: &Path) -> Result<String, String> {
+    let output = Command::new("cargo")
+        .current_dir(root)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .args(["bench", "-p", "lemma-engine", "--bench", "snapshot"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| format!("failed to spawn cargo bench snapshot: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo bench snapshot exited with code {:?}",
+            output.status.code()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("snapshot bench stdout was not UTF-8: {error}"))
+}
+
+fn parse_milliseconds(cell: &str, what: &str) -> Result<f64, String> {
+    cell.strip_suffix(" ms")
+        .ok_or_else(|| format!("BUG: {what} cell '{cell}' lacks ' ms' suffix"))?
+        .parse::<f64>()
+        .map_err(|error| format!("BUG: {what} parse failed: {error}"))
+}
+
+fn parse_snapshot_bench_stdout(stdout: &str) -> Result<Vec<SnapshotRow>, String> {
+    let mut rows = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with("| logistics_") {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cells.len() < 12 {
+            return Err(format!("BUG: malformed snapshot bench row: {line}"));
+        }
+        rows.push(SnapshotRow {
+            profile: cells[1].to_string(),
+            rate_cells: cells[2]
+                .parse::<usize>()
+                .map_err(|error| format!("BUG: rate cells parse failed: {error}"))?,
+            source_bytes: cells[3]
+                .parse::<usize>()
+                .map_err(|error| format!("BUG: source bytes parse failed: {error}"))?,
+            load_ms: parse_milliseconds(cells[4], "load")?,
+            loaded_heap_bytes: cells[5]
+                .parse::<i128>()
+                .map_err(|error| format!("BUG: loaded heap parse failed: {error}"))?,
+            snapshot_bytes: cells[6]
+                .parse::<usize>()
+                .map_err(|error| format!("BUG: snapshot bytes parse failed: {error}"))?,
+            encode_ms: parse_milliseconds(cells[7], "encode")?,
+            restore_ms: parse_milliseconds(cells[8], "restore")?,
+            restore_allocations: cells[9]
+                .parse::<usize>()
+                .map_err(|error| format!("BUG: allocations/restore parse failed: {error}"))?,
+            restored_heap_bytes: cells[10]
+                .parse::<i128>()
+                .map_err(|error| format!("BUG: restored heap parse failed: {error}"))?,
+        });
+    }
+    let reported: Vec<usize> = rows.iter().map(|row| row.rate_cells).collect();
+    if reported != SNAPSHOT_LADDER {
+        return Err(format!(
+            "snapshot bench reported rungs {reported:?}, expected {SNAPSHOT_LADDER:?}"
         ));
     }
     Ok(rows)
@@ -452,6 +529,7 @@ struct ComposeReportContext<'a> {
     python_by_spec: &'a BTreeMap<String, &'a PythonFixture>,
     accuracy: &'a (AccuracyStats, Vec<AccuracyDeviation>),
     memory_rows: &'a [MemoryRow],
+    snapshot_rows: &'a [SnapshotRow],
 }
 
 struct MemoryRow {
@@ -461,6 +539,24 @@ struct MemoryRow {
     bytes_allocated_per_eval: f64,
     reallocations_per_eval: f64,
     net_bytes_retained_per_eval: f64,
+}
+
+#[derive(Debug)]
+struct SnapshotRow {
+    profile: String,
+    rate_cells: usize,
+    source_bytes: usize,
+    load_ms: f64,
+    loaded_heap_bytes: i128,
+    snapshot_bytes: usize,
+    encode_ms: f64,
+    restore_ms: f64,
+    restore_allocations: usize,
+    restored_heap_bytes: i128,
+}
+
+fn format_mebibytes(bytes: i128) -> String {
+    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 fn lemma_display_repr(lemma: &LemmaOutput) -> String {
@@ -480,6 +576,7 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
         python_by_spec,
         accuracy,
         memory_rows,
+        snapshot_rows,
     } = ctx;
     let (stats, deviations) = accuracy;
     let mut out = String::new();
@@ -497,17 +594,23 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
          on identical inline inputs.\n",
     );
     out.push_str(
-        "- Cross-language latency compares per-request evaluation only — like comparing \
+        "- Cross-language latency compares per-request evaluation only: like comparing \
          optimized C execution to Python, not C compile time to Python runtime.\n",
     );
     out.push_str(
         "- Lemma: compile (`Engine::new()` + `load(in_memory_source)`, parse + plan) once \
-         before measurement; timed loop = inline input literals + `run_plan` → terminal rule. \
+         before measurement; timed loop = inline input literals + `Engine::run` → terminal rule. \
          Terminal rule is `total` (shipping, pricing) or `grand_total` (order_pipeline).\n",
     );
     out.push_str(
         "- Python: import module once before measurement; timed loop = inline input literals + \
-         `build_inputs(raw)` + `compute_terminal(inputs)`.\n",
+         `build_inputs(raw)` + `compute_terminal(inputs)`. `compute_terminal` evaluates only the \
+         terminal rule's dependency closure, matching Lemma's requested-rule walk.\n",
+    );
+    out.push_str(
+        "- Literal constants are parsed once: Lemma at plan time, Python at import time \
+         (module-level `Fraction` constants). Rounding number types (`Decimal`, `float`) are \
+         out of scope; the comparison is exact arithmetic vs exact arithmetic.\n",
     );
     out.push_str(
         "- No disk I/O, no JSON input sidecars, no pre-built input maps outside the timed loop.\n",
@@ -524,14 +627,22 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
         "- Numerical precision: a separate untimed pass compares all rule outputs. Lemma's \
          `outputs` bench evaluates every local rule with explanations; Python's \
          `compute(inputs)` returns a full `Outputs` dataclass. Both sides use exact \
-         rational arithmetic internally and commit to decimal strings at the output \
-         boundary. The accuracy table compares both sides via \
+         rational arithmetic (`RationalInteger` / `fractions.Fraction`) and commit to \
+         decimal strings at the output boundary. The accuracy table compares both sides via \
          `rust_decimal::Decimal` (28-digit precision).\n",
     );
     out.push_str(
         "- Memory: `stats_alloc` over 100 warmup + 1_000 measured eval-only `evaluate` calls per fixture \
          (`cargo bench -p lemma-engine --bench memory`). Engine loaded once per fixture; each iteration \
-         wraps inline inputs + `run_plan` in a fresh region.\n\n",
+         wraps inline inputs + `Engine::run` in a fresh region.\n",
+    );
+    out.push_str(
+        "- Snapshot: `cargo bench -p lemma-engine --bench snapshot` on the generated logistics \
+         ladder (1050 / 6300 / 18900 / 126000 rate cells; byte-identical to the Java \
+         `SpecGenerator.logistics` fixtures). One `load`, then 1 warmup + 10 measured \
+         `Engine::snapshot` and `Engine::from_snapshot` calls; medians reported. Heap columns are \
+         `stats_alloc` net bytes retained by the loaded and by the restored engine. The restored \
+         engine must evaluate `rate_shop.cheapest` to the same value as the loaded engine.\n\n",
     );
 
     push_environment_block(&mut out, env, Some(python_version));
@@ -630,6 +741,37 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
             row.bytes_allocated_per_eval,
             row.reallocations_per_eval,
             row.net_bytes_retained_per_eval,
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("## Snapshot (logistics ladder)\n\n");
+    out.push_str(
+        "Multi-spec rating workspace: `rates_*` cards with 1050 `unless` arms each, `zones_*` \
+         with 900 arms per service, one quote pipeline per carrier and service, and a `rate_shop` \
+         that `uses` every quote. Restore is the number to watch; snapshot bytes and restored heap \
+         are dominated by the per-cell type payload the plan store ships today.\n\n",
+    );
+    out.push_str(
+        "| Profile | Rate cells | Source | Load | Loaded heap | Snapshot | Encode median | Restore median | Allocations/restore | Restored heap | Restored / loaded heap |\n",
+    );
+    out.push_str(
+        "|---------|-----------:|-------:|-----:|------------:|---------:|--------------:|---------------:|--------------------:|--------------:|-----------------------:|\n",
+    );
+    for row in snapshot_rows {
+        out.push_str(&format!(
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            row.profile,
+            row.rate_cells,
+            format_mebibytes(row.source_bytes as i128),
+            format_latency_ns(row.load_ms * 1_000_000.0),
+            format_mebibytes(row.loaded_heap_bytes),
+            format_mebibytes(row.snapshot_bytes as i128),
+            format_latency_ns(row.encode_ms * 1_000_000.0),
+            format_latency_ns(row.restore_ms * 1_000_000.0),
+            row.restore_allocations,
+            format_mebibytes(row.restored_heap_bytes),
+            format_ratio(row.restored_heap_bytes as f64, row.loaded_heap_bytes as f64),
         ));
     }
     out.push('\n');
@@ -792,11 +934,13 @@ mod tests {
             python_by_spec: &python_by_spec,
             accuracy: &accuracy,
             memory_rows: &[],
+            snapshot_rows: &[],
         })
         .expect("compose");
 
         assert!(report.contains("cargo benchmarks engine"));
         assert!(report.contains("Compile (Lemma, parse + plan)"));
+        assert!(report.contains("## Snapshot (logistics ladder)"));
         assert!(report.contains(
             "[`engine/benches/specs/shipping.lemma`](https://github.com/lemma/lemma/blob/abc123/engine/benches/specs/shipping.lemma)"
         ));
@@ -804,6 +948,99 @@ mod tests {
             "[`engine/benches/python/business_rules`](https://github.com/lemma/lemma/tree/abc123/engine/benches/python/business_rules)"
         ));
         assert!(!report.contains("../../engine/benches/"));
+    }
+
+    const SNAPSHOT_STDOUT: &str = "\
+| Profile | Rate cells | Source bytes | Load | Loaded heap | Snapshot bytes | Encode median | Restore median | Allocations/restore | Restored heap | Restored / loaded heap |
+|---------|-----------:|-------------:|-----:|------------:|---------------:|--------------:|---------------:|--------------------:|--------------:|-----------------------:|
+| logistics_ground | 1050 | 91193 | 152.232 ms | 7890782 | 975801 | 1.740 ms | 5.636 ms | 89800 | 14827759 | 1.879 |
+| logistics_carrier | 6300 | 531593 | 1238.075 ms | 44207781 | 5271707 | 11.488 ms | 29.597 ms | 473104 | 73055730 | 1.653 |
+| logistics_d2c | 18900 | 1589057 | 3726.640 ms | 127446633 | 15573551 | 42.176 ms | 83.561 ms | 1365914 | 214594422 | 1.684 |
+| logistics_enterprise | 126000 | 10581400 | 36117.441 ms | 835152974 | 106370241 | 291.432 ms | 559.316 ms | 8954799 | 1361256760 | 1.630 |
+";
+
+    #[test]
+    fn parse_snapshot_bench_stdout_reads_every_rung() {
+        let rows = parse_snapshot_bench_stdout(SNAPSHOT_STDOUT).expect("parse");
+        assert_eq!(rows.len(), 4);
+        let enterprise = &rows[3];
+        assert_eq!(enterprise.profile, "logistics_enterprise");
+        assert_eq!(enterprise.rate_cells, 126000);
+        assert_eq!(enterprise.source_bytes, 10_581_400);
+        assert_eq!(enterprise.load_ms, 36117.441);
+        assert_eq!(enterprise.loaded_heap_bytes, 835_152_974);
+        assert_eq!(enterprise.snapshot_bytes, 106_370_241);
+        assert_eq!(enterprise.encode_ms, 291.432);
+        assert_eq!(enterprise.restore_ms, 559.316);
+        assert_eq!(enterprise.restore_allocations, 8_954_799);
+        assert_eq!(enterprise.restored_heap_bytes, 1_361_256_760);
+    }
+
+    #[test]
+    fn parse_snapshot_bench_stdout_rejects_missing_rung() {
+        let without_enterprise: String = SNAPSHOT_STDOUT
+            .lines()
+            .filter(|line| !line.starts_with("| logistics_enterprise"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let error = parse_snapshot_bench_stdout(&without_enterprise).expect_err("must reject");
+        assert!(
+            error.contains("expected [1050, 6300, 18900, 126000]"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn snapshot_section_formats_units() {
+        let rows = parse_snapshot_bench_stdout(SNAPSHOT_STDOUT).expect("parse");
+        let env = EnvironmentInfo {
+            rustc_version: "rustc test".to_string(),
+            uname: "Linux test x86_64".to_string(),
+            git_sha: "abc123".to_string(),
+        };
+        let row = LatencyRow {
+            median_ns: 1.0,
+            std_dev_ns: 1.0,
+        };
+        let python_owned: Vec<PythonFixture> = FIXTURES
+            .iter()
+            .map(|fixture| PythonFixture {
+                spec_name: fixture.spec_name.to_string(),
+                iterations_latency: 10_000,
+                latency_median_ns: 1.0,
+                latency_std_dev_ns: 1.0,
+                outputs: BTreeMap::new(),
+            })
+            .collect();
+        let mut latency_rows = BTreeMap::new();
+        let mut compile_rows = BTreeMap::new();
+        let mut explain_latency_rows = BTreeMap::new();
+        let mut python_by_spec = BTreeMap::new();
+        for (fixture, python) in FIXTURES.iter().zip(python_owned.iter()) {
+            latency_rows.insert(fixture.spec_name, row);
+            compile_rows.insert(fixture.spec_name, row);
+            explain_latency_rows.insert(fixture.spec_name, row);
+            python_by_spec.insert(fixture.spec_name.to_string(), python);
+        }
+        let accuracy = (AccuracyStats::default(), Vec::new());
+        let report = compose_report(ComposeReportContext {
+            env: &env,
+            python_version: "Python 3.12.3",
+            latency_rows: &latency_rows,
+            explain_latency_rows: &explain_latency_rows,
+            compile_rows: &compile_rows,
+            python_by_spec: &python_by_spec,
+            accuracy: &accuracy,
+            memory_rows: &[],
+            snapshot_rows: &rows,
+        })
+        .expect("compose");
+        assert!(
+            report.contains(
+                "| `logistics_enterprise` | 126000 | 10.1 MiB | 36117.441 ms | 796.5 MiB | 101.4 MiB | 291.432 ms | 559.316 ms | 8954799 | 1298.2 MiB | 1.630 |"
+            ),
+            "{report}"
+        );
     }
 
     #[test]

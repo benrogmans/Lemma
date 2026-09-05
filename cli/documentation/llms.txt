@@ -232,9 +232,9 @@ rule has_discount:
 - Reference members: `alias.field` or `alias.rule_name`.
 - Under `uses`, `  -> with path: value` sets imported data (path relative to imported spec). Do not use `data alias.field`. Standalone `with alias.field: …` is deprecated (still parses; `quality` recommends block form). Local slots use `data`.
 
-**LemmaBase: shared specs from the registry**
+**LemmaBase: shared repositories**
 
-Specs on [LemmaBase.com](https://lemmabase.com) imported with `@` repo qualifiers. Search: [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (e.g. `?q=finance`).
+Repositories on [LemmaBase.com](https://lemmabase.com) imported with `@` repo qualifiers. Search: [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (e.g. `?q=finance`).
 
 ```lemma
 spec invoicing
@@ -258,11 +258,11 @@ rule total:
 ```
 
 Forms:
-- `uses @user/repo spec_name`: import registry spec (alias = spec name)
+- `uses @user/repo spec_name`: import LemmaBase spec (alias = spec name)
 - `uses alias: @user/repo spec_name`: import with alias (`iso.field`)
 - `uses @user/repo spec_name 2026-01-01`: pin effective date
 
-Reference imported members: `iso.code`. Detail: [LemmaBase Registry](https://lemma.run/reference/registry).
+Reference imported members: `iso.code`. Detail: [LemmaBase](https://lemma.run/reference/registry).
 
 `repo` blocks namespace specs across contexts (e.g., `repo accounting`). Skip unless asked. Details: [Composing specs](https://lemma.run/learn/composing_specs).
 
@@ -361,13 +361,13 @@ Primitives: `boolean`, `number`, `text`, `measure`, `ratio`, `date`, `time`, and
 
 | Type | `->` commands |
 |------|----------------|
-| `boolean` | `help`, `suggest` |
-| `number` | `decimals`, `minimum`, `maximum`, `help`, `suggest` |
-| `measure` | `unit`, `decimals`, `minimum`, `maximum`, `help`, `suggest` (see **Measure**, **Units**) |
-| `ratio` | `unit`, `minimum`, `maximum`, `help`, `suggest` |
-| `text` | `option`, `options`, `length`, `help`, `suggest` |
-| `date`, `time` | `minimum`, `maximum`, `help`, `suggest` |
-| `number range`, `date range`, `time range`, `ratio range` | `lower`, `upper`, `minimum`, `maximum`, `help`, `suggest` |
+| `boolean` | `help`, `fill`, `suggest` |
+| `number` | `decimals`, `minimum`, `maximum`, `help`, `fill`, `suggest` |
+| `measure` | `unit`, `decimals`, `minimum`, `maximum`, `help`, `fill`, `suggest` (see **Measure**, **Units**) |
+| `ratio` | `unit`, `minimum`, `maximum`, `help`, `fill`, `suggest` |
+| `text` | `option`, `options`, `length`, `help`, `fill`, `suggest` |
+| `date`, `time` | `minimum`, `maximum`, `help`, `fill`, `suggest` |
+| `number range`, `date range`, `time range`, `ratio range` | `lower`, `upper`, `minimum`, `maximum`, `help`, `fill`, `suggest` |
 | `measure range` | above + `unit` |
 
 On range types, `lower` / `upper` bound endpoints; `minimum` / `maximum` bound **span width**, not endpoints.
@@ -376,7 +376,8 @@ On range types, `lower` / `upper` bound endpoints; `minimum` / `maximum` bound *
 
 - Chain `->` rows on `data` only (rules have no constraints; see **Syntax**).
 - `-> help` = spoken question (CS ask string).
-- `-> suggest` = UI hint; does not prefill or commit.
+- `-> fill` = commit a value on a typed slot (callers may override); cannot combine with `suggest` on the same declaration.
+- `-> suggest` = UI hint; does not fill or commit.
 - Prefer `-> option` for closed text sets.
 - Bounded domain on constraints (`-> minimum 0`), not veto (see **Veto**).
 - Examples: type catalog [01_coffee_order.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/01_coffee_order.lemma); fee policy [02_library_fees.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/02_library_fees.lemma).

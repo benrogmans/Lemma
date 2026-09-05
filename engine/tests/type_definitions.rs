@@ -170,7 +170,7 @@ fn test_measure_type_default_before_unit_declarations() {
         other => panic!("expected Measure, got {:?}", other),
     }
     assert!(
-        entry.suggestion.is_some() && entry.prefilled.is_none(),
+        entry.suggestion.is_some() && entry.fill.is_none(),
         "typedef money default must surface on price as show suggestion"
     );
 }
@@ -213,7 +213,7 @@ fn test_measure_type_default_after_unit_declarations() {
         other => panic!("expected Measure, got {:?}", other),
     }
     assert!(
-        entry.suggestion.is_some() && entry.prefilled.is_none(),
+        entry.suggestion.is_some() && entry.fill.is_none(),
         "typedef money default must surface on price as show suggestion"
     );
 }
@@ -288,7 +288,7 @@ fn test_run_returns_data_in_definition_order() {
     assert_eq!(
         data_names,
         vec!["zebra", "alpha", "middle"],
-        "scoped run should preserve definition order for rule missing_data"
+        "scoped run should preserve evaluation order for rule missing_data"
     );
 }
 
@@ -318,20 +318,20 @@ fn test_show_splits_prefilled_literal_and_suggestion() {
 
     let quantity = show.data.get("quantity").expect("quantity should exist");
     assert!(
-        quantity.suggestion.is_some() && quantity.prefilled.is_none(),
+        quantity.suggestion.is_some() && quantity.fill.is_none(),
         "type-level default is a suggestion only"
     );
 
     let name = show.data.get("name").expect("name should exist");
     assert!(
-        name.suggestion.is_none() && name.prefilled.is_none(),
-        "type-only data without default has no prefilled value or suggestion"
+        name.suggestion.is_none() && name.fill.is_none(),
+        "type-only data without default has no fill value or suggestion"
     );
 
     let price = show.data.get("price").expect("price should exist");
     assert!(
-        price.prefilled.is_some() && price.suggestion.is_none(),
-        "explicit literal is prefilled, not a default suggestion"
+        price.fill.is_some() && price.suggestion.is_none(),
+        "explicit literal is fill, not a default suggestion"
     );
 }
 
@@ -362,7 +362,7 @@ fn test_show_measure_default_is_value() {
 
     let salary = show.data.get("salary").expect("salary should exist");
     assert!(
-        salary.suggestion.is_some() && salary.prefilled.is_none(),
+        salary.suggestion.is_some() && salary.fill.is_none(),
         "measure typedef default must surface as show suggestion on salary"
     );
 }
@@ -396,7 +396,7 @@ fn test_typedef_default_inherits_through_extension_chain() {
         .get("final_price")
         .expect("final_price should exist");
     assert!(
-        final_price.suggestion.is_some() && final_price.prefilled.is_none(),
+        final_price.suggestion.is_some() && final_price.fill.is_none(),
         "typedef default declared on ancestor type must inherit as suggestion on leaf binding"
     );
 }

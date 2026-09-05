@@ -7,7 +7,7 @@ fn test_meta_fields_parsing_and_planning() {
 spec meta_test 2025-01-01
 
 meta title: "Test Spec"
-meta version: v1.2.3
+meta version: "v1.2.3"
 meta author: "Alice"
 
 data x: 1
@@ -53,28 +53,60 @@ data x: 1
 }
 
 #[test]
-fn test_meta_fields_validation_errors() {
+fn test_meta_title_accepts_number_literal() {
     let mut engine = Engine::new();
     let code = r#"
-spec meta_error
+spec meta_numeric_title
 
 meta title: 123
+
+data x: 1
+"#;
+
+    engine
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "meta_numeric_title.lemma",
+            ))),
+            code.to_string(),
+        )])
+        .expect("numeric meta title must load");
+
+    let show = engine
+        .show(None, "meta_numeric_title", Some(&DateTimeValue::now()))
+        .expect("show");
+    assert_eq!(
+        show.meta.get("title").map(|v| v.to_string()),
+        Some("123".to_string())
+    );
+}
+
+#[test]
+fn test_meta_unquoted_identifier_rejected() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec meta_unquoted
+
+meta version: v1.2.3
 "#;
 
     let errs = engine
         .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "meta_error.lemma",
+                "meta_unquoted.lemma",
             ))),
             code.to_string(),
         )])
-        .expect_err("meta title must reject non-text");
+        .expect_err("unquoted meta identifier must fail");
     let err_msg = errs
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<_>>()
         .join("; ");
-    assert!(err_msg.contains("Meta 'title' must be a text literal"));
+    assert!(
+        err_msg.contains("meta literal"),
+        "expected meta literal parse error, got: {err_msg}"
+    );
 }
 
 #[test]

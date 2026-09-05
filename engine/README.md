@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.9.8"
+lemma-engine = "0.9.9"
 ```
 
 ### Minimal example
@@ -108,7 +108,7 @@ let response = engine.run(
 
 ### Discovering required data
 
-`Engine::show` is static: data used by the spec's rules, plus local rule result types and temporal window. Types, prefilled literals, and `-> suggest` hints live on `Show.data`. For run-data-aware requirements on a partial run, call `run` and inspect each rule's `missing_data`:
+`Engine::show` is static: every declared promptable data slot, plus local rule result types and temporal window. Empty `needed_by_rules` means offered for reuse (`data x: alias.slot`). Types, filled literals, and `-> suggest` hints live on `Show.data`. For run-data-aware requirements on a partial run, call `run` and inspect each rule's `missing_data`:
 
 ```rust
 let response = engine.run(
@@ -127,21 +127,24 @@ for (name, result) in &response.results {
 }
 ```
 
-Bound inputs (caller run bindings, spec prefilled literals, or data vetoes) are omitted from `missing_data`. Suggestions on `Show.data` do not bind until supplied in `run`'s data map.
+Bound inputs (caller run bindings, spec-filled literals, or data vetoes) are omitted from `missing_data`. Suggestions on `Show.data` do not bind until supplied in `run`'s data map.
 
-### Loading registry dependencies
+### Loading repositories from LemmaBase
+
+The engine owns registry policy (`Registries`, `LemmaBase` bound to `https://lemmabase.com`) but performs no HTTP. Drive `Install` / `Resolve` with an `HttpTransport`, or use a host SDK `install`, then `load`:
 
 ```rust
-use lemma::{Engine, SourceType};
+use lemma::{Engine, Install, Registries, SourceType};
 use std::fs;
 use std::sync::Arc;
 
-let mut engine = Engine::new();
+let registries = Registries::default();
+let result = Install::run(&registries, "@org/pkg", &transport)?;
 
-// After fetching from your registry:
+let mut engine = Engine::new();
 engine.load([(
-    SourceType::Dependency("@org/pkg".to_string()),
-    dependency_source,
+    SourceType::Dependency(result.id),
+    result.source,
 )])?;
 
 let workspace_text = fs::read_to_string("workspace.lemma")?;
@@ -150,6 +153,8 @@ engine.load([(
     workspace_text,
 )])?;
 ```
+
+See [registry docs](../cli/documentation/reference/registry.md).
 
 ## Embedded units stdlib
 
@@ -167,16 +172,18 @@ Public `load` rejects `SourceType::Dependency("lemma")`: that id is reserved for
 | `show(repository, spec, effective)` | Interface + temporal window (`Show`; no Lemma text) |
 | `source(repository, spec?, effective)` | Formatted Lemma source (repo-wide when `spec` omitted) |
 | `run(repository, spec, effective, data, rules, explain)` | Evaluate; each `RuleResult` may include `missing_data`; `explanation` when `explain` is true ([schema](schemas/api.v1.json)) |
+| `update(repository, code, source_type)` | Replace identities present in `code` in one planning pass |
 | `remove(repository, spec, effective)` | Remove a temporal spec slice |
+| `snapshot()` / `from_snapshot(bytes)` | Persist / restore parsed specs + plans + limits (no re-plan); see [Rust tools](../cli/documentation/tools/rust.md#binary-snapshot) |
 | `limits()` | Resource limits |
 
 Free function: `lemma::resolve_effective`.
 
 ## Consumer API tiers
 
-**Tier 1: always available** (all targets, `registry` feature optional): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), API types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult`; explanation JSON uses `"type"` + `"name"`; see [`api.v1.json`](schemas/api.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests, not a minimal “verbs only” crate.
+**Tier 1: always available** (all targets): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), API types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult`; explanation JSON uses `"type"` + `"name"`; see [`api.v1.json`](schemas/api.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests, not a minimal “verbs only” crate.
 
-**Tier 2: `registry` feature:** `Registry`, `LemmaBase`, `RegistryBundle`, `RegistryError*`, `Context`, `LemmaRepository`, `LemmaSpec`, `LemmaSpecSet`, and native `resolve_registry_references`.
+**Tier 2: registries (all targets):** `Registry`, `LemmaBase`, `Registries`, `RepositoryQualifier`, `Header`, `Fetch`, `HttpResponse`, `TransportFailure`, `HttpTransport`, `Install`, `InstallStep`, `Resolve`, `ResolveStep`, `RegistryBundle`, `RegistryError`, `RepositoryInstallResult`, `Context`, `LemmaRepository`, `LemmaSpec`, `LemmaSpecSet`.
 
 **Tier 3: native only (`not(wasm32)`):** `lemma::deps` for filesystem dependency cache paths.
 
@@ -235,7 +242,7 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.8</version>
+  <version>0.9.9</version>
 </dependency>
 ```
 

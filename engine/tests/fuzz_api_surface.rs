@@ -141,12 +141,13 @@ rule band_out: band
         let show = engine
             .show(None, name, Some(&now))
             .unwrap_or_else(|e| panic!("{name} show: {e:?}"));
-        serde_json::to_string(&show).unwrap_or_else(|e| panic!("{name} Show serialize: {e}"));
+        serde_json::to_string(&lemma::api::Show::from(&show))
+            .unwrap_or_else(|e| panic!("{name} Show serialize: {e}"));
 
         let response = engine
             .run(None, name, Some(&now), HashMap::new(), None, true)
             .unwrap_or_else(|e| panic!("{name} run: {e:?}"));
-        serde_json::to_string(&response)
+        serde_json::to_string(&lemma::api::Response::from(&response))
             .unwrap_or_else(|e| panic!("{name} Response serialize: {e}"));
         let list = engine.list();
         serde_json::to_string(&list).unwrap_or_else(|e| panic!("{name} list serialize: {e}"));

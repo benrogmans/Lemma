@@ -12,14 +12,13 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::diagnostics;
-use crate::registry::Registry;
 use crate::semantic_tokens;
 use crate::workspace::WorkspaceModel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::workspace_files::{DiskLemmaFile, WatchGuard, WorkspaceFiles, WorkspaceFilesError};
 use lemma::{DataValue, SpecRef};
 
-async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
+async fn publish_workspace_diagnostics(client: &Client, workspace: &mut WorkspaceModel) {
     let file_diagnostics = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         workspace.validate_workspace()
     })) {
@@ -64,11 +63,11 @@ struct SharedState {
 ///
 /// Implements the LSP protocol for Lemma files:
 /// - Diagnostics (parse errors + planning errors) published on file open/change
-/// - Registry and local `lemma_deps/` document links from parsed [`SpecRef`] spans
+/// - LemmaBase navigation URLs and local `lemma_deps/` document links from parsed [`SpecRef`] spans
 pub struct LemmaLanguageServer {
     client: Client,
     state: Arc<SharedState>,
-    registry: Arc<dyn Registry>,
+    registries: lemma::Registries,
     /// Host-injected disk access (CLI). `None` on WASM / buffer-only mode.
     #[cfg(not(target_arch = "wasm32"))]
     workspace_files: Option<Arc<dyn WorkspaceFiles>>,
@@ -77,7 +76,6 @@ pub struct LemmaLanguageServer {
 impl LemmaLanguageServer {
     pub fn new(
         client: Client,
-        registry: Box<dyn Registry>,
         #[cfg(not(target_arch = "wasm32"))] workspace_files: Option<Arc<dyn WorkspaceFiles>>,
     ) -> Self {
         Self {
@@ -91,7 +89,7 @@ impl LemmaLanguageServer {
                 #[cfg(not(target_arch = "wasm32"))]
                 watch_guard: RwLock::new(None),
             }),
-            registry: Arc::from(registry),
+            registries: lemma::Registries::default(),
             #[cfg(not(target_arch = "wasm32"))]
             workspace_files,
         }
@@ -221,8 +219,8 @@ impl LemmaLanguageServer {
     /// This is fine for the playground: a single file, no registry, fast validation.
     #[cfg(target_arch = "wasm32")]
     async fn publish_full_diagnostics(&self) {
-        let workspace = self.state.workspace.read().await;
-        publish_workspace_diagnostics(&self.client, &workspace).await;
+        let mut workspace = self.state.workspace.write().await;
+        publish_workspace_diagnostics(&self.client, &mut workspace).await;
     }
 
     /// Spawn the background debounce task.
@@ -231,8 +229,8 @@ impl LemmaLanguageServer {
     /// (parse + planning). Fetched registry bundles under `<workspace>/lemma_deps/` are loaded
     /// like the CLI; unresolved `@` references surface as planning errors.
     ///
-    /// Not available on WASM — `tokio::spawn` requires `Send` futures, but on WASM
-    /// the registry trait uses `?Send` futures.
+    /// Not available on WASM — `tokio::spawn` requires `Send` and the WASM LSP
+    /// path uses a different runtime model (single-threaded, no native tokio spawn).
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn_debounce_task(&self) {
         let state = Arc::clone(&self.state);
@@ -254,8 +252,8 @@ impl LemmaLanguageServer {
                     }
                 }
 
-                let workspace = state.workspace.read().await;
-                publish_workspace_diagnostics(&client, &workspace).await;
+                let mut workspace = state.workspace.write().await;
+                publish_workspace_diagnostics(&client, &mut workspace).await;
             }
         });
     }
@@ -328,8 +326,8 @@ impl LanguageServer for LemmaLanguageServer {
             if let Some(root_uri) = root_uri {
                 if let Ok(root_path) = root_uri.to_file_path() {
                     self.load_and_watch_workspace_disk(&root_path).await;
-                    let workspace = self.state.workspace.read().await;
-                    publish_workspace_diagnostics(&self.client, &workspace).await;
+                    let mut workspace = self.state.workspace.write().await;
+                    publish_workspace_diagnostics(&self.client, &mut workspace).await;
                 }
             }
         }
@@ -463,6 +461,10 @@ impl LanguageServer for LemmaLanguageServer {
         }
     }
 
+    /// Resolve `uses` targets to document links against the long-lived engine.
+    ///
+    /// Links reflect the last `validate_workspace` pass: between a `didChange` and
+    /// the debounced validation, targets may still resolve against pre-edit state.
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
         let workspace = self.state.workspace.read().await;
@@ -484,7 +486,7 @@ impl LanguageServer for LemmaLanguageServer {
             let Some(root) = workspace.workspace_root().cloned() else {
                 return Ok(None);
             };
-            let engine = workspace.engine_with_workspace();
+            let engine = workspace.engine();
             let text = text.as_str();
             let root = root.as_path();
 
@@ -499,7 +501,7 @@ impl LanguageServer for LemmaLanguageServer {
                         consumer.effective_from(),
                         text,
                         root,
-                        &engine,
+                        engine,
                     ) {
                         links.push(link);
                     }
@@ -538,7 +540,11 @@ impl LanguageServer for LemmaLanguageServer {
                     let Some(hit_range) = spec_ref_hit_range(spec_ref, &text, position) else {
                         continue;
                     };
-                    let Some(repo_url) = self.registry.url_for_id(qualifier_name, None) else {
+                    let Some(repo_url) = self
+                        .registries
+                        .registry_for(repo_qual)
+                        .navigation_url(qualifier_name, None)
+                    else {
                         return Ok(None);
                     };
                     let markdown = format!("[Open `{qualifier_name}` in LemmaBase]({repo_url})");
@@ -724,7 +730,6 @@ fn ensure_embedded_stdlib_view(workspace_root: &Path) -> Option<std::path::PathB
 mod tests {
     use super::*;
     use lemma::DataValue;
-    use lemma::LemmaBase;
     use lemma::EMBEDDED_STDLIB_REPOSITORY;
 
     #[test]
@@ -1068,15 +1073,19 @@ mod tests {
             "positions outside both spans must not produce a hit",
         );
 
-        let registry = LemmaBase::new();
-        let repo_url = registry
-            .url_for_id(qualifier_name, None)
-            .expect("LemmaBase must yield a repository URL");
+        let registries = lemma::Registries::default();
+        let qualifier = lemma::RepositoryQualifier::new(qualifier_name);
+        let repo_url = lemma::Registry::navigation_url(
+            registries.registry_for(&qualifier),
+            qualifier_name,
+            None,
+        )
+        .expect("LemmaBase navigation_url must yield a repository URL");
         let markdown = format!("[Open `{qualifier_name}` in LemmaBase]({repo_url})");
 
         assert_eq!(
             markdown,
-            format!("[Open `@iso/countries` in LemmaBase]({repo_url})"),
+            "[Open `@iso/countries` in LemmaBase](https://lemmabase.com/@iso/countries)",
         );
         assert_eq!(
             markdown.matches("](").count(),
@@ -1145,7 +1154,8 @@ mod tests {
             std::fs::read_to_string(&dep_path).expect("read dep"),
         );
 
-        let engine = workspace_model.engine_with_workspace();
+        let _ = workspace_model.validate_workspace();
+        let engine = workspace_model.engine();
         assert!(
             engine
                 .list()
@@ -1170,7 +1180,7 @@ mod tests {
                         consumer.effective_from(),
                         &consumer_source,
                         &root,
-                        &engine,
+                        engine,
                     ) {
                         links.push(link);
                     }

@@ -132,13 +132,19 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("base_price should have value");
     // base_price should be Measure with unit "eur"
     match &base_price_value.value {
-        lemma::ValueKind::Measure(n, signature) => {
-            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
+        lemma::ValueKind::Measure(n) => {
+            let unit = base_price
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().map(|s| s.as_str()))
+                .unwrap_or("");
             assert_eq!(
                 unit, "eur",
-                "base_price should have unit 'eur', got: {:?}",
+                "base_price should have unit eur in measure map, got: {:?}",
                 unit
             );
+
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
                 lemma::ValueKind::Number(n.clone())
@@ -203,13 +209,19 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("price_per_cup should have value");
     // price_per_cup should be Measure with unit "eur" (inherited from base_price)
     match &cup_price.value {
-        lemma::ValueKind::Measure(n, signature) => {
-            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
+        lemma::ValueKind::Measure(n) => {
+            let unit = price_per_cup
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().map(|s| s.as_str()))
+                .unwrap_or("");
             assert_eq!(
                 unit, "eur",
-                "price_per_cup should have unit 'eur', got: {:?}",
+                "price_per_cup should have unit eur in measure map, got: {:?}",
                 unit
             );
+
             // base_price = 2.50, size_multiplier = 0.80
             // price_per_cup = 2.50 * 0.80 = 2.00
             assert_eq!(
@@ -243,13 +255,19 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("subtotal should have value");
     // subtotal should be Measure with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::ValueKind::Measure(n, signature) => {
-            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
+        lemma::ValueKind::Measure(n) => {
+            let unit = subtotal
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().map(|s| s.as_str()))
+                .unwrap_or("");
             assert_eq!(
                 unit, "eur",
-                "subtotal should have unit 'eur', got: {:?}",
+                "subtotal should have unit eur in measure map, got: {:?}",
                 unit
             );
+
             n.clone()
         }
         _ => panic!(
@@ -359,13 +377,19 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("base_price should have value");
     // base_price should be Measure with unit "eur"
     match &base_price_value.value {
-        lemma::ValueKind::Measure(n, signature) => {
-            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
+        lemma::ValueKind::Measure(n) => {
+            let unit = base_price
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().map(|s| s.as_str()))
+                .unwrap_or("");
             assert_eq!(
                 unit, "eur",
-                "base_price should have unit 'eur', got: {:?}",
+                "base_price should have unit eur in measure map, got: {:?}",
                 unit
             );
+
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
                 lemma::ValueKind::Number(n.clone())
@@ -477,13 +501,19 @@ fn test_coffee_order_latte_large_with_loyalty() {
 
     // subtotal should be Measure with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::ValueKind::Measure(n, signature) => {
-            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
+        lemma::ValueKind::Measure(n) => {
+            let unit = subtotal
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().map(|s| s.as_str()))
+                .unwrap_or("");
             assert_eq!(
                 unit, "eur",
-                "subtotal should have unit 'eur', got: {:?}",
+                "subtotal should have unit eur in measure map, got: {:?}",
                 unit
             );
+
             n.clone()
         }
         _ => panic!(

@@ -1,6 +1,7 @@
 package com.lemmabase.lemma;
 
 import java.lang.ref.Cleaner;
+import java.net.http.HttpClient;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -11,6 +12,10 @@ import org.jspecify.annotations.Nullable;
 public final class Engine implements AutoCloseable {
   /** Cleaner for native handle teardown when {@link Engine} is unreachable. */
   private static final Cleaner CLEANER = Cleaner.create();
+
+  /** Shared HTTP client for LemmaBase requests (JVM defaults for proxy and trust store). */
+  private static final HttpClient DEFAULT_HTTP_CLIENT =
+      HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
 
   /** Shared native state guarded by {@link NativeState#lock}. */
   private final NativeState state;
@@ -51,6 +56,28 @@ public final class Engine implements AutoCloseable {
   }
 
   /**
+   * Creates an engine with named resource-limit overrides. Unset keys keep engine defaults.
+   *
+   * @param limits named overrides
+   * @return new engine instance
+   */
+  public static Engine create(ResourceLimits.Builder limits) {
+    Objects.requireNonNull(limits, "limits");
+    return new Engine(Native.createWithLimits(limits.toJson()));
+  }
+
+  /**
+   * Restores an engine from {@link #snapshot()} bytes.
+   *
+   * @param bytes opaque snapshot from {@link #snapshot()}
+   * @return restored engine
+   */
+  public static Engine fromSnapshot(byte[] bytes) {
+    Objects.requireNonNull(bytes, "bytes");
+    return new Engine(Native.fromSnapshot(bytes));
+  }
+
+  /**
    * Loads Lemma source into the engine.
    *
    * @param code Lemma source text
@@ -83,6 +110,82 @@ public final class Engine implements AutoCloseable {
     } finally {
       state.lock.unlock();
     }
+  }
+
+  /**
+   * Loads UTF-8 Lemma source from a file path.
+   *
+   * @param path source file
+   * @throws LemmaException if the file cannot be read
+   */
+  public void load(java.nio.file.Path path) {
+    Objects.requireNonNull(path, "path");
+    String code;
+    try {
+      code = java.nio.file.Files.readString(path, java.nio.charset.StandardCharsets.UTF_8);
+    } catch (java.io.IOException e) {
+      String message = "failed to read Lemma source from '" + path + "': " + e.getMessage();
+      throw new LemmaException(message, List.of(EngineError.request(message)));
+    }
+    load(code);
+  }
+
+  /**
+   * Loads UTF-8 Lemma source from a classpath resource.
+   *
+   * @param anchor class whose class loader locates the resource
+   * @param resourcePath classpath resource path
+   * @throws LemmaException if the resource is missing or cannot be read
+   */
+  public void loadResource(Class<?> anchor, String resourcePath) {
+    Objects.requireNonNull(anchor, "anchor");
+    Objects.requireNonNull(resourcePath, "resourcePath");
+    try (java.io.InputStream in = anchor.getClassLoader().getResourceAsStream(resourcePath)) {
+      if (in == null) {
+        String message = "classpath resource not found: '" + resourcePath + "'";
+        throw new LemmaException(message, List.of(EngineError.request(message)));
+      }
+      load(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+    } catch (java.io.IOException e) {
+      String message =
+          "failed to read classpath resource '" + resourcePath + "': " + e.getMessage();
+      throw new LemmaException(message, List.of(EngineError.request(message)));
+    }
+  }
+
+  /**
+   * Downloads a repository from LemmaBase; does not load it. Call {@link #load(Map)} with the
+   * returned id as the source label before loading workspace specs that {@code uses} it.
+   *
+   * <p>Does not write {@code lemma_deps/}.
+   *
+   * @param repository LemmaBase repository id (e.g. {@code @iso/countries})
+   * @return downloaded source and repository id
+   */
+  public RepositoryInstallResult install(String repository) {
+    return install(repository, DEFAULT_HTTP_CLIENT);
+  }
+
+  /**
+   * Downloads a repository from LemmaBase using a caller-configured HTTP client; does not load it.
+   * Call {@link #load(Map)} with the returned id as the source label before loading workspace specs
+   * that {@code uses} it.
+   *
+   * @param repository LemmaBase repository id (e.g. {@code @iso/countries})
+   * @param client HTTP client (honours JVM trust store and proxy settings when built from defaults)
+   * @return downloaded source and repository id
+   */
+  public RepositoryInstallResult install(String repository, HttpClient client) {
+    Objects.requireNonNull(repository, "repository");
+    Objects.requireNonNull(client, "client");
+    String limitsJson;
+    state.lock.lock();
+    try {
+      limitsJson = Native.limits(state.requireHandle());
+    } finally {
+      state.lock.unlock();
+    }
+    return LemmaBase.install(client, repository, limitsJson);
   }
 
   /**
@@ -192,25 +295,18 @@ public final class Engine implements AutoCloseable {
   }
 
   /**
-   * Replace a temporal spec slice with new source (atomic remove + load).
+   * Replace identities in {@code code} (atomic upsert; Path/Dependency prune siblings).
    *
    * @param repository repository handle; {@code null} for default
-   * @param spec spec name
-   * @param effective effective date; {@code null} for latest
    * @param code replacement Lemma source
    * @param attribute source label (path or {@code @owner/repo}); {@code null} for volatile
    */
   public void update(
-      @Nullable String repository,
-      String spec,
-      @Nullable String effective,
-      String code,
-      @Nullable String attribute) {
-    Objects.requireNonNull(spec, "spec");
+      @Nullable String repository, String code, @Nullable String attribute) {
     Objects.requireNonNull(code, "code");
     state.lock.lock();
     try {
-      Native.update(state.requireHandle(), repository, spec, effective, code, attribute);
+      Native.update(state.requireHandle(), repository, code, attribute);
     } finally {
       state.lock.unlock();
     }
@@ -229,6 +325,20 @@ public final class Engine implements AutoCloseable {
       state.lock.unlock();
     }
     return JsonSupport.parseLimits(json);
+  }
+
+  /**
+   * Persist parsed specs + plans + limits as opaque bytes. Restore with {@link #fromSnapshot}.
+   *
+   * @return snapshot bytes
+   */
+  public byte[] snapshot() {
+    state.lock.lock();
+    try {
+      return Native.snapshot(state.requireHandle());
+    } finally {
+      state.lock.unlock();
+    }
   }
 
   /** Structural quality recommendations across loaded specs. Advisory only.

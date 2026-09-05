@@ -94,7 +94,8 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
             .run(None, spec, Some(&now), data.clone(), None, false)
             .expect("run");
         b.iter(|| {
-            let json = serde_json::to_vec(&response).expect("serialize");
+            let json =
+                serde_json::to_vec(&lemma::api::Response::from(&response)).expect("serialize");
             std::hint::black_box(json);
         });
     });
@@ -125,7 +126,8 @@ fn build_envelope(
         }
         if let Some(explanation) = &rule_result.explanation {
             if let OperationResult::Value(v) = &explanation.result {
-                let val = serde_json::to_value(&v.value).expect("ValueKind serializes");
+                let val = serde_json::to_value(lemma::api::ValueKind::from(&v.value))
+                    .expect("ValueKind serializes");
                 entry.insert("value".into(), val);
             }
         }

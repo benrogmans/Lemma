@@ -1802,7 +1802,7 @@ rule r: i.half + 1
 }
 
 #[test]
-fn g3_missing_data_order_follows_plan_data_declaration() {
+fn g3_missing_data_order_follows_evaluation_order() {
     let mut engine = Engine::new();
     load(&mut engine, CHOOSER);
     let response = run(
@@ -1814,6 +1814,207 @@ fn g3_missing_data_order_follows_plan_data_declaration() {
     );
     assert_eq!(
         missing(&response, "result"),
-        &["mode", "simple_input", "complex_input_a", "complex_input_b"]
+        &["mode", "complex_input_a", "complex_input_b", "simple_input"]
+    );
+}
+
+// --- Evaluation-order missing_data (decision-tree preorder) ---
+
+#[test]
+fn missing_data_asks_control_before_gated_body() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data expensive: number
+data flag: boolean
+rule main: expensive unless flag then 0
+"#,
+    );
+    let unbound = run(&engine, "demo", HashMap::new(), None, false);
+    assert_eq!(
+        missing(&unbound, "main"),
+        &["flag", "expensive"],
+        "last-match unless: ask flag before gated expensive"
+    );
+
+    let mut data = HashMap::new();
+    data.insert("flag".to_string(), "true".to_string());
+    let gated = run(&engine, "demo", data, None, false);
+    assert!(
+        missing(&gated, "main").is_empty(),
+        "flag true takes arm body 0; expensive absent from missing_data: {:?}",
+        missing(&gated, "main")
+    );
+    assert!(
+        !rule(&gated, "main").awaits_missing_data(),
+        "flag true settles the rule"
+    );
+}
+
+#[test]
+fn missing_data_last_unless_first_mixed_scrutinees() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data x: number
+data y: number
+data a: boolean
+data b: boolean
+rule r: 0 unless a then x unless b then y
+"#,
+    );
+    let response = run(&engine, "demo", HashMap::new(), None, false);
+    assert_eq!(
+        missing(&response, "r"),
+        &["b", "y", "a", "x"],
+        "reverse unless scan order regardless of declaration order"
+    );
+}
+
+#[test]
+fn missing_data_arithmetic_left_to_right() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data zebra: number
+data alpha: number
+rule total: alpha + zebra
+"#,
+    );
+    let response = run(&engine, "demo", HashMap::new(), None, false);
+    assert_eq!(
+        missing(&response, "total"),
+        &["alpha", "zebra"],
+        "sum operands in evaluation order, not declaration order"
+    );
+}
+
+#[test]
+fn missing_data_folded_matches_unfolded_piecewise_order() {
+    let expected = ["mode", "complex_input_a", "complex_input_b", "simple_input"];
+
+    let mut folded = Engine::new();
+    load(&mut folded, CHOOSER);
+    let folded_response = run(
+        &folded,
+        "chooser",
+        HashMap::new(),
+        Some(&["result".to_string()]),
+        false,
+    );
+    assert_eq!(missing(&folded_response, "result"), &expected);
+
+    let mut unfolded = Engine::new();
+    load(
+        &mut unfolded,
+        r#"
+spec chooser
+data mode: text -> options "simple" "complex"
+data simple_input: number
+data complex_input_a: number
+data complex_input_b: number
+rule result: veto "pick mode"
+  unless mode is "simple" and true then simple_input
+  unless mode is "complex" then complex_input_a + complex_input_b
+"#,
+    );
+    let unfolded_response = run(
+        &unfolded,
+        "chooser",
+        HashMap::new(),
+        Some(&["result".to_string()]),
+        false,
+    );
+    assert_eq!(
+        missing(&unfolded_response, "result"),
+        &expected,
+        "non-foldable arm condition must keep same evaluation order as OrderedDispatch"
+    );
+}
+
+#[test]
+fn missing_data_interleaved_mixed_scrutinees() {
+    let code = r#"
+spec chooser
+data mode: text -> options "simple" "complex"
+data priority: text -> options "low" "high"
+data simple_input: number
+data complex_input_a: number
+data complex_input_b: number
+rule result: veto "pick mode"
+  unless mode is "simple" then simple_input
+  unless priority is "high" then 100
+  unless mode is "complex" then complex_input_a + complex_input_b
+"#;
+    let mut engine = Engine::new();
+    load(&mut engine, code);
+
+    let unbound = run(
+        &engine,
+        "chooser",
+        HashMap::new(),
+        Some(&["result".to_string()]),
+        false,
+    );
+    assert_eq!(
+        missing(&unbound, "result"),
+        &[
+            "mode",
+            "complex_input_a",
+            "complex_input_b",
+            "priority",
+            "simple_input"
+        ]
+    );
+
+    let mut complex = HashMap::new();
+    complex.insert("mode".to_string(), "complex".to_string());
+    let complex_response = run(
+        &engine,
+        "chooser",
+        complex,
+        Some(&["result".to_string()]),
+        false,
+    );
+    assert_eq!(
+        missing(&complex_response, "result"),
+        &["complex_input_a", "complex_input_b"]
+    );
+
+    let mut high = HashMap::new();
+    high.insert("priority".to_string(), "high".to_string());
+    let high_alone = run(
+        &engine,
+        "chooser",
+        high,
+        Some(&["result".to_string()]),
+        false,
+    );
+    assert_eq!(
+        missing(&high_alone, "result"),
+        &["mode", "complex_input_a", "complex_input_b", "simple_input"],
+        "priority high alone cannot settle: later complex arm still MissingData on unbound mode"
+    );
+
+    let mut middle_wins = HashMap::new();
+    middle_wins.insert("mode".to_string(), "simple".to_string());
+    middle_wins.insert("priority".to_string(), "high".to_string());
+    let middle = run(
+        &engine,
+        "chooser",
+        middle_wins,
+        Some(&["result".to_string()]),
+        false,
+    );
+    assert!(
+        missing(&middle, "result").is_empty(),
+        "mode not complex + priority high: middle arm wins; missing_data empty: {:?}",
+        missing(&middle, "result")
     );
 }

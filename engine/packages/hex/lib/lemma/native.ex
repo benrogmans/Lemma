@@ -32,10 +32,14 @@ defmodule Lemma.Native do
   def lemma_remove(_resource, _repository, _spec_name, _effective),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_update(_resource, _repository, _spec, _effective, _code, _attribute),
+  def lemma_update(_resource, _repository, _code, _attribute),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_limits(_resource), do: :erlang.nif_error(:nif_not_loaded)
+
+  def lemma_snapshot(_resource), do: :erlang.nif_error(:nif_not_loaded)
+
+  def lemma_from_snapshot(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_quality(_resource), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -56,4 +60,7 @@ defmodule Lemma.Native do
   def mcp_source(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
   def mcp_check(_args_json), do: :erlang.nif_error(:nif_not_loaded)
   def mcp_guide(_args_json), do: :erlang.nif_error(:nif_not_loaded)
+
+  def lemma_install_start(_engine, _repository), do: :erlang.nif_error(:nif_not_loaded)
+  def lemma_install_respond(_install, _response), do: :erlang.nif_error(:nif_not_loaded)
 end

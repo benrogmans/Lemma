@@ -90,13 +90,13 @@ Primitives: `boolean`, `number`, `text`, `measure`, `ratio`, `date`, `time`, and
 
 | Type | `->` commands |
 |------|----------------|
-| `boolean` | `help`, `suggest` |
-| `number` | `decimals`, `minimum`, `maximum`, `help`, `suggest` |
-| `measure` | `unit`, `decimals`, `minimum`, `maximum`, `help`, `suggest` (see **Measure**, **Units**) |
-| `ratio` | `unit`, `minimum`, `maximum`, `help`, `suggest` |
-| `text` | `option`, `options`, `length`, `help`, `suggest` |
-| `date`, `time` | `minimum`, `maximum`, `help`, `suggest` |
-| `number range`, `date range`, `time range`, `ratio range` | `lower`, `upper`, `minimum`, `maximum`, `help`, `suggest` |
+| `boolean` | `help`, `fill`, `suggest` |
+| `number` | `decimals`, `minimum`, `maximum`, `help`, `fill`, `suggest` |
+| `measure` | `unit`, `decimals`, `minimum`, `maximum`, `help`, `fill`, `suggest` (see **Measure**, **Units**) |
+| `ratio` | `unit`, `minimum`, `maximum`, `help`, `fill`, `suggest` |
+| `text` | `option`, `options`, `length`, `help`, `fill`, `suggest` |
+| `date`, `time` | `minimum`, `maximum`, `help`, `fill`, `suggest` |
+| `number range`, `date range`, `time range`, `ratio range` | `lower`, `upper`, `minimum`, `maximum`, `help`, `fill`, `suggest` |
 | `measure range` | above + `unit` |
 
 On range types, `lower` / `upper` bound endpoints; `minimum` / `maximum` bound **span width**, not endpoints.
@@ -105,7 +105,8 @@ On range types, `lower` / `upper` bound endpoints; `minimum` / `maximum` bound *
 
 - Chain `->` rows on `data` only (rules have no constraints; see **Syntax**).
 - `-> help` = spoken question (CS ask string).
-- `-> suggest` = UI hint; does not prefill or commit.
+- `-> fill` = commit a value on a typed slot (callers may override); cannot combine with `suggest` on the same declaration.
+- `-> suggest` = UI hint; does not fill or commit.
 - Prefer `-> option` for closed text sets.
 - Bounded domain on constraints (`-> minimum 0`), not veto (see **Veto**).
 - Examples: type catalog [01_coffee_order.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/01_coffee_order.lemma); fee policy [02_library_fees.lemma](https://raw.githubusercontent.com/lemma/lemma/main/engine/documentation/examples/02_library_fees.lemma).

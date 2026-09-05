@@ -1,7 +1,38 @@
 use crate::parsing::ast::{EffectiveDate, LemmaSpec};
 use crate::parsing::source::Source;
-use crate::registry::RegistryErrorKind;
 use std::fmt;
+
+/// The kind of failure that occurred during a Registry operation.
+///
+/// Registry implementations classify their errors into these kinds so that
+/// the engine (and ultimately the user) can distinguish between a missing
+/// spec, an authorization failure, a network outage, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryErrorKind {
+    /// The requested spec or type was not found (e.g. HTTP 404).
+    NotFound,
+    /// The request was unauthorized or forbidden (e.g. HTTP 401, 403).
+    Unauthorized,
+    /// A network or transport error occurred (DNS failure, timeout, connection refused).
+    NetworkError,
+    /// The registry server returned an internal error (e.g. HTTP 5xx).
+    ServerError,
+    /// An error that does not fit the other categories.
+    Other,
+}
+
+impl fmt::Display for RegistryErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "not found"),
+            Self::Unauthorized => write!(f, "unauthorized"),
+            Self::NetworkError => write!(f, "network error"),
+            Self::ServerError => write!(f, "server error"),
+            Self::Other => write!(f, "error"),
+        }
+    }
+}
 
 /// Detailed error information with optional source location.
 #[derive(Debug, Clone)]

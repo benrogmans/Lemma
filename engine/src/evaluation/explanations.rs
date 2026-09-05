@@ -6,8 +6,9 @@
 //! builds them while walking THE DAG.
 
 use crate::computation::{OperationResult, VetoType};
-use crate::planning::semantics::RulePath;
+use crate::planning::semantics::{LemmaType, RulePath};
 use serde::Serialize;
+use std::sync::Arc;
 
 // Re-export tree types for use within the evaluation module
 pub use crate::planning::explanation::{
@@ -18,6 +19,8 @@ pub use crate::planning::explanation::{
 pub struct Explanation {
     pub name: RulePath,
     pub result: OperationResult,
+    /// Type of [`Self::result`] for measure/ratio display (binding unit, decimals).
+    pub result_type: Arc<LemmaType>,
     pub body: String,
     pub causes: Vec<Cause>,
     pub children: Vec<ExplanationNode>,
@@ -30,7 +33,10 @@ impl Serialize for Explanation {
     {
         ExplanationNode::Rule {
             name: self.name.clone(),
-            result: Some(format_operation_result(&self.result)),
+            result: Some(format_operation_result(
+                &self.result,
+                self.result_type.as_ref(),
+            )),
             body: self.body.clone(),
             causes: self.causes.clone(),
             children: self.children.clone(),
@@ -39,9 +45,9 @@ impl Serialize for Explanation {
     }
 }
 
-pub(crate) fn format_operation_result(result: &OperationResult) -> String {
+pub(crate) fn format_operation_result(result: &OperationResult, result_type: &LemmaType) -> String {
     match result {
-        OperationResult::Value(value) => value.display_value(),
+        OperationResult::Value(value) => value.display_value_with_type(result_type),
         OperationResult::Veto(VetoType::UserDefined { message: None }) => String::new(),
         OperationResult::Veto(veto) => veto.to_string(),
     }
@@ -49,7 +55,8 @@ pub(crate) fn format_operation_result(result: &OperationResult) -> String {
 
 pub fn format_explanation(explanation: &Explanation) -> String {
     let mut lines = Vec::new();
-    let result_display = format_operation_result(&explanation.result);
+    let result_display =
+        format_operation_result(&explanation.result, explanation.result_type.as_ref());
     lines.push(format!("{}: {}", explanation.name.rule, result_display));
     let mut ctx = FormatContext {
         lines: &mut lines,

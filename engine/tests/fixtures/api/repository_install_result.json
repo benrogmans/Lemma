@@ -1,0 +1,4 @@
+{
+  "source": "repo @iso/countries\n\nspec alpha2\ndata code: text\n",
+  "id": "@iso/countries"
+}

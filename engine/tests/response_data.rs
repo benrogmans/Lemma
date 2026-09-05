@@ -212,7 +212,7 @@ rule main: prefilled + suggested + required
         .suggestion
         .as_ref()
         .is_some_and(|s| s.number.as_deref() == Some("5")));
-    assert!(suggested.prefilled.is_none());
+    assert!(suggested.fill.is_none());
 
     let main = response.results.get("main").expect("main rule");
     assert!(main.vetoed, "required operand missing");
@@ -308,7 +308,7 @@ fn missing_data_prunes_simple_branch_when_mode_is_complex() {
 }
 
 #[test]
-fn missing_data_order_follows_plan_data_order() {
+fn missing_data_order_follows_evaluation_order() {
     let mut engine = Engine::new();
     engine
         .load([(lemma::SourceType::Volatile, CHOOSER_LEMMA.to_string())])
@@ -330,9 +330,9 @@ fn missing_data_order_follows_plan_data_order() {
         missing(&response, "result"),
         vec![
             "mode".to_string(),
-            "simple_input".to_string(),
             "complex_input_a".to_string(),
             "complex_input_b".to_string(),
+            "simple_input".to_string(),
         ]
     );
 }

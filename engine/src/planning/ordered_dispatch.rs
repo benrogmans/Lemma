@@ -15,6 +15,7 @@
 //! Point regions are what distinguishes `>` from `>=` at a shared boundary.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 
@@ -22,6 +23,8 @@ use crate::computation::datetime::{semantic_datetime_to_chrono, semantic_time_to
 use crate::computation::rational::{NumericFailure, RationalInteger};
 use crate::parsing::ast::PrimitiveKind;
 use crate::planning::semantics::{ComparisonComputation, LemmaType, LiteralValue, ValueKind};
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// One breakpoint in an ordered dispatch table.
 ///
@@ -29,14 +32,44 @@ use crate::planning::semantics::{ComparisonComputation, LemmaType, LiteralValue,
 /// `Ord` panics when the cross-multiplication needed to order two rationals runs
 /// out of memory, while evaluation must turn that failure into a veto. Ordering
 /// therefore goes through [`Self::try_compare`], which surfaces the failure.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Text` stays `Arc<str>`: planning clones dispatch tables through the cons key,
+/// `extract_reachable`, and `PlanView` merges, so a shared string is one refcount
+/// bump per clone where an owned one is an allocation per clone (measured 10%
+/// slower load on the 126000 logistics fixture).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum DispatchKey {
-    Text(String),
+    Text(#[serde(deserialize_with = "arc_str_from_str")] Arc<str>),
     /// Stored magnitude of a number, ratio or measure. Measure magnitudes are held
     /// in canonical base-unit space, which is why one key covers all three.
     Rational(RationalInteger),
     Date(NaiveDateTime),
     Time(NaiveDateTime),
+}
+
+/// serde's own `Arc<str>` impl goes through an intermediate `String` (two
+/// allocations and a copy per key); this builds the `Arc` straight from the
+/// decoded `&str`.
+fn arc_str_from_str<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arc<str>, D::Error> {
+    struct ArcStrVisitor;
+
+    impl Visitor<'_> for ArcStrVisitor {
+        type Value = Arc<str>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a string")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Arc<str>, E> {
+            Ok(Arc::from(value))
+        }
+
+        fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Arc<str>, E> {
+            Ok(Arc::from(value))
+        }
+    }
+
+    deserializer.deserialize_str(ArcStrVisitor)
 }
 
 /// Borrowed probe used only while searching a dispatch table.
@@ -55,7 +88,7 @@ pub(crate) enum DispatchProbe<'a> {
 impl DispatchKey {
     pub(crate) fn as_probe(&self) -> DispatchProbe<'_> {
         match self {
-            DispatchKey::Text(text) => DispatchProbe::Text(text.as_str()),
+            DispatchKey::Text(text) => DispatchProbe::Text(text.as_ref()),
             DispatchKey::Rational(magnitude) => DispatchProbe::Rational(magnitude),
             DispatchKey::Date(moment) => DispatchProbe::Date(*moment),
             DispatchKey::Time(moment) => DispatchProbe::Time(*moment),
@@ -71,7 +104,7 @@ impl DispatchKey {
         other: &DispatchProbe<'_>,
     ) -> Result<Ordering, NumericFailure> {
         match (self, other) {
-            (DispatchKey::Text(left), DispatchProbe::Text(right)) => Ok(left.as_str().cmp(right)),
+            (DispatchKey::Text(left), DispatchProbe::Text(right)) => Ok((**left).cmp(right)),
             (DispatchKey::Rational(left), DispatchProbe::Rational(right)) => left.try_cmp(right),
             (DispatchKey::Date(left), DispatchProbe::Date(right)) => Ok(left.cmp(right)),
             (DispatchKey::Time(left), DispatchProbe::Time(right)) => Ok(left.cmp(right)),
@@ -97,10 +130,10 @@ pub(crate) fn dispatch_key_of_literal(
     value: &ValueKind,
 ) -> Result<DispatchKey, DispatchKeyBuildError> {
     match value {
-        ValueKind::Text(text) => Ok(DispatchKey::Text(text.clone())),
+        ValueKind::Text(text) => Ok(DispatchKey::Text(Arc::from(text.as_str()))),
         ValueKind::Number(magnitude)
-        | ValueKind::Measure(magnitude, _)
-        | ValueKind::Ratio(magnitude, _) => Ok(DispatchKey::Rational(magnitude.clone())),
+        | ValueKind::Measure(magnitude)
+        | ValueKind::Ratio(magnitude) => Ok(DispatchKey::Rational(magnitude.clone())),
         ValueKind::Date(date) => match semantic_datetime_to_chrono(date) {
             Ok(moment) => Ok(DispatchKey::Date(moment.naive_utc())),
             Err(message) => Err(DispatchKeyBuildError::CalendarFailure(message)),
@@ -128,8 +161,8 @@ pub(crate) fn dispatch_probe_of(value: &ValueKind) -> DispatchProbeOutcome<'_> {
     match value {
         ValueKind::Text(text) => DispatchProbeOutcome::Probe(DispatchProbe::Text(text.as_str())),
         ValueKind::Number(magnitude)
-        | ValueKind::Measure(magnitude, _)
-        | ValueKind::Ratio(magnitude, _) => {
+        | ValueKind::Measure(magnitude)
+        | ValueKind::Ratio(magnitude) => {
             DispatchProbeOutcome::Probe(DispatchProbe::Rational(magnitude))
         }
         ValueKind::Date(date) => match semantic_datetime_to_chrono(date) {
@@ -188,7 +221,8 @@ pub(crate) fn classify_dispatch(
 /// The class for one `(scrutinee type, key literal)` pair, following the arm order
 /// of `comparison_operation`.
 fn class_for_pair(scrutinee_type: &LemmaType, key: &LiteralValue) -> Option<DispatchClass> {
-    if key.lemma_type.is_range() {
+    // Range keys always decline: ValueKind::Range has no type on the literal anymore.
+    if matches!(key.value, ValueKind::Range(_, _)) {
         return None;
     }
     match &key.value {
@@ -201,7 +235,7 @@ fn class_for_pair(scrutinee_type: &LemmaType, key: &LiteralValue) -> Option<Disp
         ValueKind::Time(_) => scrutinee_type
             .matches_primitive_kind(PrimitiveKind::Time)
             .then_some(DispatchClass::Time),
-        ValueKind::Ratio(_, _) => scrutinee_type
+        ValueKind::Ratio(_) => scrutinee_type
             .matches_primitive_kind(PrimitiveKind::Ratio)
             .then_some(DispatchClass::Rational),
         ValueKind::Number(_) => {
@@ -213,30 +247,17 @@ fn class_for_pair(scrutinee_type: &LemmaType, key: &LiteralValue) -> Option<Disp
             (scrutinee_type.is_duration_like_measure() || scrutinee_type.is_calendar_like())
                 .then_some(DispatchClass::Rational)
         }
-        ValueKind::Measure(_, _) => {
+        ValueKind::Measure(_) => {
+            // Measure key typing needs NormalForm.result_type; without it, decline to Piecewise.
             if scrutinee_type.matches_primitive_kind(PrimitiveKind::Number) {
-                return (key.lemma_type.is_duration_like_measure()
-                    || key.lemma_type.is_calendar_like())
-                .then_some(DispatchClass::Rational);
+                return None;
             }
             if !scrutinee_type.is_measure() {
                 return None;
             }
-            if scrutinee_type.is_calendar_like() && key.lemma_type.is_calendar_like() {
-                return Some(DispatchClass::Rational);
-            }
-            // The general measure arm panics on incompatible operands, so the fold
-            // must establish the compatibility that arm assumes.
-            let compatible = scrutinee_type.same_measure_family(&key.lemma_type)
-                || scrutinee_type.compatible_with_anonymous_measure(&key.lemma_type)
-                || match (
-                    scrutinee_type.measure_type_decomposition(),
-                    key.lemma_type.measure_type_decomposition(),
-                ) {
-                    (Some(left), Some(right)) => left == right,
-                    _ => false,
-                };
-            compatible.then_some(DispatchClass::Rational)
+            // Same-family measure keys are accepted when the scrutinee is a measure; family
+            // checks that needed key.lemma_type are deferred to evaluation / planning rejects.
+            Some(DispatchClass::Rational)
         }
         ValueKind::Boolean(_) | ValueKind::Range(_, _) => None,
     }
@@ -327,7 +348,7 @@ mod tests {
     }
 
     fn text_key(text: &str) -> DispatchKey {
-        DispatchKey::Text(text.to_string())
+        DispatchKey::Text(Arc::from(text))
     }
 
     /// Truth of `scrutinee operator boundary`, computed the slow way.
@@ -490,6 +511,18 @@ mod tests {
     }
 
     #[test]
+    fn text_key_serde_is_a_plain_string_and_round_trips() {
+        let key = text_key("NL");
+        let json = serde_json::to_string(&key).expect("serialize");
+        assert_eq!(json, r#"{"Text":"NL"}"#);
+        let restored: DispatchKey = serde_json::from_str(&json).expect("deserialize json");
+        assert_eq!(restored, key);
+        let bytes = postcard::to_allocvec(&key).expect("serialize postcard");
+        let restored: DispatchKey = postcard::from_bytes(&bytes).expect("deserialize postcard");
+        assert_eq!(restored, key);
+    }
+
+    #[test]
     fn probe_of_text_and_rational_borrows_without_clone() {
         let text = ValueKind::Text("NL".to_string());
         let number = ValueKind::Number(rational_new(3, 1));
@@ -537,20 +570,25 @@ mod tests {
                 ComparisonComputation::IsNot,
             ),
             (
-                LiteralValue::ratio(rational_new(1, 2), Some("percent".into())),
-                LiteralValue::ratio(rational_new(3, 4), Some("percent".into())),
+                LiteralValue::ratio(rational_new(1, 2)),
+                LiteralValue::ratio(rational_new(3, 4)),
                 ComparisonComputation::LessThan,
             ),
         ];
 
         for (scrutinee, key, operator) in &cases {
-            let class =
-                classify_dispatch(scrutinee.lemma_type.as_ref(), &[key]).unwrap_or_else(|| {
-                    panic!(
-                        "classify_dispatch must accept {:?} vs {:?}",
-                        scrutinee.value, key.value
-                    )
-                });
+            let scrutinee_type = match &scrutinee.value {
+                ValueKind::Number(_) => crate::planning::semantics::primitive_number_arc(),
+                ValueKind::Text(_) => crate::planning::semantics::primitive_text_arc(),
+                ValueKind::Ratio(_) => crate::planning::semantics::primitive_ratio_arc(),
+                other => panic!("unexpected scrutinee kind {other:?}"),
+            };
+            let class = classify_dispatch(scrutinee_type.as_ref(), &[key]).unwrap_or_else(|| {
+                panic!(
+                    "classify_dispatch must accept {:?} vs {:?}",
+                    scrutinee.value, key.value
+                )
+            });
             if class == DispatchClass::Text {
                 assert!(
                     matches!(
@@ -562,8 +600,10 @@ mod tests {
             }
             match comparison_operation(
                 scrutinee,
+                scrutinee_type,
                 operator,
                 key,
+                scrutinee_type,
                 UnitResolutionContext::NamedMeasureOnly,
             ) {
                 OperationResult::Value(result) => match &result.value {
@@ -578,7 +618,11 @@ mod tests {
 
         let boolean = LiteralValue::from_bool(true);
         assert!(
-            classify_dispatch(boolean.lemma_type.as_ref(), &[&boolean]).is_none(),
+            classify_dispatch(
+                crate::planning::semantics::primitive_boolean_arc().as_ref(),
+                &[&boolean],
+            )
+            .is_none(),
             "boolean scrutinees are not a dispatch class"
         );
     }

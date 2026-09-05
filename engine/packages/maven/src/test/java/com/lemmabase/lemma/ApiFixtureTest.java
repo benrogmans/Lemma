@@ -9,6 +9,10 @@ import static org.junit.jupiter.api.Assertions.fail;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.lemmabase.lemma.schema.ExplanationNode;
+import com.lemmabase.lemma.schema.LiteralValue;
+import com.lemmabase.lemma.schema.LemmaType;
+import com.lemmabase.lemma.schema.TypeExtends;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -61,7 +65,7 @@ final class ApiFixtureTest {
       case "show_minimal.json" -> {
         Show show = JsonSupport.parseShow(json);
         assertEquals("sample", show.spec());
-        assertInstanceOf(MetaValue.Unquoted.class, show.meta().get("author"));
+        assertInstanceOf(LiteralValue.Text.class, show.meta().get("author"));
       }
       case "source_type_variants.json" -> parseSourceTypeVariants(json);
       case "literal_value_variants.json" -> parseLiteralValueVariants(json);
@@ -72,6 +76,11 @@ final class ApiFixtureTest {
       }
       case "type_extends_variants.json" -> parseTypeExtendsVariants(json);
       case "type_specification_kinds.json" -> parseTypeSpecificationKinds(json);
+      case "repository_install_result.json" -> {
+        RepositoryInstallResult result = JsonSupport.parseInstallResult(json);
+        assertEquals("@iso/countries", result.id());
+        assertTrue(result.source().contains("repo @iso/countries"));
+      }
       default -> fail("no parse dispatch for fixture: " + name);
     }
   }
@@ -111,7 +120,7 @@ final class ApiFixtureTest {
         }
         """;
     Response response = JsonSupport.parseResponse(json);
-    BigDecimal number = response.results().get("ok").number();
+    BigDecimal number = ((RuleResult.Number) response.results().get("ok")).number();
     assertEquals(new BigDecimal("0.3333333333333333333333333333"), number);
   }
 
@@ -143,18 +152,18 @@ final class ApiFixtureTest {
       p.nextToken();
       while (p.nextToken() != JsonToken.END_OBJECT) {
         p.nextToken();
-        classes.add(MetaValue.LiteralValue.read(p).getClass());
+        classes.add(LiteralValue.read(p).getClass());
       }
     }
     assertEquals(
         Set.of(
-            MetaValue.LiteralValue.Number.class,
-            MetaValue.LiteralValue.NumberWithUnit.class,
-            MetaValue.LiteralValue.Text.class,
-            MetaValue.LiteralValue.Date.class,
-            MetaValue.LiteralValue.Time.class,
-            MetaValue.LiteralValue.BooleanLit.class,
-            MetaValue.LiteralValue.Range.class),
+            LiteralValue.Number.class,
+            LiteralValue.NumberWithUnit.class,
+            LiteralValue.Text.class,
+            LiteralValue.Date.class,
+            LiteralValue.Time.class,
+            LiteralValue.BooleanLit.class,
+            LiteralValue.Range.class),
         classes);
   }
 

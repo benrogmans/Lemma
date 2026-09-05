@@ -26,42 +26,6 @@ fn default_effective() -> DateTimeValue {
     }
 }
 
-fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
-    let mut engine = Engine::new();
-    engine
-        .load([(source(), code.to_string())])
-        .expect("Should parse and plan");
-    let effective = default_effective();
-    let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&effective),
-            HashMap::new(),
-            Some(&[rule_name.to_string()]),
-            true,
-        )
-        .expect("Should evaluate");
-    let rule = response
-        .results
-        .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name));
-    if rule.vetoed {
-        panic!(
-            "Rule '{}' vetoed: {}",
-            rule_name,
-            rule.veto_reason.as_deref().unwrap_or("Vetoed")
-        );
-    }
-    rule.explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .expect("BUG: non-vetoed rule missing value")
-        .clone()
-}
-
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
     eval_bool_with_data(code, spec_name, rule_name, HashMap::new())
 }
@@ -120,7 +84,28 @@ fn eval_literal_with_data(
 }
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
-    eval_literal(code, spec_name, rule_name).to_string()
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let effective = default_effective();
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&effective),
+            HashMap::new(),
+            Some(&[rule_name.to_string()]),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {

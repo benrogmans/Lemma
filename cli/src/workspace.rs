@@ -144,6 +144,32 @@ pub fn discover_lemma_paths(workdir: &Path) -> Result<DiscoveredPaths, Workspace
     })
 }
 
+/// Engine [`SourceType::Path`] label for a discovered workspace file.
+///
+/// Absolute disk paths are used only for I/O. Engine identity matches MCP/SDK
+/// attributes: path relative to `workdir`, or the file name when `workdir` is
+/// the file itself.
+pub fn workspace_path_label(workdir: &Path, absolute_path: &Path) -> std::sync::Arc<PathBuf> {
+    if workdir.is_file() {
+        assert_eq!(
+            absolute_path, workdir,
+            "BUG: single-file workspace discover must yield the workdir path"
+        );
+        let name = workdir
+            .file_name()
+            .expect("BUG: workspace file path must have a file name");
+        return std::sync::Arc::new(PathBuf::from(name));
+    }
+    let relative = absolute_path.strip_prefix(workdir).unwrap_or_else(|_| {
+        panic!(
+            "BUG: discovered path {} is not under workdir {}",
+            absolute_path.display(),
+            workdir.display()
+        )
+    });
+    std::sync::Arc::new(relative.to_path_buf())
+}
+
 /// Load discovered sources into `engine` (same provenance rules as the CLI always used).
 pub fn load_workspace(engine: &mut Engine, workdir: &Path) -> Result<(), WorkspaceDiskError> {
     load_workspace_excluding(engine, workdir, &[])
@@ -183,7 +209,7 @@ pub fn load_workspace_excluding(
         }
         let content = fs::read_to_string(path)?;
         sources.push((
-            lemma::SourceType::Path(std::sync::Arc::new(path.clone())),
+            lemma::SourceType::Path(workspace_path_label(workdir, path)),
             content,
         ));
     }
@@ -196,6 +222,40 @@ pub fn load_workspace_excluding(
         Ok(()) => Ok(()),
         Err(errors) => Err(WorkspaceDiskError::EngineLoad(errors)),
     }
+}
+
+/// Refresh an existing engine from disk.
+///
+/// Discovers current `.lemma` paths and batch-[`Engine::load`]s them into a
+/// scratch engine (order-independent), then swaps into `engine` only on success.
+/// Failure leaves `engine` untouched. Callers that previously relied on
+/// per-file `update` for scoped replanning still get a correct workspace; the
+/// HTTP `--watch` path prioritizes last-good over incremental mutation.
+pub fn refresh_workspace_via_update(
+    engine: &mut Engine,
+    workdir: &Path,
+) -> Result<(), WorkspaceDiskError> {
+    let discovered = discover_lemma_paths(workdir)?;
+    let mut sources: Vec<(lemma::SourceType, String)> = Vec::new();
+
+    for dep_path in &discovered.dependency_paths {
+        let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
+        let source_type = lemma::SourceType::Dependency(dependency_id.to_string());
+        let content = fs::read_to_string(dep_path)?;
+        sources.push((source_type, content));
+    }
+    for path in &discovered.workspace_paths {
+        let source_type = lemma::SourceType::Path(workspace_path_label(workdir, path));
+        let content = fs::read_to_string(path)?;
+        sources.push((source_type, content));
+    }
+
+    let mut scratch = Engine::new();
+    scratch
+        .load(sources)
+        .map_err(WorkspaceDiskError::EngineLoad)?;
+    *engine = scratch;
+    Ok(())
 }
 
 type ModifiedSnapshot = BTreeMap<PathBuf, SystemTime>;
@@ -309,8 +369,22 @@ fn plant_watches(
 }
 
 /// Keeps the filesystem watcher alive until dropped.
+///
+/// The notify callback holds a clone of the same `Arc` as this guard, and the
+/// debouncer owns the callback. Drop takes the debouncer out of the mutex so
+/// that cycle breaks and the notify thread stops.
 pub struct WatchGuard {
-    _debouncer: Arc<Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>>,
+    debouncer: Arc<Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>>,
+}
+
+impl Drop for WatchGuard {
+    fn drop(&mut self) {
+        let mut slot = match self.debouncer.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _ = slot.take();
+    }
 }
 
 /// Watch discovered `.lemma` paths under `workdir` (not the whole tree recursively).
@@ -420,7 +494,7 @@ pub fn watch_lemma_workspace(
     }
 
     Ok(WatchGuard {
-        _debouncer: debouncer_slot,
+        debouncer: debouncer_slot,
     })
 }
 
@@ -554,6 +628,46 @@ mod tests {
         assert!(discovered.workspace_paths[0].ends_with("src/app.lemma"));
         assert_eq!(discovered.dependency_paths.len(), 1);
         assert!(discovered.dependency_paths[0].ends_with("lemma_deps/@org/dep.lemma"));
+    }
+
+    #[test]
+    fn load_workspace_stores_workdir_relative_path_labels() {
+        let root = tempfile::tempdir().expect("tempdir");
+        write_file(
+            &root.path().join("src/app.lemma"),
+            "spec app\ndata x: 1\nrule r: x\n",
+        );
+
+        let mut engine = Engine::new();
+        load_workspace(&mut engine, root.path()).expect("load");
+        let shown = engine
+            .show(None, "app", None)
+            .expect("app must show after load");
+        assert_eq!(
+            shown.source_type,
+            Some(lemma::SourceType::Path(std::sync::Arc::new(PathBuf::from(
+                "src/app.lemma"
+            )))),
+            "Engine Path identity must be workdir-relative, not absolute"
+        );
+    }
+
+    #[test]
+    fn refresh_resolves_consumer_that_sorts_before_provider() {
+        let root = tempfile::tempdir().expect("tempdir");
+        write_file(
+            &root.path().join("z_provider.lemma"),
+            "spec person\ndata name: \"Alice\"\n",
+        );
+        write_file(
+            &root.path().join("a_consumer.lemma"),
+            "spec company\nuses employee: person\n  -> with name: \"Bob\"\n",
+        );
+
+        let mut engine = Engine::new();
+        refresh_workspace_via_update(&mut engine, root.path()).expect("two-pass refresh");
+        assert!(engine.show(None, "person", None).is_ok());
+        assert!(engine.show(None, "company", None).is_ok());
     }
 
     #[test]
@@ -726,6 +840,34 @@ mod tests {
         wait_until_fired(
             &fired,
             "watch did not fire after creating lemma_deps then a dep file",
+        );
+    }
+
+    #[test]
+    fn watch_guard_drop_stops_further_callbacks() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let app = root.path().join("src/app.lemma");
+        write_file(&app, "spec app\ndata x: 1\n");
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_flag = Arc::clone(&fired);
+        let guard = watch_lemma_workspace(
+            root.path().to_path_buf(),
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
+            }),
+        )
+        .expect("start watch");
+
+        drop(guard);
+
+        write_file(&app, "spec app\ndata x: 2\n");
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "dropped WatchGuard must stop notify callbacks"
         );
     }
 }

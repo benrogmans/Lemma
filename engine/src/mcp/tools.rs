@@ -2,6 +2,8 @@ use serde_json::Value;
 
 use crate::documentation::{GuideTopic, EVALUATE_GUIDE};
 use crate::engine::{resolve_effective as resolve_effective_datetime, Engine};
+use crate::evaluation::explanations::format_explanation;
+use crate::evaluation::response::Response;
 use crate::mcp::error::ToolError;
 use crate::parse_run_data_object;
 use crate::parsing::ast::DateTimeValue;
@@ -10,6 +12,7 @@ use crate::resolve_run_rules;
 use crate::spec_set_id::parse_spec_set_id;
 
 /// Evaluate a spec. Always explains (`Engine::run(..., true)`). No `explain` arg.
+/// Success text is ASCII explanation trees plus a Missing data block when unbound.
 pub fn run(engine: &Engine, args: &Value) -> Result<String, ToolError> {
     require_object(args)?;
     reject_explain_arg(args)?;
@@ -36,13 +39,45 @@ pub fn run(engine: &Engine, args: &Value) -> Result<String, ToolError> {
         .run(repository, &spec_name, Some(&now), data_values, rules, true)
         .map_err(engine_error_to_diagnostics)?;
 
-    Ok(serde_json::to_string_pretty(&response)
-        .unwrap_or_else(|error| panic!("BUG: Response must serialize: {error}")))
+    Ok(format_run_text(&response))
 }
 
-/// Deprecated alias of [`run`]. Same args and Response JSON.
+/// Deprecated alias of [`run`]. Same args and formatted trees.
 pub fn evaluate(engine: &Engine, args: &Value) -> Result<String, ToolError> {
     run(engine, args)
+}
+
+fn format_run_text(response: &Response) -> String {
+    let mut output = String::new();
+    let missing: Vec<&str> = response
+        .results
+        .values()
+        .filter(|result| result.awaits_missing_data())
+        .flat_map(|result| result.missing_data().iter().map(String::as_str))
+        .collect();
+    if !missing.is_empty() {
+        output.push_str("Missing data\n");
+        for key in &missing {
+            output.push_str("  ");
+            output.push_str(key);
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+    let mut first = true;
+    for result in response.results.values() {
+        if !first {
+            output.push('\n');
+        }
+        first = false;
+        let explanation = result
+            .explanation
+            .as_ref()
+            .expect("BUG: MCP run always explains");
+        output.push_str(&format_explanation(explanation));
+        output.push('\n');
+    }
+    output
 }
 
 pub fn list(engine: &Engine, args: &Value) -> Result<String, ToolError> {
@@ -63,7 +98,7 @@ pub fn show(engine: &Engine, args: &Value) -> Result<String, ToolError> {
     let show = engine
         .show(repository, &spec_name, Some(&now))
         .map_err(engine_error_to_diagnostics)?;
-    Ok(serde_json::to_string_pretty(&show)
+    Ok(serde_json::to_string_pretty(&crate::api::Show::from(&show))
         .unwrap_or_else(|error| panic!("BUG: show response must serialize: {error}")))
 }
 
@@ -235,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn run_returns_response_json_with_explanation() {
+    fn run_returns_formatted_explanation_tree() {
         let engine = load_pricing();
         let text = run(
             &engine,
@@ -246,9 +281,14 @@ mod tests {
             }),
         )
         .expect("run");
-        let value: Value = serde_json::from_str(&text).expect("Response JSON");
-        assert_eq!(value["results"]["total"]["display"], "30");
-        assert!(value["results"]["total"]["explanation"].is_object());
+        assert!(
+            text.contains("total: 30"),
+            "expected formatted tree with total: 30, got: {text}"
+        );
+        assert!(
+            text.contains("└─") || text.contains("quantity"),
+            "expected tree connector or quantity in body, got: {text}"
+        );
     }
 
     #[test]
@@ -291,8 +331,10 @@ mod tests {
             }),
         )
         .expect("run");
-        let value: Value = serde_json::from_str(&text).expect("Response JSON");
-        assert_eq!(value["results"]["total"]["display"], "20");
+        assert!(
+            text.contains("total: 20"),
+            "expected formatted tree with total: 20, got: {text}"
+        );
     }
 
     #[test]
@@ -344,16 +386,7 @@ mod tests {
             }),
         )
         .expect("evaluate");
-        let va: Value = serde_json::from_str(&a).expect("run JSON");
-        let vb: Value = serde_json::from_str(&b).expect("evaluate JSON");
-        assert_eq!(
-            va["results"]["total"]["display"],
-            vb["results"]["total"]["display"]
-        );
-        assert_eq!(
-            va["results"]["total"]["explanation"]["body"],
-            vb["results"]["total"]["explanation"]["body"]
-        );
+        assert_eq!(a, b);
     }
 
     #[test]

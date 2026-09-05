@@ -58,23 +58,41 @@ Format source code (no engine needed):
 {:ok, formatted} = Lemma.format("spec foo\ndata x: 1\nrule y: x + 1")
 ```
 
+Install a repository from LemmaBase (download only; then `load`). Default transport is Req; pass a 2-arity fun for tests or custom HTTP:
+
+```elixir
+{:ok, result} = Lemma.install(engine, "@iso/countries")
+:ok = Lemma.load(engine, [{result[:id], result[:source]}])
+```
+
 ## API
 
 | Function | Description |
 |----------|-------------|
 | `Lemma.new/1` | Create engine (optional limits map) |
 | `Lemma.limits/1` | Current resource limits |
+| `Lemma.snapshot/1` | Opaque bytes of parsed specs + plans + limits |
+| `Lemma.from_snapshot/1` | Restore engine from `snapshot/1` bytes |
 | `Lemma.load/2` | Load sources: binary (volatile); map (lexicographic label order) or `[{label, code}, ...]` (caller order) |
+| `Lemma.install/2-3` | Download a repository from LemmaBase (`{:ok, map}` with `:source` / `:id`); optional `(url, headers) -> …` transport (default `Lemma.Transport.get/2`); does not load and does not write `lemma_deps/` |
 | `Lemma.list/1` | List loaded Specs (includes embedded `lemma` / `spec units`) |
 | `Lemma.source/4` | Formatted Lemma source (`repository`, `spec`, `effective`; omit `spec` for repo-wide) |
-| `Lemma.show/4` | Spec interface + temporal window (`repository`, `spec`, `effective`). `Show.data` values are `Lemma.ShowData`. |
+| `Lemma.show/4` | Declared data catalog + temporal window (`repository`, `spec`, `effective`). Empty `needed_by_rules` = reuse-only. `Show.data` values are `Lemma.ShowData`. |
 | `Lemma.run/3` | Evaluate: `target` map (`repo`, `spec`, `effective`), `options` map (`data`, `rules`, `explain`). Each rule result may include `missing_data` (unbound input keys). Non-veto results carry flattened `display` + typed keys (`Lemma.RuleResult`). With `explain: true`, `explanation` matches [api.v1.json](../../../engine/schemas/api.v1.json) (`RuleResult.explanation` / `ExplanationNode`). Types and suggestions are on `Lemma.show/4` only. |
 | `Lemma.remove/4` | Remove temporal slice: `repository`, `spec`, `effective` |
-| `Lemma.update/6` | Replace temporal slice (atomic remove + load); optional source `attribute` |
+| `Lemma.update/3-4` | Upsert identities from code; optional source `attribute` |
 | `Lemma.quality/1` | Structural quality recommendations across loaded specs (advisory only) |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 
-`Lemma.Mcp` wraps the engine MCP catalog (`run`, `list`, `show`, `source`, `check`, `guide`, resources). `run` returns Engine `Response` JSON with explanations always on. Write tools (`add_spec`, …) are CLI-only (`lemma mcp --write`).
+Persist and restore without re-parsing:
+
+```elixir
+{:ok, bytes} = Lemma.snapshot(engine)
+File.write!("engine.lems", bytes)
+{:ok, restored} = Lemma.from_snapshot(File.read!("engine.lems"))
+```
+
+`Lemma.Mcp` wraps the engine MCP catalog (`run`, `list`, `show`, `source`, `check`, `guide`, resources). `run` returns formatted ASCII explanation trees (always on). Write tools (`add_spec`, …) are CLI-only (`lemma mcp --write`).
 
 `Lemma.OpenAPI` is a separate module (HTTP OpenAPI document helpers via `lemma_openapi`). It is not part of the core `Lemma` engine table above.
 

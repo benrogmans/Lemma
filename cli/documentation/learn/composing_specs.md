@@ -11,7 +11,7 @@ For syntax details see [Using other Specs](../reference/readme.md#using-other-sp
 
 ## Importing another Spec
 
-A Lemma source file defines one or more Specs. Each Spec is a namespace of Data and Rules. With Uses, you import another Spec under an alias and refer to its members through that alias. Read a value with `alias.field`, use a dependency Rule with `alias.rule_name`, and reuse an imported Data declaration as a parent type: `data country: iso.code`.
+A Lemma source file defines one or more Specs. Each Spec is a namespace of Data and Rules. With Uses, you import another Spec under an alias and refer to its members through that alias. Read a value with `alias.field`, use a dependency Rule with `alias.rule_name`, and reuse an imported Data declaration as a parent type: `data country: iso.code` (qualified) or `data country: code` (bare, when the name is unambiguous across imports).
 
 ```lemma
 spec premium_membership
@@ -252,11 +252,11 @@ rule out: inv.total
 
 Cross-repo targets use a repo qualifier on the Uses line (`accounting invoice`). When you `run` a Spec from the workspace (main) repository, use its unqualified name; the CLI does not pick between two loaded Specs with the same name in different repos.
 
-Most workspaces never need Repo blocks: files without one belong to the implicit workspace repository. Registry dependencies live in their own `@owner/name` repositories (see [Registry](#registry) below).
+Most workspaces never need Repo blocks: files without one belong to the implicit workspace repository. Repositories installed from LemmaBase live under their own `@owner/name` names (see [LemmaBase](#lemmabase) below).
 
-## Registry
+## LemmaBase
 
-When Specs live outside your workspace, import them from a registry with `@owner/repo` qualifiers:
+When Specs live outside your workspace, import them from LemmaBase with `@owner/repo` qualifiers:
 
 ```lemma
 spec invoicing
@@ -274,14 +274,14 @@ rule tariff: 0 eur
 rule total: price + tariff
 ```
 
-Fetch dependencies before running:
+Install repositories before running:
 
 ```bash
-lemma install --all           # install all @... dependencies into lemma_deps/
+lemma install --all           # install all @... repositories into lemma_deps/
 lemma install @iso/countries -f   # force re-install if content changed
 ```
 
-Importing from a registry uses `@owner/name` on the `uses` line (for example `uses iso: @iso/countries alpha2`). The engine does not fetch the network; load sources with `lemma install` (or your embedder) first. See [Registry](../reference/registry.md).
+Importing from LemmaBase uses `@owner/name` on the `uses` line (for example `uses iso: @iso/countries alpha2`). `Engine` does not auto-fetch; install with `lemma install` (or your SDK's `install`) first, then load. See [LemmaBase](../reference/registry.md).
 
 ## Evaluating a composed Spec
 
@@ -295,13 +295,13 @@ lemma run membership_benefits --effective 2025-03-01
 - Unpinned imports: paths such as `p.discount` use dependency bodies resolved for that slice.
 - Pinned imports: the dependency body stays at the pinned instant.
 
-To inspect the static interface for that temporal slice (types, constraints, rules after normalize):
+To inspect the declared data catalog and rules for that temporal slice (`needed_by_rules` empty = reuse-only):
 
 ```bash
 lemma show membership_benefits --effective 2025-03-01
 ```
 
-Run-data-aware discovery of what a concrete `run` still needs comes from each rule's `missing_data`, not from `show`.
+Run-data-aware discovery of what a concrete `run` still needs comes from each rule's `missing_data`, not from `show`. Library specs with no rules still list their data slots on `show` for reuse inspection.
 ## Quick decision guide
 
 | Goal | Pattern |

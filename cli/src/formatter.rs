@@ -82,8 +82,8 @@ impl Formatter {
         response: &Response,
         include_explanations: bool,
     ) -> serde_json::Value {
-        let mut value =
-            serde_json::to_value(response).expect("BUG: failed to serialize response JSON");
+        let mut value = serde_json::to_value(lemma::api::Response::from(response))
+            .expect("BUG: failed to serialize response JSON");
         if !include_explanations {
             if let Some(results) = value.get_mut("results").and_then(|r| r.as_object_mut()) {
                 for rule in results.values_mut() {

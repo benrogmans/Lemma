@@ -16,7 +16,7 @@ Point the server at a workspace directory (or a single `.lemma` file) with `--pr
 
 ## Connect
 
-All of these clients start Lemma as a local stdio MCP server. Replace `/path/to/workspace` with your project directory. Add `--write` to the args only when the assistant should create, update, remove, or install registry dependencies (see [Read-only vs write](#read-only-vs-write)).
+All of these clients start Lemma as a local stdio MCP server. Replace `/path/to/workspace` with your project directory. Add `--write` to the args only when the assistant should create, update, remove, or install repositories from LemmaBase (see [Read-only vs write](#read-only-vs-write)).
 
 Shared shape:
 
@@ -97,7 +97,7 @@ Once connected, ask the assistant in natural language, for example:
 - Evaluate a spec with given inputs and explain how a result was reached
 - List specs in the workspace or show what data and rules a page defines
 - Check whether draft Lemma source is valid before you keep it
-- Install a registry dependency into the workspace (needs write access)
+- Install a repository from LemmaBase into the workspace (needs write access)
 
 The server already ships authoring and evaluate guidance for the model. For learning the language yourself, see [Learn](../learn/readme.md) and [LLMs.txt](../llms.md).
 
@@ -105,7 +105,7 @@ The server already ships authoring and evaluate guidance for the model. For lear
 
 By default the server is read-only: evaluate and inspect, no changes to the engine or disk.
 
-Pass `--write` when you want the assistant to load or replace specs, remove them, clear the workspace load, or `install` (download into `lemma_deps/` and load). Only enable that for workspaces and agents you trust.
+Pass `--write` when you want the assistant to load or replace specs, remove them, clear the workspace load, or `install` (download a LemmaBase repository into `lemma_deps/` and load). Only enable that for workspaces and agents you trust.
 
 ## How to work
 

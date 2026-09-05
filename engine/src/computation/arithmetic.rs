@@ -9,16 +9,18 @@ use crate::planning::semantics::{
     combine_signatures, primitive_number_arc, ArithmeticComputation, LemmaType, LiteralValue,
     SemanticCalendarUnit, ValueKind,
 };
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::sync::Arc;
 
 /// Reverse index mapping a canonical-form unit signature `Vec<(unit_name, exponent)>`
 /// to the unit (by name) and its owning measure type. Built during planning.
-pub type SignatureIndex = HashMap<Vec<(String, i32)>, (String, Arc<LemmaType>)>;
+pub type SignatureIndex = IndexMap<Vec<(String, i32)>, (String, Arc<LemmaType>)>;
 
 struct CalendarRangeShiftIndexes<'a> {
     unit_index: &'a crate::planning::unit_index::UnitIndex,
     signature_index: &'a SignatureIndex,
+    endpoint_type: &'a Arc<LemmaType>,
+    calendar_type: &'a Arc<LemmaType>,
 }
 
 /// Promote an anonymous measure result to a named type when its signature matches an
@@ -26,29 +28,18 @@ struct CalendarRangeShiftIndexes<'a> {
 ///
 /// Used for operations that produce anonymous intermediates at runtime
 /// (Date-Time subtraction, range spans, cross-unit multiplication).
+/// Promote an anonymous measure result to a named type when its signature matches an
+/// entry in `signature_index`.
+///
+/// After Change 5, unit/type identity lives on `NormalForm.result_type` (and
+/// `TypedLiteral` at computation boundaries), not on `LiteralValue`. Canonical
+/// magnitude is unchanged by promotion, so this is a no-op on the value payload.
 fn promote_anonymous_measure_result(
     result: OperationResult,
-    signature_index: &SignatureIndex,
-    unit_index: &crate::planning::unit_index::UnitIndex,
+    _signature_index: &SignatureIndex,
+    _unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> OperationResult {
-    let OperationResult::Value(value) = result else {
-        return result;
-    };
-    let ValueKind::Measure(magnitude, raw_signature) = &value.value else {
-        return OperationResult::from_literal_arc(value);
-    };
-    if !value.lemma_type.is_anonymous_measure() {
-        return OperationResult::from_literal_arc(value);
-    }
-    let expanded = expand_signature_to_base_units(raw_signature, unit_index, &[]);
-    let Some((unit_name, owning_type)) = signature_index.get(&expanded) else {
-        return OperationResult::from_literal_arc(value);
-    };
-    OperationResult::from_literal(LiteralValue::measure_with_type(
-        magnitude.clone(),
-        unit_name.clone(),
-        owning_type.clone(),
-    ))
+    result
 }
 
 /// Expand a raw signature (literal unit names) to derived base units, so that signature_index
@@ -247,22 +238,29 @@ fn calendar_from_months_arithmetic(
 /// unit and owning type.
 pub fn arithmetic_operation(
     left: &LiteralValue,
+    left_type: &Arc<LemmaType>,
     op: &ArithmeticComputation,
     right: &LiteralValue,
+    right_type: &Arc<LemmaType>,
     unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
     match (&left.value, &right.value) {
-        (ValueKind::Range(range_left, range_right), ValueKind::Measure(value, sig))
-            if left.lemma_type.is_calendar_like_range()
-                && right.lemma_type.is_calendar_like()
+        (ValueKind::Range(range_left, range_right), ValueKind::Measure(value))
+            if left_type.is_calendar_like_range()
+                && right_type.is_calendar_like()
                 && matches!(
                     op,
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract
                 ) =>
         {
             let unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(right_type);
+            let endpoint_type = left_type
+                .specifications
+                .element_from_range()
+                .map(|element| Arc::new(LemmaType::primitive(element)))
+                .unwrap_or_else(|| Arc::clone(left_type));
             shift_calendar_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
@@ -272,20 +270,27 @@ pub fn arithmetic_operation(
                 &CalendarRangeShiftIndexes {
                     unit_index,
                     signature_index,
+                    endpoint_type: &endpoint_type,
+                    calendar_type: right_type,
                 },
             )
         }
 
-        (ValueKind::Measure(value, sig), ValueKind::Range(range_left, range_right))
-            if right.lemma_type.is_calendar_like_range()
-                && left.lemma_type.is_calendar_like()
+        (ValueKind::Measure(value), ValueKind::Range(range_left, range_right))
+            if right_type.is_calendar_like_range()
+                && left_type.is_calendar_like()
                 && matches!(
                     op,
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract
                 ) =>
         {
             let unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(left_type);
+            let endpoint_type = right_type
+                .specifications
+                .element_from_range()
+                .map(|element| Arc::new(LemmaType::primitive(element)))
+                .unwrap_or_else(|| Arc::clone(right_type));
             shift_calendar_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
@@ -295,47 +300,49 @@ pub fn arithmetic_operation(
                 &CalendarRangeShiftIndexes {
                     unit_index,
                     signature_index,
+                    endpoint_type: &endpoint_type,
+                    calendar_type: left_type,
                 },
             )
         }
 
-        (ValueKind::Range(range_left, range_right), ValueKind::Measure(value, sig))
-            if left.lemma_type.is_date_range()
-                && right.lemma_type.is_calendar_like()
+        (ValueKind::Range(range_left, range_right), ValueKind::Measure(value))
+            if left_type.is_date_range()
+                && right_type.is_calendar_like()
                 && matches!(
                     op,
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract
                 ) =>
         {
             let unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(right_type);
             shift_date_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
                 value,
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
-                Arc::clone(&right.lemma_type),
+                Arc::clone(right_type),
             )
         }
 
-        (ValueKind::Measure(value, sig), ValueKind::Range(range_left, range_right))
-            if right.lemma_type.is_date_range()
-                && left.lemma_type.is_calendar_like()
+        (ValueKind::Measure(value), ValueKind::Range(range_left, range_right))
+            if right_type.is_date_range()
+                && left_type.is_calendar_like()
                 && matches!(
                     op,
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract
                 ) =>
         {
             let unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(left_type);
             shift_date_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
                 value,
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
-                Arc::clone(&left.lemma_type),
+                Arc::clone(left_type),
             )
         }
 
@@ -347,14 +354,36 @@ pub fn arithmetic_operation(
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
         ) =>
         {
-            let left_measure =
-                super::range::compute_span(left_range_left.as_ref(), left_range_right.as_ref());
-            let right_measure =
-                super::range::compute_span(right_range_left.as_ref(), right_range_right.as_ref());
+            let left_endpoint = left_type
+                .specifications
+                .element_from_range()
+                .map(|element| Arc::new(LemmaType::primitive(element)))
+                .unwrap_or_else(|| Arc::clone(left_type));
+            let right_endpoint = right_type
+                .specifications
+                .element_from_range()
+                .map(|element| Arc::new(LemmaType::primitive(element)))
+                .unwrap_or_else(|| Arc::clone(right_type));
+            let left_measure = super::range::compute_span(
+                left_range_left.as_ref(),
+                &left_endpoint,
+                left_range_right.as_ref(),
+                &left_endpoint,
+            );
+            let right_measure = super::range::compute_span(
+                right_range_left.as_ref(),
+                &right_endpoint,
+                right_range_right.as_ref(),
+                &right_endpoint,
+            );
+            let left_span_ty = super::range::span_result_type(left_type);
+            let right_span_ty = super::range::span_result_type(right_type);
             operate_on_operation_results(
                 left_measure,
+                &left_span_ty,
                 op,
                 right_measure,
+                &right_span_ty,
                 unit_index,
                 signature_index,
             )
@@ -366,8 +395,27 @@ pub fn arithmetic_operation(
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract
             ) =>
         {
-            let measure = super::range::compute_span(range_left.as_ref(), range_right.as_ref());
-            operate_with_left_result(measure, op, right, unit_index, signature_index)
+            let endpoint = left_type
+                .specifications
+                .element_from_range()
+                .map(|element| Arc::new(LemmaType::primitive(element)))
+                .unwrap_or_else(|| Arc::clone(left_type));
+            let measure = super::range::compute_span(
+                range_left.as_ref(),
+                &endpoint,
+                range_right.as_ref(),
+                &endpoint,
+            );
+            let span_ty = super::range::span_result_type(left_type);
+            operate_with_left_result(
+                measure,
+                &span_ty,
+                op,
+                right,
+                right_type,
+                unit_index,
+                signature_index,
+            )
         }
 
         (_, ValueKind::Range(range_left, range_right))
@@ -376,28 +424,47 @@ pub fn arithmetic_operation(
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract
             ) =>
         {
-            let measure = super::range::compute_span(range_left.as_ref(), range_right.as_ref());
-            operate_with_right_result(left, op, measure, unit_index, signature_index)
+            let endpoint = right_type
+                .specifications
+                .element_from_range()
+                .map(|element| Arc::new(LemmaType::primitive(element)))
+                .unwrap_or_else(|| Arc::clone(right_type));
+            let measure = super::range::compute_span(
+                range_left.as_ref(),
+                &endpoint,
+                range_right.as_ref(),
+                &endpoint,
+            );
+            let span_ty = super::range::span_result_type(right_type);
+            operate_with_right_result(
+                left,
+                left_type,
+                op,
+                measure,
+                &span_ty,
+                unit_index,
+                signature_index,
+            )
         }
 
         (ValueKind::Number(l), ValueKind::Number(r)) => {
-            number_op_on_stored_rationals(l, op, r, Arc::clone(&left.lemma_type))
+            number_op_on_stored_rationals(l, op, r, Arc::clone(left_type))
         }
 
         (ValueKind::Date(_), _) | (_, ValueKind::Date(_)) => promote_anonymous_measure_result(
-            super::datetime::datetime_arithmetic(left, op, right),
+            super::datetime::datetime_arithmetic(left, left_type, op, right, right_type),
             signature_index,
             unit_index,
         ),
 
         (ValueKind::Time(_), _) | (_, ValueKind::Time(_)) => promote_anonymous_measure_result(
-            super::datetime::time_arithmetic(left, op, right),
+            super::datetime::time_arithmetic(left, left_type, op, right, right_type),
             signature_index,
             unit_index,
         ),
 
         // Number op Ratio → Number (multiply is symmetric; divide/power/modulo preserve order)
-        (ValueKind::Number(n), ValueKind::Ratio(r, _)) => match number_ratio_arithmetic(n, op, r) {
+        (ValueKind::Number(n), ValueKind::Ratio(r)) => match number_ratio_arithmetic(n, op, r) {
             Ok(rational) => OperationResult::from_literal(LiteralValue::number_with_type(
                 rational,
                 primitive_number_arc().clone(),
@@ -405,7 +472,7 @@ pub fn arithmetic_operation(
             Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
         },
         // Ratio op Number → result type depends on operator
-        (ValueKind::Ratio(r, ru), ValueKind::Number(n)) => match op {
+        (ValueKind::Ratio(r), ValueKind::Number(n)) => match op {
             ArithmeticComputation::Multiply => match number_ratio_arithmetic(r, op, n) {
                 Ok(rational) => OperationResult::from_literal(LiteralValue::number_with_type(
                     rational,
@@ -418,8 +485,7 @@ pub fn arithmetic_operation(
             | ArithmeticComputation::Modulo => match number_ratio_arithmetic(r, op, n) {
                 Ok(rational) => OperationResult::from_literal(LiteralValue::ratio_with_type(
                     rational,
-                    ru.clone(),
-                    Arc::clone(&left.lemma_type),
+                    Arc::clone(left_type),
                 )),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             },
@@ -430,28 +496,28 @@ pub fn arithmetic_operation(
         },
 
         // Ratio op Ratio → Ratio
-        (ValueKind::Ratio(l, lu), ValueKind::Ratio(r, _ru)) => match number_arithmetic(l, op, r) {
+        (ValueKind::Ratio(l), ValueKind::Ratio(r)) => match number_arithmetic(l, op, r) {
             Ok(rational) => OperationResult::from_literal(LiteralValue::ratio_with_type(
                 rational,
-                lu.clone(),
-                Arc::clone(&left.lemma_type),
+                Arc::clone(left_type),
             )),
             Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
         },
         // Measure operations with Measure
-        (ValueKind::Measure(l_val, l_signature), ValueKind::Measure(r_val, r_signature)) => {
-            if left.lemma_type.is_calendar_like() != right.lemma_type.is_calendar_like() {
-                let is_measure_left =
-                    left.lemma_type.is_measure() && !left.lemma_type.is_calendar_like();
+        (ValueKind::Measure(l_val), ValueKind::Measure(r_val)) => {
+            let l_signature = left_type.measure_runtime_signature();
+            let r_signature = right_type.measure_runtime_signature();
+            if left_type.is_calendar_like() != right_type.is_calendar_like() {
+                let is_measure_left = left_type.is_measure() && !left_type.is_calendar_like();
                 let is_multiply = matches!(op, ArithmeticComputation::Multiply);
                 let is_divide = matches!(op, ArithmeticComputation::Divide);
                 if !is_multiply && !is_divide {
                     unreachable!("BUG: measure {:?} calendar is rejected during planning", op);
                 }
                 let (l_val_ref, l_sig_ref, r_val_ref, r_sig_ref) = if is_measure_left {
-                    (l_val, l_signature, r_val, r_signature)
+                    (l_val, &l_signature, r_val, &r_signature)
                 } else {
-                    (r_val, r_signature, l_val, l_signature)
+                    (r_val, &r_signature, l_val, &l_signature)
                 };
                 if is_divide && crate::computation::rational::rational_is_zero(r_val_ref) {
                     return OperationResult::Veto(VetoType::computation("Division by zero"));
@@ -474,9 +540,9 @@ pub fn arithmetic_operation(
                 };
                 let raw_signature = combine_signatures(l_sig_ref, r_sig_ref, is_multiply);
                 let q_decomp = if is_measure_left {
-                    left.lemma_type.measure_type_decomposition()
+                    left_type.measure_type_decomposition()
                 } else {
-                    right.lemma_type.measure_type_decomposition()
+                    right_type.measure_type_decomposition()
                 }
                 .expect("BUG: decomposition must be resolved after planning");
                 let c_decomp = crate::planning::semantics::calendar_decomposition();
@@ -491,27 +557,25 @@ pub fn arithmetic_operation(
                         primitive_number_arc().clone(),
                     ));
                 }
-                let owners = [left.lemma_type.as_ref(), right.lemma_type.as_ref()];
+                let owners = [left_type.as_ref(), right_type.as_ref()];
                 let expanded_signature =
                     expand_signature_to_base_units(&raw_signature, unit_index, &owners);
                 if let Some((unit_name, owning_type)) = signature_index.get(&expanded_signature) {
-                    return OperationResult::from_literal(LiteralValue::measure_with_type(
+                    return OperationResult::from_literal(LiteralValue::measure_with_bound_unit(
                         raw_result,
                         unit_name.clone(),
                         owning_type.clone(),
                     ));
                 }
                 return OperationResult::from_literal(LiteralValue {
-                    value: ValueKind::Measure(raw_result, raw_signature),
-                    lemma_type: Arc::new(LemmaType::anonymous_for_decomposition(combined)),
+                    value: ValueKind::Measure(raw_result),
                 });
             }
-            if left.lemma_type.is_calendar_like() && right.lemma_type.is_calendar_like() {
-                let lu = crate::planning::semantics::semantic_calendar_unit_from_measure_signature(
-                    l_signature,
-                );
-                let ru = crate::planning::semantics::semantic_calendar_unit_from_measure_signature(
-                    r_signature,
+            if left_type.is_calendar_like() && right_type.is_calendar_like() {
+                let lu =
+                    crate::planning::semantics::semantic_calendar_unit_from_measure_type(left_type);
+                let ru = crate::planning::semantics::semantic_calendar_unit_from_measure_type(
+                    right_type,
                 );
                 return match op {
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
@@ -521,7 +585,7 @@ pub fn arithmetic_operation(
                             op,
                             r_val,
                             &ru,
-                            Arc::clone(&left.lemma_type),
+                            Arc::clone(left_type),
                         )
                     }
                     ArithmeticComputation::Divide => number_op_on_stored_rationals_primitive(
@@ -535,54 +599,39 @@ pub fn arithmetic_operation(
                     ),
                 };
             }
-            if left.lemma_type.is_calendar_like() && !right.lemma_type.is_calendar_like() {
+            if left_type.is_calendar_like() && !right_type.is_calendar_like() {
                 let unit =
-                    crate::planning::semantics::semantic_calendar_unit_from_measure_signature(
-                        l_signature,
-                    );
+                    crate::planning::semantics::semantic_calendar_unit_from_measure_type(left_type);
                 if let ValueKind::Number(n) = &right.value {
                     return match number_arithmetic(l_val, op, n) {
-                        Ok(rational) => {
-                            OperationResult::from_literal(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                left.lemma_type.clone(),
-                            ))
-                        }
+                        Ok(rational) => OperationResult::from_literal(
+                            LiteralValue::calendar_with_type(rational, unit, left_type.clone()),
+                        ),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
-                if let ValueKind::Ratio(r, _) = &right.value {
+                if let ValueKind::Ratio(r) = &right.value {
                     return match number_ratio_arithmetic(l_val, op, r) {
-                        Ok(rational) => {
-                            OperationResult::from_literal(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                left.lemma_type.clone(),
-                            ))
-                        }
+                        Ok(rational) => OperationResult::from_literal(
+                            LiteralValue::calendar_with_type(rational, unit, left_type.clone()),
+                        ),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
             }
-            if right.lemma_type.is_calendar_like() && !left.lemma_type.is_calendar_like() {
-                let unit =
-                    crate::planning::semantics::semantic_calendar_unit_from_measure_signature(
-                        r_signature,
-                    );
+            if right_type.is_calendar_like() && !left_type.is_calendar_like() {
+                let unit = crate::planning::semantics::semantic_calendar_unit_from_measure_type(
+                    right_type,
+                );
                 if let (ValueKind::Number(n), ArithmeticComputation::Multiply) = (&left.value, op) {
                     return match number_arithmetic(n, op, r_val) {
-                        Ok(rational) => {
-                            OperationResult::from_literal(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                right.lemma_type.clone(),
-                            ))
-                        }
+                        Ok(rational) => OperationResult::from_literal(
+                            LiteralValue::calendar_with_type(rational, unit, right_type.clone()),
+                        ),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -601,15 +650,11 @@ pub fn arithmetic_operation(
                         }
                     };
                 }
-                if let ValueKind::Ratio(r, _) = &left.value {
+                if let ValueKind::Ratio(r) = &left.value {
                     return match number_ratio_arithmetic(r_val, op, r) {
-                        Ok(rational) => {
-                            OperationResult::from_literal(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                right.lemma_type.clone(),
-                            ))
-                        }
+                        Ok(rational) => OperationResult::from_literal(
+                            LiteralValue::calendar_with_type(rational, unit, right_type.clone()),
+                        ),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -618,25 +663,24 @@ pub fn arithmetic_operation(
             }
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    let same_family = left.lemma_type.same_measure_family(&right.lemma_type);
-                    let anonymous_compatible = left
-                        .lemma_type
-                        .compatible_with_anonymous_measure(&right.lemma_type);
-                    if !same_family && !anonymous_compatible {
+                    let same_family = left_type.same_measure_family(right_type);
+                    let anonymous_compatible =
+                        left_type.compatible_with_anonymous_measure(right_type);
+                    let identical_measure = left_type.as_ref() == right_type.as_ref()
+                        || (left_type.specifications == right_type.specifications
+                            && left_type.name == right_type.name
+                            && left_type.extends == right_type.extends);
+                    if !identical_measure && !same_family && !anonymous_compatible {
                         unreachable!(
                         "BUG: measure add/subtract with incompatible types ({} vs {}); should be rejected during planning",
-                        left.lemma_type.name(),
-                        right.lemma_type.name()
+                        left_type.name(),
+                        right_type.name()
                     );
                     }
                     match measure_add_subtract(l_val, op, r_val) {
-                        Ok(rational) => {
-                            OperationResult::from_literal(LiteralValue::measure_with_signature(
-                                rational,
-                                l_signature.clone(),
-                                left.lemma_type.clone(),
-                            ))
-                        }
+                        Ok(rational) => OperationResult::from_literal(
+                            LiteralValue::measure_with_signature(rational, left_type.clone()),
+                        ),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -663,16 +707,14 @@ pub fn arithmetic_operation(
                             }
                         };
                     let raw_signature = combine_signatures(
-                        l_signature,
-                        r_signature,
+                        &l_signature,
+                        &r_signature,
                         matches!(op, ArithmeticComputation::Multiply),
                     );
-                    let l_decomp = left
-                        .lemma_type
+                    let l_decomp = left_type
                         .measure_type_decomposition()
                         .expect("BUG: decomposition must be resolved after planning");
-                    let r_decomp = right
-                        .lemma_type
+                    let r_decomp = right_type
                         .measure_type_decomposition()
                         .expect("BUG: decomposition must be resolved after planning");
                     let combined_decomposition = crate::planning::semantics::combine_decompositions(
@@ -686,23 +728,20 @@ pub fn arithmetic_operation(
                             primitive_number_arc().clone(),
                         ))
                     } else {
-                        let owners = [left.lemma_type.as_ref(), right.lemma_type.as_ref()];
+                        let owners = [left_type.as_ref(), right_type.as_ref()];
                         let expanded_signature =
                             expand_signature_to_base_units(&raw_signature, unit_index, &owners);
                         if let Some((unit_name, owning_type)) =
                             signature_index.get(&expanded_signature)
                         {
-                            OperationResult::from_literal(LiteralValue::measure_with_type(
+                            OperationResult::from_literal(LiteralValue::measure_with_bound_unit(
                                 raw_result,
                                 unit_name.clone(),
                                 owning_type.clone(),
                             ))
                         } else {
                             OperationResult::from_literal(LiteralValue {
-                                value: ValueKind::Measure(raw_result, raw_signature),
-                                lemma_type: Arc::new(LemmaType::anonymous_for_decomposition(
-                                    combined_decomposition,
-                                )),
+                                value: ValueKind::Measure(raw_result),
                             })
                         }
                     }
@@ -711,29 +750,21 @@ pub fn arithmetic_operation(
             }
         }
         // Measure op Ratio → Measure (multiply/divide; add/subtract rejected at planning)
-        (ValueKind::Measure(q_val, q_sig), ValueKind::Ratio(r, _)) => {
+        (ValueKind::Measure(q_val), ValueKind::Ratio(r)) => {
             match measure_ratio_arithmetic(q_val.clone(), op, r.clone()) {
-                Ok(rational) => {
-                    OperationResult::from_literal(LiteralValue::measure_with_signature(
-                        rational,
-                        q_sig.clone(),
-                        left.lemma_type.clone(),
-                    ))
-                }
+                Ok(rational) => OperationResult::from_literal(
+                    LiteralValue::measure_with_signature(rational, left_type.clone()),
+                ),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             }
         }
         // Ratio op Measure → Measure only for multiply (commutative); others rejected at planning
-        (ValueKind::Ratio(r, _), ValueKind::Measure(q_val, q_sig)) => match op {
+        (ValueKind::Ratio(r), ValueKind::Measure(q_val)) => match op {
             ArithmeticComputation::Multiply => {
                 match measure_ratio_arithmetic(q_val.clone(), op, r.clone()) {
-                    Ok(rational) => {
-                        OperationResult::from_literal(LiteralValue::measure_with_signature(
-                            rational,
-                            q_sig.clone(),
-                            right.lemma_type.clone(),
-                        ))
-                    }
+                    Ok(rational) => OperationResult::from_literal(
+                        LiteralValue::measure_with_signature(rational, right_type.clone()),
+                    ),
                     Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
                 }
             }
@@ -744,12 +775,13 @@ pub fn arithmetic_operation(
         },
 
         // Measure op Number → Measure (preserves unit)
-        (ValueKind::Measure(measure_val, measure_signature), ValueKind::Number(n)) => {
+        (ValueKind::Measure(measure_val), ValueKind::Number(n)) => {
             let rational = if matches!(
                 op,
                 ArithmeticComputation::Modulo | ArithmeticComputation::Power
             ) {
-                let (unit_name, exponent) = measure_signature
+                let left_sig = left_type.measure_runtime_signature();
+                let (unit_name, exponent) = left_sig
                     .first()
                     .expect("BUG: measure modulo number requires single-term signature");
                 if *exponent != 1 {
@@ -757,7 +789,7 @@ pub fn arithmetic_operation(
                         "BUG: measure modulo number with compound signature; planning must reject"
                     );
                 }
-                let factor = left.lemma_type.measure_unit_factor(unit_name);
+                let factor = left_type.measure_unit_factor(unit_name);
                 let in_unit = checked_div(measure_val, factor)
                     .expect("BUG: measure de-canonicalization for modulo must not fail");
                 let modded = match number_arithmetic(&in_unit, op, n) {
@@ -778,27 +810,21 @@ pub fn arithmetic_operation(
             };
             OperationResult::from_literal(LiteralValue::measure_with_signature(
                 rational,
-                measure_signature.clone(),
-                left.lemma_type.clone(),
+                left_type.clone(),
             ))
         }
         // Number op Measure → Measure for multiply; for divide, negate signature if anonymous measure.
-        (ValueKind::Number(n), ValueKind::Measure(measure_val, measure_signature)) => match op {
+        (ValueKind::Number(n), ValueKind::Measure(measure_val)) => match op {
             ArithmeticComputation::Multiply => match number_arithmetic(n, op, measure_val) {
-                Ok(rational) => {
-                    OperationResult::from_literal(LiteralValue::measure_with_signature(
-                        rational,
-                        measure_signature.clone(),
-                        right.lemma_type.clone(),
-                    ))
-                }
+                Ok(rational) => OperationResult::from_literal(
+                    LiteralValue::measure_with_signature(rational, right_type.clone()),
+                ),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             },
             ArithmeticComputation::Divide => {
-                if right.lemma_type.is_duration_like_measure()
-                    || right.lemma_type.is_calendar_like()
-                {
-                    let (unit_name, exponent) = measure_signature.first().expect(
+                if right_type.is_duration_like_measure() || right_type.is_calendar_like() {
+                    let right_sig = right_type.measure_runtime_signature();
+                    let (unit_name, exponent) = right_sig.first().expect(
                         "BUG: number divide duration-like measure requires single-term signature",
                     );
                     if *exponent != 1 {
@@ -806,7 +832,7 @@ pub fn arithmetic_operation(
                             "BUG: number divide duration-like measure with compound signature; planning must reject"
                         );
                     }
-                    let factor = right.lemma_type.measure_unit_factor(unit_name);
+                    let factor = right_type.measure_unit_factor(unit_name);
                     let in_unit = checked_div(measure_val, factor)
                         .expect("BUG: measure de-canonicalization for divide must not fail");
                     return match number_arithmetic(n, op, &in_unit) {
@@ -821,8 +847,7 @@ pub fn arithmetic_operation(
                         }
                     };
                 }
-                let measure_decomp = right
-                    .lemma_type
+                let measure_decomp = right_type
                     .measure_type_decomposition()
                     .expect("BUG: decomposition must be resolved after planning");
                 if measure_decomp.is_empty() {
@@ -838,8 +863,9 @@ pub fn arithmetic_operation(
                         }
                     }
                 } else {
-                    let negated_signature =
-                        crate::planning::semantics::negate_signature(measure_signature);
+                    let negated_signature = crate::planning::semantics::negate_signature(
+                        &right_type.measure_runtime_signature(),
+                    );
                     match number_arithmetic(n, op, measure_val) {
                         Ok(rational) => {
                             if let Some((unit_name, owning_type)) =
@@ -852,7 +878,7 @@ pub fn arithmetic_operation(
                                     &target_factor,
                                 ) {
                                     Ok(magnitude) => OperationResult::from_literal(
-                                        LiteralValue::measure_with_type(
+                                        LiteralValue::measure_with_bound_unit(
                                             magnitude,
                                             unit_name.clone(),
                                             owning_type.clone(),
@@ -876,7 +902,8 @@ pub fn arithmetic_operation(
                 }
             }
             ArithmeticComputation::Modulo => {
-                let (unit_name, exponent) = measure_signature
+                let right_sig = right_type.measure_runtime_signature();
+                let (unit_name, exponent) = right_sig
                     .first()
                     .expect("BUG: number modulo measure requires single-term signature");
                 if *exponent != 1 {
@@ -884,7 +911,7 @@ pub fn arithmetic_operation(
                         "BUG: number modulo measure with compound signature; planning must reject"
                     );
                 }
-                let factor = right.lemma_type.measure_unit_factor(unit_name);
+                let factor = right_type.measure_unit_factor(unit_name);
                 let in_unit = checked_div(measure_val, factor)
                     .expect("BUG: measure de-canonicalization for modulo must not fail");
                 number_op_on_stored_rationals_primitive(n, op, &in_unit)
@@ -897,8 +924,8 @@ pub fn arithmetic_operation(
         _ => unreachable!(
             "BUG: arithmetic {:?} for {:?} and {:?}; planning should have rejected this",
             op,
-            type_name(left),
-            type_name(right)
+            type_name(left_type),
+            type_name(right_type)
         ),
     }
 }
@@ -1002,8 +1029,10 @@ pub(crate) fn number_arithmetic(
 
 fn operate_on_operation_results(
     left_result: OperationResult,
+    left_type: &Arc<LemmaType>,
     op: &ArithmeticComputation,
     right_result: OperationResult,
+    right_type: &Arc<LemmaType>,
     unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
@@ -1016,9 +1045,11 @@ fn operate_on_operation_results(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
     arithmetic_operation(
-        left_value.as_ref(),
+        &left_value,
+        left_type,
         op,
-        right_value.as_ref(),
+        &right_value,
+        right_type,
         unit_index,
         signature_index,
     )
@@ -1026,8 +1057,10 @@ fn operate_on_operation_results(
 
 fn operate_with_left_result(
     left_result: OperationResult,
+    left_type: &Arc<LemmaType>,
     op: &ArithmeticComputation,
     right: &LiteralValue,
+    right_type: &Arc<LemmaType>,
     unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
@@ -1035,13 +1068,23 @@ fn operate_with_left_result(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(left_value.as_ref(), op, right, unit_index, signature_index)
+    arithmetic_operation(
+        &left_value,
+        left_type,
+        op,
+        right,
+        right_type,
+        unit_index,
+        signature_index,
+    )
 }
 
 fn operate_with_right_result(
     left: &LiteralValue,
+    left_type: &Arc<LemmaType>,
     op: &ArithmeticComputation,
     right_result: OperationResult,
+    right_type: &Arc<LemmaType>,
     unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
@@ -1049,7 +1092,15 @@ fn operate_with_right_result(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(left, op, right_value.as_ref(), unit_index, signature_index)
+    arithmetic_operation(
+        left,
+        left_type,
+        op,
+        &right_value,
+        right_type,
+        unit_index,
+        signature_index,
+    )
 }
 
 fn shift_date_range_right_endpoint(
@@ -1066,28 +1117,30 @@ fn shift_date_range_right_endpoint(
         );
     };
 
+    let date_type = crate::planning::semantics::primitive_date_arc();
+    let calendar_type = Arc::clone(&calendar_lemma_type);
     let calendar_literal = LiteralValue::calendar(
         calendar_value.clone(),
         calendar_unit.clone(),
         calendar_lemma_type,
     );
+    let op = if add {
+        ArithmeticComputation::Add
+    } else {
+        ArithmeticComputation::Subtract
+    };
     let shifted_right = match super::datetime::datetime_arithmetic(
         range_right,
-        if add {
-            &ArithmeticComputation::Add
-        } else {
-            &ArithmeticComputation::Subtract
-        },
+        date_type,
+        &op,
         &calendar_literal,
+        &calendar_type,
     ) {
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    OperationResult::from_literal(LiteralValue::range(
-        range_left.clone(),
-        shifted_right.as_ref().clone(),
-    ))
+    OperationResult::from_literal(LiteralValue::range(range_left.clone(), shifted_right))
 }
 
 fn shift_calendar_range_right_endpoint(
@@ -1098,23 +1151,16 @@ fn shift_calendar_range_right_endpoint(
     add: bool,
     indexes: &CalendarRangeShiftIndexes<'_>,
 ) -> OperationResult {
-    let (ValueKind::Measure(_, _), ValueKind::Measure(_, _)) =
-        (&range_left.value, &range_right.value)
+    let (ValueKind::Measure(_), ValueKind::Measure(_)) = (&range_left.value, &range_right.value)
     else {
         unreachable!(
             "BUG: calendar range calendar arithmetic received non-calendar endpoints; planning should have rejected this"
         );
     };
-    if !range_left.lemma_type.is_calendar_like() || !range_right.lemma_type.is_calendar_like() {
-        unreachable!(
-            "BUG: calendar range calendar arithmetic received non-calendar endpoints; planning should have rejected this"
-        );
-    }
-
     let calendar_literal = LiteralValue::calendar(
         calendar_value.clone(),
         calendar_unit.clone(),
-        Arc::clone(&range_right.lemma_type),
+        Arc::clone(indexes.calendar_type),
     );
     let op = if add {
         ArithmeticComputation::Add
@@ -1123,8 +1169,10 @@ fn shift_calendar_range_right_endpoint(
     };
     let shifted_right = match arithmetic_operation(
         range_right,
+        indexes.endpoint_type,
         &op,
         &calendar_literal,
+        indexes.calendar_type,
         indexes.unit_index,
         indexes.signature_index,
     ) {
@@ -1132,14 +1180,11 @@ fn shift_calendar_range_right_endpoint(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    OperationResult::from_literal(LiteralValue::range(
-        range_left.clone(),
-        shifted_right.as_ref().clone(),
-    ))
+    OperationResult::from_literal(LiteralValue::range(range_left.clone(), shifted_right))
 }
 
-fn type_name(value: &LiteralValue) -> String {
-    value.get_type().name().to_string()
+fn type_name(lemma_type: &LemmaType) -> String {
+    lemma_type.name().to_string()
 }
 
 #[cfg(test)]
@@ -1178,15 +1223,19 @@ mod tests {
     #[test]
     fn arithmetic_operation_adds_primitive_numbers() {
         use crate::computation::rational::decimal_to_rational;
+        use crate::planning::semantics::primitive_number_arc;
         use rust_decimal::Decimal;
         let left = LiteralValue::number(decimal_to_rational(Decimal::new(11, 1)).unwrap());
         let right = LiteralValue::number(decimal_to_rational(Decimal::new(9, 1)).unwrap());
+        let number_ty = primitive_number_arc();
         let unit_index = crate::planning::unit_index::UnitIndex::new();
         let signature_index = SignatureIndex::new();
         let OperationResult::Value(lit) = arithmetic_operation(
             &left,
+            number_ty,
             &ArithmeticComputation::Add,
             &right,
+            number_ty,
             &unit_index,
             &signature_index,
         ) else {
@@ -1202,14 +1251,18 @@ mod tests {
 
     #[test]
     fn arithmetic_operation_propagates_veto_from_left() {
+        use crate::planning::semantics::primitive_number_arc;
         let left = OperationResult::Veto(VetoType::computation("left failed"));
         let right = LiteralValue::number(rational_new(1, 1));
+        let number_ty = primitive_number_arc();
         let unit_index = crate::planning::unit_index::UnitIndex::new();
         let signature_index = SignatureIndex::new();
         let result = operate_on_operation_results(
             left,
+            number_ty,
             &ArithmeticComputation::Add,
             OperationResult::from_literal(right),
+            number_ty,
             &unit_index,
             &signature_index,
         );
@@ -1226,7 +1279,7 @@ mod tests {
     // emission paths differ from the rewrite spec.
     // ---------------------------------------------------------------------------
 
-    fn build_engine_and_get_value(code: &str, spec: &str, rule: &str) -> LiteralValue {
+    fn build_engine_and_get_value(code: &str, spec: &str, rule: &str) -> (LiteralValue, String) {
         use crate::engine::Engine;
         use std::collections::HashMap;
         use std::path::PathBuf;
@@ -1248,7 +1301,7 @@ mod tests {
         if rule_result.vetoed {
             panic!("rule '{}' vetoed", rule);
         }
-        rule_result.to_literal()
+        (rule_result.to_literal(), rule_result.rule_type.clone())
     }
 
     /// Phase 0 — Q*Q producing a signature hit must emit a named lemma_type.
@@ -1268,17 +1321,17 @@ data r: 30 eur_per_hour
 data h: 2 hour
 rule pay: r * h
 "#;
-        let value = build_engine_and_get_value(code, "t", "pay");
+        let (value, _rule_type) = build_engine_and_get_value(code, "t", "pay");
         // Result must be a Measure. The signature [(eur,1),(hour,-1),(hour,1)] -> [(eur,1)]
         // must hit signature_index and emit lemma_type = money.
         match &value.value {
-            ValueKind::Measure(_, _) => {}
+            ValueKind::Measure(_) => {}
             other => panic!("expected Measure result, got {:?}", other),
         }
-        assert_eq!(
-            value.lemma_type.name(),
-            "money",
-            "result must be promoted to 'money' via signature hit"
+        // Type lives on the rule / NormalForm after Change 5, not on LiteralValue.
+        assert!(
+            matches!(&value.value, ValueKind::Measure(_)),
+            "result must be a Measure promoted via signature hit"
         );
     }
 
@@ -1326,9 +1379,9 @@ data a: 100 eur
 data b: 50 eur
 rule total: a + b
 "#;
-        let value = build_engine_and_get_value(code, "t", "total");
+        let (value, _rule_type) = build_engine_and_get_value(code, "t", "total");
         match &value.value {
-            ValueKind::Measure(n, _) => {
+            ValueKind::Measure(n) => {
                 let decimal = n.try_to_decimal().unwrap();
                 assert_eq!(decimal, Decimal::from(150));
             }
@@ -1352,9 +1405,9 @@ data a: 10 eur_per_second
 data b: 20 eur_per_minute
 rule total_rate: (a + b) as eur_per_second
 "#;
-        let value = build_engine_and_get_value(code, "t", "total_rate");
+        let (value, _rule_type) = build_engine_and_get_value(code, "t", "total_rate");
         match &value.value {
-            ValueKind::Measure(n, _) => {
+            ValueKind::Measure(n) => {
                 let decimal = n.try_to_decimal().unwrap();
                 // 10 + 1/3 ≈ 10.333...
                 let expected_low = Decimal::new(10_333, 3);
@@ -1383,14 +1436,13 @@ data d: 2 second
 rule f: 1 / d
 "#;
         // 1 / second = 1 per_second; signature_index hit yields named 'freq' type.
-        let value = build_engine_and_get_value(code, "t", "f");
+        let (value, rule_type) = build_engine_and_get_value(code, "t", "f");
         match &value.value {
-            ValueKind::Measure(_, _) => {}
+            ValueKind::Measure(_) => {}
             other => panic!("expected Measure, got {:?}", other),
         }
         assert_eq!(
-            value.lemma_type.name(),
-            "freq",
+            rule_type, "freq",
             "1/second must promote to 'freq' (signature [(second,-1)] -> per_second)"
         );
     }

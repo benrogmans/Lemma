@@ -62,6 +62,19 @@ final class JsonSupport {
   }
 
   /**
+   * Parses a {@link RepositoryInstallResult}.
+   *
+   * @param json install result JSON object
+   */
+  static RepositoryInstallResult parseInstallResult(String json) {
+    try (JsonParser p = JsonReading.parserFor(json)) {
+      return RepositoryInstallResult.read(p);
+    } catch (IOException e) {
+      throw new LemmaBugError("BUG: failed to parse RepositoryInstallResult JSON: " + e.getMessage());
+    }
+  }
+
+  /**
    * Parses {@link ResourceLimits}.
    *
    * @param json limits JSON object

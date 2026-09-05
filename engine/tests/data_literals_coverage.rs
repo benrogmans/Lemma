@@ -496,7 +496,7 @@ rule r: d
 
 // ─── Ratio literals ───────────────────────────────────────────────────
 
-/// Pin a rule's value as `ValueKind::Ratio(decimal, optional_unit_name)`. Panics
+/// Pin a rule's value as `ValueKind::Ratio(decimal)`. Panics
 /// on any other shape so a regression in either the numeric magnitude or the
 /// unit name fails loudly (substring matches on `Display` cannot — a 100x off
 /// value renders as `"5000%"` which still contains `"50"` and `"%"`).
@@ -523,11 +523,21 @@ fn rule_ratio(
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Ratio(n, u) => (
+        ValueKind::Ratio(n) => (
             lemma::ValueKind::Number(n.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
-            u.clone(),
+            rr.value
+                .as_ref()
+                .and_then(|v| v.ratio.as_ref())
+                .and_then(|m| {
+                    rr.rule
+                        .rule_type
+                        .measure_binding_unit
+                        .as_ref()
+                        .and_then(|u| m.contains_key(u).then(|| u.clone()))
+                        .or_else(|| m.keys().next().cloned())
+                }),
         ),
         other => panic!("rule '{}' produced non-Ratio value {:?}", rule_name, other),
     }
@@ -642,14 +652,14 @@ rule out: r
                 rust_decimal::Decimal::new(25, 2)
             );
         }
-        ValueKind::Ratio(n, u) => {
+        ValueKind::Ratio(n) => {
             assert_eq!(
                 lemma::ValueKind::Number(n.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 rust_decimal::Decimal::new(25, 2)
             );
-            assert_eq!(u.as_deref(), None);
+            // bare ratio has no unit on LiteralValue after migration
         }
         other => panic!("expected Number or Ratio, got: {:?}", other),
     }

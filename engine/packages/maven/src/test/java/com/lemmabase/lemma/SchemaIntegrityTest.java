@@ -7,6 +7,10 @@ import static org.junit.jupiter.api.Assertions.fail;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.lemmabase.lemma.schema.ExplanationNode;
+import com.lemmabase.lemma.schema.LemmaType;
+import com.lemmabase.lemma.schema.LiteralValue;
+import com.lemmabase.lemma.schema.TypeExtends;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -145,21 +149,11 @@ final class SchemaIntegrityTest {
   }
 
   @Test
-  void metaValueAndLiteralValueVariantsMatchSchema() {
-    Set<String> metaTags = externalOneOfTags(defs.get("MetaValue"));
+  void literalValueVariantsMatchSchema() {
     Set<String> literalTags = externalOneOfTags(defs.get("LiteralValue"));
-    assertEquals(Set.of("literal", "unquoted"), metaTags);
     assertEquals(
         Set.of("number", "number_with_unit", "text", "date", "time", "boolean", "range"),
         literalTags);
-
-    Map<String, String> metaTagToClass =
-        Map.of("literal", "Literal", "unquoted", "Unquoted");
-    assertEquals(
-        metaTags.stream().map(metaTagToClass::get).collect(Collectors.toSet()),
-        Arrays.stream(MetaValue.class.getPermittedSubclasses())
-            .map(Class::getSimpleName)
-            .collect(Collectors.toSet()));
 
     Map<String, String> literalTagToClass =
         Map.of(
@@ -172,7 +166,7 @@ final class SchemaIntegrityTest {
             "range", "Range");
     assertEquals(
         literalTags.stream().map(literalTagToClass::get).collect(Collectors.toSet()),
-        Arrays.stream(MetaValue.LiteralValue.class.getPermittedSubclasses())
+        Arrays.stream(LiteralValue.class.getPermittedSubclasses())
             .map(Class::getSimpleName)
             .collect(Collectors.toSet()));
   }

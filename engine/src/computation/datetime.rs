@@ -4,7 +4,7 @@
 //! Returns OperationResult with Veto for errors instead of Result.
 
 use crate::computation::operation_result::{OperationResult, VetoType};
-use crate::computation::rational::{rational_new, BigInt, RationalInteger};
+use crate::computation::rational::{rational_new, RationalInteger};
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, LiteralValue, SemanticCalendarUnit,
     SemanticDateTime, SemanticTime, SemanticTimezone, ValueKind,
@@ -13,7 +13,6 @@ use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime,
     NaiveTime, TimeZone, Timelike,
 };
-use std::sync::Arc;
 
 const SECONDS_PER_HOUR: i32 = 3600;
 const SECONDS_PER_MINUTE: i32 = 60;
@@ -43,18 +42,20 @@ fn create_semantic_timezone_offset(
 /// Perform date/datetime arithmetic, returning OperationResult (Veto on error)
 pub fn datetime_arithmetic(
     left: &LiteralValue,
+    left_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     op: &ArithmeticComputation,
     right: &LiteralValue,
+    right_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
     match (&left.value, &right.value, op) {
-        (ValueKind::Date(date), ValueKind::Measure(_, _), ArithmeticComputation::Add)
-            if right.lemma_type.is_duration_like_measure() =>
+        (ValueKind::Date(date), ValueKind::Measure(_), ArithmeticComputation::Add)
+            if right_type.is_duration_like_measure() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let second = right.duration_canonical_seconds();
+            let second = right.duration_canonical_seconds(right_type.as_ref());
             let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -65,18 +66,18 @@ pub fn datetime_arithmetic(
             };
             OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
-                left.lemma_type.clone(),
+                std::sync::Arc::clone(left_type),
             ))
         }
 
-        (ValueKind::Date(date), ValueKind::Measure(_, _), ArithmeticComputation::Add)
-            if right.lemma_type.is_calendar_like() =>
+        (ValueKind::Date(date), ValueKind::Measure(_), ArithmeticComputation::Add)
+            if right_type.is_calendar_like() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let month = right.calendar_canonical_months();
+            let month = right.calendar_canonical_months(right_type.as_ref());
             let new_dt = match apply_calendar_to_datetime(dt, &month, true) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -84,20 +85,20 @@ pub fn datetime_arithmetic(
 
             OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
-                left.lemma_type.clone(),
+                std::sync::Arc::clone(left_type),
             ))
         }
 
         (
             ValueKind::Date(date),
-            ValueKind::Measure(_, _),
+            ValueKind::Measure(_),
             ArithmeticComputation::Subtract,
-        ) if right.lemma_type.is_duration_like_measure() => {
+        ) if right_type.is_duration_like_measure() => {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let second = right.duration_canonical_seconds();
+            let second = right.duration_canonical_seconds(right_type.as_ref());
             let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -108,20 +109,20 @@ pub fn datetime_arithmetic(
             };
             OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
-                left.lemma_type.clone(),
+                std::sync::Arc::clone(left_type),
             ))
         }
 
         (
             ValueKind::Date(date),
-            ValueKind::Measure(_, _),
+            ValueKind::Measure(_),
             ArithmeticComputation::Subtract,
-        ) if right.lemma_type.is_calendar_like() => {
+        ) if right_type.is_calendar_like() => {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let month = right.calendar_canonical_months();
+            let month = right.calendar_canonical_months(right_type.as_ref());
             let new_dt = match apply_calendar_to_datetime(dt, &month, false) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -129,18 +130,18 @@ pub fn datetime_arithmetic(
 
             OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
-                left.lemma_type.clone(),
+                std::sync::Arc::clone(left_type),
             ))
         }
 
-        (ValueKind::Measure(_, _), ValueKind::Date(date), ArithmeticComputation::Add)
-            if left.lemma_type.is_duration_like_measure() =>
+        (ValueKind::Measure(_), ValueKind::Date(date), ArithmeticComputation::Add)
+            if left_type.is_duration_like_measure() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let second = left.duration_canonical_seconds();
+            let second = left.duration_canonical_seconds(left_type.as_ref());
             let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -151,18 +152,18 @@ pub fn datetime_arithmetic(
             };
             OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
-                right.lemma_type.clone(),
+                std::sync::Arc::clone(right_type),
             ))
         }
 
-        (ValueKind::Measure(_, _), ValueKind::Date(date), ArithmeticComputation::Add)
-            if left.lemma_type.is_calendar_like() =>
+        (ValueKind::Measure(_), ValueKind::Date(date), ArithmeticComputation::Add)
+            if left_type.is_calendar_like() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let month = left.calendar_canonical_months();
+            let month = left.calendar_canonical_months(left_type.as_ref());
             let new_dt = match apply_calendar_to_datetime(dt, &month, true) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -170,7 +171,7 @@ pub fn datetime_arithmetic(
 
             OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
-                right.lemma_type.clone(),
+                std::sync::Arc::clone(right_type),
             ))
         }
 
@@ -227,19 +228,14 @@ pub fn datetime_arithmetic(
                 Ok(value) => value,
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
-            OperationResult::from_literal(LiteralValue {
-                value: ValueKind::Measure(second, vec![("second".to_string(), 1)]),
-                lemma_type: std::sync::Arc::new(
-                    crate::planning::semantics::LemmaType::anonymous_for_decomposition(
-                        crate::planning::semantics::duration_decomposition(),
-                    ),
-                ),
-            })
+            OperationResult::from_literal(LiteralValue::measure(second))
         }
 
         _ => unreachable!(
-            "BUG: datetime arithmetic {:?} for unsupported operand types; planning should have rejected this",
-            op
+            "BUG: datetime arithmetic {:?} for unsupported operand types {} vs {}; planning should have rejected this",
+            op,
+            left_type.name(),
+            right_type.name()
         ),
     }
 }
@@ -293,12 +289,11 @@ fn seconds_to_chrono_duration(second: &RationalInteger) -> Result<ChronoDuration
     let micros_per_sec = rational_new(MICROSECONDS_PER_SECOND, 1);
     let microsecond = checked_mul(second, &micros_per_sec)
         .map_err(|e| format!("Duration conversion overflow: {e}"))?;
-    if microsecond.denom() != &BigInt::one() {
+    if !microsecond.is_integer() {
         return Err("Duration conversion requires microsecond precision".to_string());
     }
     let us_i64 = microsecond
-        .numer()
-        .to_i128()
+        .numer_to_i128()
         .and_then(|v| i64::try_from(v).ok())
         .ok_or_else(|| "Duration conversion failed".to_string())?;
     Ok(ChronoDuration::microseconds(us_i64))
@@ -320,7 +315,7 @@ fn apply_calendar_to_datetime(
 ) -> Result<DateTime<FixedOffset>, String> {
     let months_rational = value.clone();
 
-    if months_rational.denom() != &BigInt::one() {
+    if !months_rational.is_integer() {
         return Err(format!(
             "Cannot apply fractional calendar offset ({} month) to a date",
             months_rational
@@ -328,8 +323,7 @@ fn apply_calendar_to_datetime(
     }
 
     let months_i32 = months_rational
-        .numer()
-        .to_i32()
+        .numer_to_i32()
         .ok_or_else(|| "Calendar offset too large".to_string())?;
 
     let signed_months = if add { months_i32 } else { -months_i32 };
@@ -432,6 +426,7 @@ fn signed_full_months_between(left: &DateTime<FixedOffset>, right: &DateTime<Fix
 pub fn evaluate_past_future_range(
     kind: &DateRelativeKind,
     duration_or_calendar: &LiteralValue,
+    duration_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     now: &SemanticDateTime,
 ) -> OperationResult {
     let now_value = LiteralValue::date(now.clone());
@@ -440,17 +435,22 @@ pub fn evaluate_past_future_range(
         DateRelativeKind::InFuture => ArithmeticComputation::Add,
     };
 
-    let shifted = datetime_arithmetic(&now_value, &shift_operator, duration_or_calendar);
+    let date_type = crate::planning::semantics::primitive_date_arc();
+    let shifted = datetime_arithmetic(
+        &now_value,
+        date_type,
+        &shift_operator,
+        duration_or_calendar,
+        duration_type,
+    );
     let shifted_value = match shifted {
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    let shifted_owned =
-        Arc::try_unwrap(shifted_value).unwrap_or_else(|shared| shared.as_ref().clone());
     let range_value = match kind {
-        DateRelativeKind::InPast => LiteralValue::range(shifted_owned, now_value),
-        DateRelativeKind::InFuture => LiteralValue::range(now_value, shifted_owned),
+        DateRelativeKind::InPast => LiteralValue::range(shifted_value, now_value),
+        DateRelativeKind::InFuture => LiteralValue::range(now_value, shifted_value),
     };
 
     OperationResult::from_literal(range_value)
@@ -459,8 +459,10 @@ pub fn evaluate_past_future_range(
 /// Perform date/datetime comparisons, returning OperationResult (Veto on error)
 pub fn datetime_comparison(
     left: &LiteralValue,
+    left_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     op: &ComparisonComputation,
     right: &LiteralValue,
+    right_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
     match (&left.value, &right.value) {
         (ValueKind::Date(l), ValueKind::Date(r)) => {
@@ -489,7 +491,9 @@ pub fn datetime_comparison(
         }
 
         _ => unreachable!(
-            "BUG: datetime_comparison with non-date operands; planning should have rejected this"
+            "BUG: datetime_comparison with non-date operands ({} vs {}); planning should have rejected this",
+            left_type.name(),
+            right_type.name()
         ),
     }
 }
@@ -497,8 +501,10 @@ pub fn datetime_comparison(
 /// Perform time comparisons, returning OperationResult (Veto on error)
 pub fn time_comparison(
     left: &LiteralValue,
+    left_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     op: &ComparisonComputation,
     right: &LiteralValue,
+    right_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
     match (&left.value, &right.value) {
         (ValueKind::Time(l), ValueKind::Time(r)) => {
@@ -526,7 +532,9 @@ pub fn time_comparison(
             OperationResult::from_literal(LiteralValue::from_bool(result))
         }
         _ => unreachable!(
-            "BUG: time_comparison called with non-time operands; this should be enforced by planning and dispatch"
+            "BUG: time_comparison called with non-time operands ({} vs {}); this should be enforced by planning and dispatch",
+            left_type.name(),
+            right_type.name()
         ),
     }
 }
@@ -534,14 +542,16 @@ pub fn time_comparison(
 /// Perform time arithmetic operations, returning OperationResult (Veto on error)
 pub fn time_arithmetic(
     left: &LiteralValue,
+    left_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     op: &ArithmeticComputation,
     right: &LiteralValue,
+    right_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
     match (&left.value, &right.value, op) {
-        (ValueKind::Time(time), ValueKind::Measure(_, _), ArithmeticComputation::Add)
-            if right.lemma_type.is_duration_like_measure() =>
+        (ValueKind::Time(time), ValueKind::Measure(_), ArithmeticComputation::Add)
+            if right_type.is_duration_like_measure() =>
         {
-            let second = right.duration_canonical_seconds();
+            let second = right.duration_canonical_seconds(right_type.as_ref());
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -556,16 +566,16 @@ pub fn time_arithmetic(
             };
             OperationResult::from_literal(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
-                left.lemma_type.clone(),
+                std::sync::Arc::clone(left_type),
             ))
         }
 
         (
             ValueKind::Time(time),
-            ValueKind::Measure(_, _),
+            ValueKind::Measure(_),
             ArithmeticComputation::Subtract,
-        ) if right.lemma_type.is_duration_like_measure() => {
-            let second = right.duration_canonical_seconds();
+        ) if right_type.is_duration_like_measure() => {
+            let second = right.duration_canonical_seconds(right_type.as_ref());
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -580,14 +590,14 @@ pub fn time_arithmetic(
             };
             OperationResult::from_literal(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
-                left.lemma_type.clone(),
+                std::sync::Arc::clone(left_type),
             ))
         }
 
-        (ValueKind::Measure(_, _), ValueKind::Time(time), ArithmeticComputation::Add)
-            if left.lemma_type.is_duration_like_measure() =>
+        (ValueKind::Measure(_), ValueKind::Time(time), ArithmeticComputation::Add)
+            if left_type.is_duration_like_measure() =>
         {
-            let second = left.duration_canonical_seconds();
+            let second = left.duration_canonical_seconds(left_type.as_ref());
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -602,7 +612,7 @@ pub fn time_arithmetic(
             };
             OperationResult::from_literal(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
-                right.lemma_type.clone(),
+                std::sync::Arc::clone(right_type),
             ))
         }
 
@@ -660,14 +670,7 @@ pub fn time_arithmetic(
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
 
-            OperationResult::from_literal(LiteralValue {
-                value: ValueKind::Measure(second, vec![("second".to_string(), 1)]),
-                lemma_type: std::sync::Arc::new(
-                    crate::planning::semantics::LemmaType::anonymous_for_decomposition(
-                        crate::planning::semantics::duration_decomposition(),
-                    ),
-                ),
-            })
+            OperationResult::from_literal(LiteralValue::measure(second))
         }
 
         _ => unreachable!(
@@ -727,12 +730,10 @@ fn chrono_datetime_to_semantic_time(dt: DateTime<FixedOffset>) -> SemanticTime {
 // =============================================================================
 
 use crate::parsing::ast::{CalendarPeriodUnit, DateCalendarKind, DateRelativeKind};
-use crate::planning::semantics::primitive_boolean_arc;
 
 fn bool_result(b: bool) -> OperationResult {
     OperationResult::from_literal(LiteralValue {
         value: ValueKind::Boolean(b),
-        lemma_type: primitive_boolean_arc().clone(),
     })
 }
 

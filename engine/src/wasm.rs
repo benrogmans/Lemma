@@ -1,5 +1,5 @@
 use crate::error::EngineError;
-use crate::{Engine, Error, Source, SourceType};
+use crate::{Engine, Error, ResourceLimits, SourceType};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -44,6 +44,15 @@ impl WasmEngine {
         })
     }
 
+    /// Restore an engine from [`Engine::snapshot`] bytes.
+    #[wasm_bindgen(js_name = fromSnapshot)]
+    pub fn from_snapshot(bytes: &[u8]) -> Result<WasmEngine, JsValue> {
+        console_error_panic_hook::set_once();
+        Ok(WasmEngine {
+            engine: Engine::from_snapshot(bytes).map_err(|e| error_to_js(&e))?,
+        })
+    }
+
     /// Load Lemma source(s).
     ///
     /// - string → one volatile workspace source
@@ -54,46 +63,6 @@ impl WasmEngine {
     pub fn load_wasm(&mut self, sources: JsValue) -> Result<(), JsValue> {
         let batch = parse_load_sources(sources)?;
         self.engine.load(batch).map_err(serialize_load_errors)
-    }
-
-    /// Download Lemma source for a registry identifier via [`crate::registry::LemmaBase`]. Returns `{ source, id }`.
-    /// Does not load this [`WasmEngine`]; call [`Self::load`] with `{ [id]: source }`.
-    #[wasm_bindgen(js_name = fetch)]
-    pub fn fetch_wasm(&self, name: &str) -> js_sys::Promise {
-        match crate::spec_set_id::parse_spec_set_id(name) {
-            Err(e) => {
-                let js_err_array = {
-                    let errors = vec![EngineError::from(&e)];
-                    errors
-                        .serialize(&js_error_serializer())
-                        .expect("BUG: serialize EngineError array")
-                };
-                wasm_bindgen_futures::future_to_promise(async move { Err(js_err_array) })
-            }
-            Ok(normalized) => {
-                #[cfg(not(feature = "registry"))]
-                {
-                    let err = Error::request(
-                        format!(
-                            "fetch of '{normalized}' requires the lemma-engine crate to be built with the `registry` feature (engine has {} loaded repositories)",
-                            self.engine.list().len()
-                        ),
-                        None::<String>,
-                    );
-                    let js_err_array = {
-                        let errors = vec![EngineError::from(&err)];
-                        errors
-                            .serialize(&js_error_serializer())
-                            .expect("BUG: serialize EngineError array")
-                    };
-                    wasm_bindgen_futures::future_to_promise(async move { Err(js_err_array) })
-                }
-                #[cfg(feature = "registry")]
-                {
-                    wasm_registry_fetch_only_promise(normalized)
-                }
-            }
-        }
     }
 
     /// Evaluate spec. Returns [`crate::evaluation::Response`] as a JS object. Throws on planning/runtime error.
@@ -129,7 +98,7 @@ impl WasmEngine {
             )
             .map_err(|e| error_to_js(&e))?;
 
-        serialize_engine_json(&response)
+        serialize_engine_json(&crate::api::Response::from(&response))
     }
 
     /// Catalog of loaded repositories and specs (metadata only, no source).
@@ -139,7 +108,16 @@ impl WasmEngine {
         serialize_engine_json(&repos)
     }
 
-    /// Spec interface and temporal window at `effective`. Lemma text is [`Self::source`].
+    /// Download Lemma source for a LemmaBase repository identifier via the host's
+    /// global `fetch`. Returns `{ source, id }`. Does not load this engine.
+    #[wasm_bindgen(js_name = install)]
+    pub fn install_wasm(&self, name: &str) -> js_sys::Promise {
+        let name = name.to_string();
+        let limits = self.engine.limits().clone();
+        wasm_bindgen_futures::future_to_promise(async move { wasm_install(name, limits).await })
+    }
+
+    /// Spec data catalog and temporal window at `effective`. Lemma text is [`Self::source`].
     #[wasm_bindgen(js_name = show)]
     pub fn show_wasm(
         &self,
@@ -157,7 +135,7 @@ impl WasmEngine {
             .engine
             .show(repo, spec, Some(&effective_dt))
             .map_err(|e| error_to_js(&e))?;
-        serialize_engine_json(&view)
+        serialize_engine_json(&crate::api::Show::from(&view))
     }
 
     /// Formatted canonical Lemma source. Omit `spec` for whole-repository text.
@@ -198,19 +176,20 @@ impl WasmEngine {
             .map_err(|e| error_to_js(&e))
     }
 
-    /// Replace a temporal spec slice with new source (atomic remove + load).
+    /// Replace identities in `code` (atomic upsert; Path/Dependency prune siblings).
     ///
     /// `attribute` is the source label (path or `@owner/repo`). Omit for a volatile source.
     #[wasm_bindgen(js_name = update)]
     pub fn update_wasm(
         &mut self,
         repository: Option<String>,
-        spec: &str,
-        effective: Option<String>,
         code: &str,
         attribute: Option<String>,
     ) -> Result<(), JsValue> {
-        let (repo, effective_dt) = parse_repo_and_effective(repository.as_ref(), effective)?;
+        let repo = repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let source_type = match attribute
             .as_deref()
             .map(str::trim)
@@ -220,13 +199,7 @@ impl WasmEngine {
             Some(label) => SourceType::from_binding_label(label).map_err(js_err)?,
         };
         self.engine
-            .update(
-                repo,
-                spec,
-                effective_dt.as_ref(),
-                source_type,
-                code.to_string(),
-            )
+            .update(repo, code.to_string(), source_type)
             .map_err(serialize_load_errors)
     }
 
@@ -234,6 +207,12 @@ impl WasmEngine {
     #[wasm_bindgen(js_name = limits)]
     pub fn limits_wasm(&self) -> Result<JsValue, JsValue> {
         serialize_engine_json(self.engine.limits())
+    }
+
+    /// Persist parsed specs + plans + limits as opaque bytes (see [`Engine::snapshot`]).
+    #[wasm_bindgen(js_name = snapshot)]
+    pub fn snapshot_wasm(&self) -> Result<Vec<u8>, JsValue> {
+        self.engine.snapshot().map_err(|e| error_to_js(&e))
     }
 
     /// Returns formatted source string on success; throws with error message on failure.
@@ -291,70 +270,6 @@ fn parse_run_data(data: &Option<serde_json::Value>) -> Result<HashMap<String, St
     crate::parse_run_data_object(data)
 }
 
-#[derive(Serialize)]
-struct RegistryFetchPayload {
-    source: String,
-    id: String,
-}
-
-#[cfg(feature = "registry")]
-fn wasm_registry_fetch_only_promise(name: String) -> js_sys::Promise {
-    wasm_bindgen_futures::future_to_promise(async move {
-        use crate::registry::{LemmaBase, Registry, RegistryErrorKind};
-
-        let registry = LemmaBase::new();
-        let bundle = match registry.get(&name).await {
-            Ok(b) => b,
-            Err(registry_error) => {
-                let suggestion = match &registry_error.kind {
-                    RegistryErrorKind::NotFound => Some(
-                        "Check that the repository qualifier is spelled correctly and that the repository exists on the registry.".to_string(),
-                    ),
-                    RegistryErrorKind::Unauthorized => Some(
-                        "Check your authentication credentials or permissions for this registry."
-                            .to_string(),
-                    ),
-                    RegistryErrorKind::NetworkError => Some(
-                        "Check your network connection.".to_string(),
-                    ),
-                    RegistryErrorKind::ServerError => Some(
-                        "The registry server returned an internal error. Try again later.".to_string(),
-                    ),
-                    RegistryErrorKind::Other => None,
-                };
-                let source = Source::new(
-                    SourceType::Volatile,
-                    crate::parsing::ast::Span {
-                        start: 0,
-                        end: 0,
-                        line: 1,
-                        col: 1,
-                    },
-                );
-                let err = Error::registry(
-                    registry_error.message,
-                    source,
-                    name.clone(),
-                    registry_error.kind,
-                    suggestion,
-                    None,
-                    None,
-                );
-                let errors = vec![EngineError::from(&err)];
-                return Err(errors
-                    .serialize(&js_error_serializer())
-                    .expect("BUG: serialize EngineError array"));
-            }
-        };
-
-        let payload = RegistryFetchPayload {
-            source: bundle.source,
-            id: name,
-        };
-        serialize_engine_json(&payload)
-    })
-}
-
 /// Same JSON as CLI/HTTP.
 /// `IndexMap` entries (e.g. `Response.results` → `{}`); `JSON.parse` matches browser semantics.
 fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
@@ -378,6 +293,12 @@ fn js_error_serializer() -> serde_wasm_bindgen::Serializer {
     serde_wasm_bindgen::Serializer::new().serialize_missing_as_null(true)
 }
 
+fn serialize_engine_errors(errors: &[EngineError]) -> JsValue {
+    errors
+        .serialize(&js_error_serializer())
+        .expect("BUG: serialize EngineError array")
+}
+
 /// Convert an engine [`Error`] into a plain JS object thrown from WASM.
 fn error_to_js(e: &Error) -> JsValue {
     let err = EngineError::from(e);
@@ -387,17 +308,30 @@ fn error_to_js(e: &Error) -> JsValue {
 
 fn serialize_load_errors(load_err: crate::Errors) -> JsValue {
     let errors: Vec<EngineError> = load_err.errors.iter().map(EngineError::from).collect();
-    errors
-        .serialize(&js_error_serializer())
-        .expect("BUG: serialize EngineError array")
+    serialize_engine_errors(&errors)
 }
 
 fn request_error_js(message: impl Into<String>) -> JsValue {
-    let err = Error::request(message, None::<String>);
-    let errors = vec![EngineError::from(&err)];
-    errors
-        .serialize(&js_error_serializer())
-        .expect("BUG: serialize EngineError array")
+    serialize_engine_errors(&[EngineError::from(&Error::request(message, None::<String>))])
+}
+
+fn errors_to_js(error: &Error) -> JsValue {
+    serialize_engine_errors(&[EngineError::from(error)])
+}
+
+fn js_value_message(value: &JsValue) -> String {
+    use wasm_bindgen::JsCast;
+    if let Some(s) = value.as_string() {
+        return s;
+    }
+    if let Some(obj) = value.dyn_ref::<js_sys::Object>() {
+        if let Ok(msg) = js_sys::Reflect::get(obj, &JsValue::from_str("message")) {
+            if let Some(s) = msg.as_string() {
+                return s;
+            }
+        }
+    }
+    format!("{value:?}")
 }
 
 fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsValue> {
@@ -449,4 +383,173 @@ fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsV
                 .map_err(|e| request_error_js(format!("load: label '{label}': {e}")))
         })
         .collect()
+}
+
+fn registries() -> &'static crate::Registries {
+    use std::sync::OnceLock;
+    static REGISTRIES: OnceLock<crate::Registries> = OnceLock::new();
+    REGISTRIES.get_or_init(crate::Registries::default)
+}
+
+async fn wasm_install(name: String, limits: ResourceLimits) -> Result<JsValue, JsValue> {
+    use crate::registry::{Install, InstallStep};
+
+    let (mut install, mut step) = Install::start(registries(), &name, limits);
+    loop {
+        match step {
+            InstallStep::Finished(Ok(result)) => {
+                return serialize_engine_json(&result);
+            }
+            InstallStep::Finished(Err(error)) => {
+                return Err(errors_to_js(&error));
+            }
+            InstallStep::Fetch(fetch) => {
+                let response = global_fetch(&fetch).await;
+                step = install.respond(response);
+            }
+        }
+    }
+}
+
+async fn global_fetch(
+    fetch: &crate::registry::Fetch,
+) -> Result<crate::registry::HttpResponse, crate::registry::TransportFailure> {
+    use crate::registry::{Header, HttpResponse, TransportFailure};
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    let global = js_sys::global();
+    let fetch_fn = js_sys::Reflect::get(&global, &JsValue::from_str("fetch")).map_err(|e| {
+        TransportFailure {
+            message: format!("global fetch is not available: {}", js_value_message(&e)),
+        }
+    })?;
+    let fetch_fn: js_sys::Function = fetch_fn.dyn_into().map_err(|_| TransportFailure {
+        message: "global fetch is not a function".to_string(),
+    })?;
+
+    let init = web_sys::RequestInit::new();
+    init.set_method("GET");
+
+    let abort = web_sys::AbortController::new().map_err(|e| TransportFailure {
+        message: format!("failed to create AbortController: {}", js_value_message(&e)),
+    })?;
+    init.set_signal(Some(&abort.signal()));
+
+    let headers = web_sys::Headers::new().map_err(|e| TransportFailure {
+        message: format!("failed to create request headers: {}", js_value_message(&e)),
+    })?;
+    for header in &fetch.headers {
+        headers
+            .set(&header.name, &header.value)
+            .map_err(|e| TransportFailure {
+                message: format!(
+                    "failed to set request header {}: {}",
+                    header.name,
+                    js_value_message(&e)
+                ),
+            })?;
+    }
+    init.set_headers(&headers);
+
+    let request = web_sys::Request::new_with_str_and_init(&fetch.url, &init).map_err(|e| {
+        TransportFailure {
+            message: format!(
+                "invalid request URL {}: {}",
+                fetch.url,
+                js_value_message(&e)
+            ),
+        }
+    })?;
+
+    let set_timeout =
+        js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout")).map_err(|e| {
+            TransportFailure {
+                message: format!("setTimeout is not available: {}", js_value_message(&e)),
+            }
+        })?;
+    let set_timeout: js_sys::Function = set_timeout.dyn_into().map_err(|_| TransportFailure {
+        message: "setTimeout is not a function".to_string(),
+    })?;
+    let abort_for_timeout = abort.clone();
+    let timeout_cb = Closure::once(move || {
+        abort_for_timeout.abort();
+    });
+    set_timeout
+        .call2(
+            &global,
+            timeout_cb.as_ref().unchecked_ref(),
+            &JsValue::from_f64(30_000.0),
+        )
+        .map_err(|e| TransportFailure {
+            message: format!("failed to schedule fetch timeout: {}", js_value_message(&e)),
+        })?;
+    // Kept alive until the timeout fires or the page tears down.
+    timeout_cb.forget();
+
+    let promise = fetch_fn
+        .call1(&global, &request)
+        .map_err(|e| TransportFailure {
+            message: format!("fetch call failed: {}", js_value_message(&e)),
+        })?;
+    let response_value = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise))
+        .await
+        .map_err(|e| TransportFailure {
+            message: format!("fetch rejected: {}", js_value_message(&e)),
+        })?;
+    let response: web_sys::Response = response_value.dyn_into().map_err(|_| TransportFailure {
+        message: "fetch did not return a Response".to_string(),
+    })?;
+
+    let status = response.status() as u16;
+    let mut response_headers = Vec::new();
+    let header_iter = js_sys::try_iter(&response.headers())
+        .map_err(|e| TransportFailure {
+            message: format!(
+                "failed to iterate response headers: {}",
+                js_value_message(&e)
+            ),
+        })?
+        .ok_or_else(|| TransportFailure {
+            message: "response headers are not iterable".to_string(),
+        })?;
+    for entry in header_iter {
+        let entry = entry.map_err(|e| TransportFailure {
+            message: format!(
+                "failed to read response header entry: {}",
+                js_value_message(&e)
+            ),
+        })?;
+        let pair = js_sys::Array::from(&entry);
+        if pair.length() < 2 {
+            return Err(TransportFailure {
+                message: "response header entry must be a [name, value] pair".to_string(),
+            });
+        }
+        let name = pair.get(0).as_string().ok_or_else(|| TransportFailure {
+            message: "response header name must be a string".to_string(),
+        })?;
+        let value = pair.get(1).as_string().ok_or_else(|| TransportFailure {
+            message: format!("response header '{name}' value must be a string"),
+        })?;
+        response_headers.push(Header { name, value });
+    }
+
+    let text_promise = response.text().map_err(|e| TransportFailure {
+        message: format!("failed to read response body: {}", js_value_message(&e)),
+    })?;
+    let text_value = wasm_bindgen_futures::JsFuture::from(text_promise)
+        .await
+        .map_err(|e| TransportFailure {
+            message: format!("failed to await response body: {}", js_value_message(&e)),
+        })?;
+    let body = text_value.as_string().ok_or_else(|| TransportFailure {
+        message: "response body was not a string".to_string(),
+    })?;
+
+    Ok(HttpResponse {
+        status,
+        headers: response_headers,
+        body,
+    })
 }

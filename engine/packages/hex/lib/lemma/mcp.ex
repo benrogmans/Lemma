@@ -5,9 +5,9 @@ defmodule Lemma.Mcp do
   Read tools mirror the engine catalog: `run`, `list`, `show`, `source`,
   `check`, `guide`. Admin/write tools stay in the CLI MCP server only.
 
-  `run/2` always includes explanations and returns Engine `Response` JSON
-  (same shape as `Lemma.run/3` with `explain: true`). Args match SDK `run`:
-  `spec`, optional `repository`, `rules`, `data` (object), `effective`.
+  `run/2` always includes explanations and returns formatted ASCII trees
+  (plus a Missing data block when inputs are unbound). Args match SDK `run`:
+    `spec`, optional `repository`, `rules`, `data` (object), `effective`.
   Do not pass `explain`.
   """
 

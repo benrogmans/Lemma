@@ -92,12 +92,13 @@ rule discount: 0
 | `Lemma.new/1` | Create engine (optional limits map) |
 | `Lemma.limits/1` | Current resource limits |
 | `Lemma.load/2` | Load sources: binary (volatile); map (lexicographic label order) or list of `{label, code}` (caller order) |
+| `Lemma.install/2-3` | Download a repository from LemmaBase (`{:ok, map}` with `:source` / `:id`); optional transport fun; does not load |
 | `Lemma.list/1` | List loaded specs (includes embedded `lemma` / `spec units`) |
 | `Lemma.show/4` | Spec interface and temporal window (`repository`, `spec`, `effective`) |
 | `Lemma.source/4` | Formatted canonical Lemma source |
 | `Lemma.run/3` | Evaluate a spec (`target` + `options` maps; `explain: true` adds per-rule explanation trees) |
 | `Lemma.remove/4` | Remove a spec from the engine |
-| `Lemma.update/6` | Replace a temporal spec slice (atomic remove + load) |
+| `Lemma.update/3-4` | Upsert identities from `code`; Path/Dependency prune siblings |
 | `Lemma.quality/1` | Structural quality recommendations across loaded specs (advisory only) |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 

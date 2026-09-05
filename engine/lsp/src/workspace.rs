@@ -1,4 +1,4 @@
-use lemma::{parse, Error, ParseResult, ResourceLimits, SourceType};
+use lemma::{parse, Engine, Error, ParseResult, ResourceLimits, SourceType};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,7 +45,6 @@ pub struct FileDiagnostics {
 ///
 /// Keyed by **attribute** (file path string or URL string) so that the same
 /// physical file is tracked exactly once, regardless of how the URL is constructed.
-#[derive(Default)]
 pub struct WorkspaceModel {
     /// Workspace root directory (host); `None` on WASM or single-file mode.
     workspace_root: Option<std::path::PathBuf>,
@@ -57,11 +56,33 @@ pub struct WorkspaceModel {
     disk_texts: HashMap<String, String>,
     /// Resource limits used during parsing.
     limits: ResourceLimits,
+    /// Long-lived engine; validated via per-file [`Engine::update`] or batch load.
+    engine: Engine,
+    /// Attributes whose on-disk/buffer text has not yet been synced into `engine`.
+    dirty_attributes: HashSet<String>,
+    /// Source types whose files left the model and still need an empty
+    /// [`Engine::update`] prune on the next [`Self::validate_workspace`].
+    pending_removals: Vec<(String, SourceType)>,
+}
+
+impl Default for WorkspaceModel {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorkspaceModel {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            workspace_root: None,
+            files: HashMap::new(),
+            disk_attributes: HashSet::new(),
+            disk_texts: HashMap::new(),
+            limits: ResourceLimits::default(),
+            engine: Engine::new(),
+            dirty_attributes: HashSet::new(),
+            pending_removals: Vec::new(),
+        }
     }
 
     /// Set the workspace root used to locate `lemma_deps/` and attribute disk paths.
@@ -140,21 +161,67 @@ impl WorkspaceModel {
             Err(error) => ParseOutcome::Failed(vec![error]),
         };
         self.files.insert(
-            attribute,
+            attribute.clone(),
             TrackedFile {
                 url,
                 text,
                 parse_outcome,
             },
         );
+        self.dirty_attributes.insert(attribute);
     }
 
-    /// Remove a file from the workspace.
+    /// Remove a file from the workspace; engine prune runs on the next validate.
     pub fn remove_file(&mut self, url: &Url) {
         let attribute = Self::attribute_for_url(url);
+        let source_type = self.source_type_for_url(url);
         self.files.remove(&attribute);
         self.disk_attributes.remove(&attribute);
         self.disk_texts.remove(&attribute);
+        self.dirty_attributes.remove(&attribute);
+        self.queue_removal(attribute, source_type);
+    }
+
+    fn queue_removal(&mut self, attribute: String, source_type: SourceType) {
+        match &source_type {
+            SourceType::Path(_) | SourceType::Dependency(_) => {
+                self.pending_removals.retain(|(a, _)| a != &attribute);
+                self.pending_removals.push((attribute, source_type));
+            }
+            SourceType::Volatile => {
+                unreachable!("BUG: LSP never attributes Volatile sources");
+            }
+        }
+    }
+
+    fn apply_pending_removals(
+        &mut self,
+        load_errors_by_attribute: &mut HashMap<String, Vec<Error>>,
+    ) -> bool {
+        let removals = std::mem::take(&mut self.pending_removals);
+        if removals.is_empty() {
+            return true;
+        }
+        let mut all_ok = true;
+        for (attribute, source_type) in removals {
+            match self.engine.update(None, String::new(), source_type.clone()) {
+                Ok(()) => {}
+                Err(errs) => {
+                    all_ok = false;
+                    for err in errs.errors {
+                        let attr = err
+                            .location()
+                            .map(|s| s.source_type.to_string())
+                            .unwrap_or_else(|| attribute.clone());
+                        load_errors_by_attribute.entry(attr).or_default().push(err);
+                    }
+                    // Keep trying until the prune succeeds (e.g. consumer fixed).
+                    self.pending_removals.push((attribute.clone(), source_type));
+                    self.dirty_attributes.insert(attribute);
+                }
+            }
+        }
+        all_ok
     }
 
     /// Whether this URL was present in the last successful disk injection.
@@ -220,7 +287,11 @@ impl WorkspaceModel {
             if open_attributes.contains(&attribute) {
                 continue;
             }
-            self.files.remove(&attribute);
+            if let Some(tracked) = self.files.remove(&attribute) {
+                let source_type = self.source_type_for_url(&tracked.url);
+                self.queue_removal(attribute.clone(), source_type);
+            }
+            self.dirty_attributes.remove(&attribute);
         }
 
         self.disk_attributes = next_disk_attributes;
@@ -244,56 +315,99 @@ impl WorkspaceModel {
             })
     }
 
-    fn load_tracked_files_into(&self, engine: &mut lemma::Engine) -> HashMap<String, Vec<Error>> {
-        let mut attributes: Vec<&String> = self.files.keys().collect();
-        attributes.sort();
+    /// Long-lived engine for hover, links, and evaluation.
+    #[must_use]
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
 
-        let sources: Vec<_> = attributes
-            .into_iter()
-            .filter_map(|attribute| {
-                let tracked = self.files.get(attribute)?;
-                if !matches!(tracked.parse_outcome, ParseOutcome::Success(_)) {
-                    return None;
-                }
-                Some((self.source_type_for_url(&tracked.url), tracked.text.clone()))
-            })
-            .collect();
+    /// Run workspace validation: parse errors + planning errors.
+    ///
+    /// Single dirty attribute → per-file [`Engine::update`]. Multiple dirty
+    /// attributes (or first population) → batch [`Engine::load`] into a fresh
+    /// engine (order-independent), swapped only on success. Pending disk/close
+    /// removals apply as empty Path/Dependency updates in the same pass.
+    pub fn validate_workspace(&mut self) -> Vec<FileDiagnostics> {
+        let dirty: HashSet<String> = std::mem::take(&mut self.dirty_attributes);
+        let mut load_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
 
-        match engine.load(sources) {
-            Ok(()) => HashMap::new(),
-            Err(e) => {
-                let mut by_attr: HashMap<String, Vec<Error>> = HashMap::new();
-                for err in e.errors {
-                    let attr = err
-                        .location()
-                        .map(|s| s.source_type.to_string())
-                        .unwrap_or_default();
-                    by_attr.entry(attr).or_default().push(err);
+        let single_dirty = if dirty.len() == 1 {
+            dirty.iter().next().cloned()
+        } else {
+            None
+        };
+        let incremental = match &single_dirty {
+            Some(attr) => self.files.contains_key(attr) && self.pending_removals.is_empty(),
+            None => false,
+        };
+
+        if incremental {
+            let attribute = single_dirty.expect("BUG: incremental requires single dirty attribute");
+            let (source_type, text_or_failed) = {
+                let tracked = self
+                    .files
+                    .get(&attribute)
+                    .expect("BUG: dirty attribute must exist in files");
+                let source_type = self.source_type_for_url(&tracked.url);
+                match &tracked.parse_outcome {
+                    ParseOutcome::Failed(_) => (source_type, None),
+                    ParseOutcome::Success(_) => (source_type, Some(tracked.text.clone())),
                 }
-                by_attr
+            };
+            match text_or_failed {
+                None => match self.engine.update(None, String::new(), source_type) {
+                    Ok(()) => {}
+                    Err(errs) => {
+                        for err in errs.errors {
+                            let attr = err
+                                .location()
+                                .map(|s| s.source_type.to_string())
+                                .unwrap_or_else(|| attribute.clone());
+                            load_errors_by_attribute.entry(attr).or_default().push(err);
+                        }
+                        self.dirty_attributes.insert(attribute);
+                    }
+                },
+                Some(text) => {
+                    if let Err(errs) = self.engine.update(None, text, source_type) {
+                        for err in errs.errors {
+                            let attr = err
+                                .location()
+                                .map(|s| s.source_type.to_string())
+                                .unwrap_or_else(|| attribute.clone());
+                            load_errors_by_attribute.entry(attr).or_default().push(err);
+                        }
+                        self.dirty_attributes.insert(attribute);
+                    }
+                }
+            }
+        } else if !dirty.is_empty() || !self.pending_removals.is_empty() {
+            if !dirty.is_empty() {
+                self.rebuild_engine_from_files(&mut load_errors_by_attribute);
+                // Removals are reflected by the scratch rebuild (absent files).
+                self.pending_removals.clear();
+                if !load_errors_by_attribute.is_empty() {
+                    // Keep dirty so the next pass retries until the workspace loads cleanly.
+                    self.dirty_attributes = dirty;
+                }
+            } else if !self.apply_pending_removals(&mut load_errors_by_attribute) {
+                // pending_removals + dirty already requeued inside apply_pending_removals
             }
         }
-    }
-
-    /// Embedded stdlib plus all workspace specs (same composition as [`Engine::new`] after load).
-    pub fn engine_with_workspace(&self) -> lemma::Engine {
-        let mut engine = lemma::Engine::new();
-        let _ = self.load_tracked_files_into(&mut engine);
-        engine
-    }
-
-    /// Run a full workspace validation: parse errors + planning errors for all files.
-    pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
-        let mut engine = lemma::Engine::new();
-        let load_errors_by_attribute = self.load_tracked_files_into(&mut engine);
 
         let mut results = Vec::new();
-        for (attribute, tracked) in &self.files {
+        let mut attributes: Vec<_> = self.files.keys().cloned().collect();
+        attributes.sort();
+        for attribute in attributes {
+            let tracked = self
+                .files
+                .get(&attribute)
+                .expect("BUG: attribute from keys must exist");
             let mut file_errors = Vec::new();
             if let ParseOutcome::Failed(parse_errors) = &tracked.parse_outcome {
                 file_errors.extend(parse_errors.iter().cloned());
             }
-            if let Some(load_errors) = load_errors_by_attribute.get(attribute) {
+            if let Some(load_errors) = load_errors_by_attribute.get(&attribute) {
                 file_errors.extend(load_errors.iter().cloned());
             }
             results.push(FileDiagnostics {
@@ -304,6 +418,42 @@ impl WorkspaceModel {
             });
         }
         results
+    }
+
+    fn rebuild_engine_from_files(
+        &mut self,
+        load_errors_by_attribute: &mut HashMap<String, Vec<Error>>,
+    ) {
+        let mut attributes: Vec<_> = self.files.keys().cloned().collect();
+        attributes.sort();
+        let mut sources: Vec<(SourceType, String)> = Vec::new();
+        for attribute in attributes {
+            let tracked = self
+                .files
+                .get(&attribute)
+                .expect("BUG: attribute from keys must exist");
+            if matches!(tracked.parse_outcome, ParseOutcome::Failed(_)) {
+                continue;
+            }
+            let source_type = self.source_type_for_url(&tracked.url);
+            sources.push((source_type, tracked.text.clone()));
+        }
+
+        let mut scratch = Engine::new();
+        match scratch.load(sources) {
+            Ok(()) => {
+                self.engine = scratch;
+            }
+            Err(errs) => {
+                for err in errs.errors {
+                    let attr = err
+                        .location()
+                        .map(|s| s.source_type.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    load_errors_by_attribute.entry(attr).or_default().push(err);
+                }
+            }
+        }
     }
 
     /// Get the current text content for a file, if tracked.
@@ -368,6 +518,73 @@ mod tests {
             !results[0].errors.is_empty(),
             "Expected parse errors for invalid input"
         );
+    }
+
+    #[test]
+    fn cross_spec_reference_resolves_when_consumer_sorts_before_provider() {
+        let mut workspace = WorkspaceModel::new();
+        let url_provider = url_from_path("/tmp/z_provider.lemma");
+        let url_consumer = url_from_path("/tmp/a_consumer.lemma");
+
+        workspace.update_file(
+            url_consumer.clone(),
+            "spec company\nuses employee: person\n  -> with name: \"Bob\"".to_string(),
+        );
+        workspace.update_file(
+            url_provider.clone(),
+            "spec person\ndata name: \"Alice\"\ndata age: 30".to_string(),
+        );
+
+        let results = workspace.validate_workspace();
+        for result in &results {
+            assert!(
+                result.errors.is_empty(),
+                "batch load must be order-independent; file {} got: {:?}",
+                result.url,
+                result.errors
+            );
+        }
+    }
+
+    #[test]
+    fn disk_rename_does_not_leave_duplicate_spec_diagnostic() {
+        let mut workspace = WorkspaceModel::new();
+        let url_foo = url_from_path("/tmp/foo.lemma");
+        let url_bar = url_from_path("/tmp/bar.lemma");
+        let open = HashSet::new();
+
+        workspace.apply_disk_files(
+            &[(
+                url_foo.clone(),
+                "spec item\ndata v: 1\nrule r: v\n".to_string(),
+            )],
+            &open,
+        );
+        let results = workspace.validate_workspace();
+        assert!(results.iter().all(|r| r.errors.is_empty()));
+        assert!(workspace.engine().show(None, "item", None).is_ok());
+
+        workspace.apply_disk_files(
+            &[(
+                url_bar.clone(),
+                "spec item\ndata v: 2\nrule r: v\n".to_string(),
+            )],
+            &open,
+        );
+        let results = workspace.validate_workspace();
+        for result in &results {
+            assert!(
+                result.errors.is_empty(),
+                "rename must prune old path before loading new; {} got: {:?}",
+                result.url,
+                result.errors
+            );
+        }
+        assert!(
+            !workspace.contains_file(&url_foo),
+            "old path must leave the model"
+        );
+        assert!(workspace.engine().show(None, "item", None).is_ok());
     }
 
     #[test]
@@ -592,7 +809,8 @@ mod tests {
         let url_dep = Url::from_file_path(&dep_path).expect("dep url");
         workspace.update_file(url_dep, src.to_string());
 
-        let engine = workspace.engine_with_workspace();
+        let _ = workspace.validate_workspace();
+        let engine = workspace.engine();
         let shown = engine
             .show(Some("@user/somedep"), "some_spec", None)
             .expect("some_spec must show");

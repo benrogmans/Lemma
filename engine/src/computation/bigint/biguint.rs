@@ -1,14 +1,36 @@
 //! Fallible arbitrary-precision unsigned integers (algorithms from num-bigint 0.4.6).
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::fmt;
 
 use super::alloc::{try_reserve_exact, try_with_capacity, AllocError};
 use super::digit::{BigDigit, DoubleBigDigit, BITS};
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BigUint {
     digits: Vec<BigDigit>,
+}
+
+impl Serialize for BigUint {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.digits.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BigUint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let digits = Vec::<BigDigit>::deserialize(deserializer)?;
+        if digits.is_empty() {
+            return Err(serde::de::Error::custom("BigUint digits must be non-empty"));
+        }
+        if digits.len() > 1 && digits.last() == Some(&0) {
+            return Err(serde::de::Error::custom(
+                "BigUint digits must not have a trailing zero",
+            ));
+        }
+        Ok(Self { digits })
+    }
 }
 
 impl BigUint {
@@ -577,5 +599,35 @@ mod tests {
         let a = BigUint::try_from_u32(2).unwrap();
         let zero = BigUint::try_from_u32(0).unwrap();
         assert!(a.try_div_rem(&zero).is_err());
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_digits() {
+        let value = BigUint::try_from_u128(1u128 << 80).unwrap();
+        let bytes = serde_json::to_vec(&value).expect("serialize");
+        let restored: BigUint = serde_json::from_slice(&bytes).expect("deserialize");
+        assert_eq!(restored, value);
+    }
+
+    #[test]
+    fn serde_rejects_trailing_zero_digit() {
+        match serde_json::from_str::<BigUint>("[1,0]") {
+            Ok(_) => panic!("trailing zero must fail"),
+            Err(err) => assert!(
+                err.to_string().contains("trailing zero"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn serde_rejects_empty_digits() {
+        match serde_json::from_str::<BigUint>("[]") {
+            Ok(_) => panic!("empty digits must fail"),
+            Err(err) => assert!(
+                err.to_string().contains("non-empty"),
+                "unexpected error: {err}"
+            ),
+        }
     }
 }

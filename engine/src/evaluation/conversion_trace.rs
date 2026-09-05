@@ -1,29 +1,33 @@
 //! Structured explanation steps for unit conversions (`as`).
 
+use std::cmp::Ordering;
+use std::sync::Arc;
+
 use crate::computation::rational::{checked_div, RationalInteger};
 use crate::planning::explanation::{ConversionTraceRole, SerializedConversionTraceStep};
 use crate::planning::semantics::{
     compare_semantic_dates, DataPath, LemmaType, LiteralValue, SemanticConversionTarget,
     TypeSpecification, ValueKind,
 };
-use std::cmp::Ordering;
 
 /// Build ordered explanation steps (outcome → rule → source) after a successful unit conversion.
 ///
 /// When the source and target unit are the same (identity), the Rule step is omitted.
 pub(crate) fn build_conversion_steps(
     value: &LiteralValue,
+    value_type: &Arc<LemmaType>,
     target: &SemanticConversionTarget,
     result: &LiteralValue,
+    result_type: &Arc<LemmaType>,
     data_ref: Option<&DataPath>,
 ) -> Vec<SerializedConversionTraceStep> {
     let mut steps = Vec::new();
     steps.push(SerializedConversionTraceStep {
         role: ConversionTraceRole::Outcome,
-        text: result.display_value(),
+        text: result.display_value_with_type(result_type.as_ref()),
     });
 
-    if let Some(rule_text) = conversion_rule_step_text(value, target, result) {
+    if let Some(rule_text) = conversion_rule_step_text(value, value_type, target, result) {
         steps.push(SerializedConversionTraceStep {
             role: ConversionTraceRole::Rule,
             text: rule_text,
@@ -32,15 +36,19 @@ pub(crate) fn build_conversion_steps(
 
     steps.push(SerializedConversionTraceStep {
         role: ConversionTraceRole::Source,
-        text: conversion_source_step_text(value, data_ref),
+        text: conversion_source_step_text(value, value_type, data_ref),
     });
 
     steps
 }
 
-fn conversion_source_step_text(operand: &LiteralValue, data_ref: Option<&DataPath>) -> String {
-    let type_name = type_specification_display_name(&operand.lemma_type);
-    let value_display = operand.display_value();
+fn conversion_source_step_text(
+    operand: &LiteralValue,
+    operand_type: &LemmaType,
+    data_ref: Option<&DataPath>,
+) -> String {
+    let type_name = type_specification_display_name(operand_type);
+    let value_display = operand.display_value_with_type(operand_type);
     match data_ref {
         Some(path) => format!("The {type_name} of {path} is {value_display}"),
         None => format!("The {type_name} is {value_display}"),
@@ -68,22 +76,24 @@ fn type_specification_display_name(lemma_type: &LemmaType) -> &'static str {
 
 fn conversion_rule_step_text(
     value: &LiteralValue,
+    value_type: &LemmaType,
     target: &SemanticConversionTarget,
     result: &LiteralValue,
 ) -> Option<String> {
     match &value.value {
         ValueKind::Range(left, right) => range_span_rule_step_text(left, right, result),
-        ValueKind::Measure(_, from_signature) if !value.lemma_type.is_calendar_like() => {
-            match target {
-                SemanticConversionTarget::Unit {
-                    unit_name,
-                    owning_type,
-                } => measure_unit_equivalence_step_text(from_signature, unit_name, owning_type),
-                _ => None,
+        ValueKind::Measure(_) if !value_type.is_calendar_like() => match target {
+            SemanticConversionTarget::Unit {
+                unit_name,
+                owning_type,
+            } => {
+                let from_signature = value_type.measure_runtime_signature();
+                measure_unit_equivalence_step_text(&from_signature, unit_name, owning_type)
             }
-        }
-        ValueKind::Number(_) | ValueKind::Ratio(_, _) => None,
-        ValueKind::Measure(_, _) if value.lemma_type.is_calendar_like() => None,
+            _ => None,
+        },
+        ValueKind::Number(_) | ValueKind::Ratio(_) => None,
+        ValueKind::Measure(_) if value_type.is_calendar_like() => None,
         _ => None,
     }
 }
@@ -114,7 +124,7 @@ fn range_span_rule_step_text(
                 result.display_value()
             ))
         }
-        (ValueKind::Measure(_, _), ValueKind::Measure(_, _)) => {
+        (ValueKind::Measure(_), ValueKind::Measure(_)) => {
             let (lower, upper) = ordered_measure_pair(left, right);
             Some(format!(
                 "{} − {} = {}",
@@ -161,10 +171,10 @@ fn ordered_measure_pair<'a>(
     left: &'a LiteralValue,
     right: &'a LiteralValue,
 ) -> (&'a LiteralValue, &'a LiteralValue) {
-    let ValueKind::Measure(left_magnitude, _) = &left.value else {
+    let ValueKind::Measure(left_magnitude) = &left.value else {
         unreachable!("BUG: ordered_measure_pair called with non-measure operand");
     };
-    let ValueKind::Measure(right_magnitude, _) = &right.value else {
+    let ValueKind::Measure(right_magnitude) = &right.value else {
         unreachable!("BUG: ordered_measure_pair called with non-measure operand");
     };
     if *left_magnitude <= *right_magnitude {

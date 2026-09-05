@@ -76,6 +76,31 @@ impl ParseResult {
     }
 }
 
+/// Parse a standalone repository qualifier string (trimmed). Requires EOF after
+/// the qualifier so callers can reject URL/path injection in install ids.
+pub fn parse_repository_qualifier_str(
+    input: &str,
+) -> Result<crate::parsing::ast::RepositoryQualifier, Error> {
+    let limits = ResourceLimits::default();
+    let mut parser = Parser::new(
+        input.trim(),
+        crate::parsing::source::SourceType::Volatile,
+        &limits,
+    );
+    let (qualifier, _) = parser.parse_repository_qualifier()?;
+    if !parser.at(&TokenKind::Eof)? {
+        let tok = parser.peek()?.clone();
+        return Err(parser.error_at_token(
+            &tok,
+            format!(
+                "Unexpected {} after repository qualifier '{}'",
+                tok.kind, qualifier.name
+            ),
+        ));
+    }
+    Ok(qualifier)
+}
+
 pub fn parse(
     content: &str,
     source_type: crate::parsing::source::SourceType,
@@ -1083,8 +1108,7 @@ impl Parser {
 
         let message = if self.at(&TokenKind::StringLit)? {
             let str_tok = self.next()?;
-            let content = unquote_string(&str_tok.text);
-            Some(content)
+            Some(str_tok.text)
         } else {
             None
         };
@@ -1224,7 +1248,7 @@ impl Parser {
             self.error_at_token(
                 &name_tok,
                 format!(
-                    "Unknown constraint command '{}'. Valid commands: help, suggest, unit, trait, minimum, maximum, decimals, option, options, length",
+                    "Unknown constraint command '{}'. Valid commands: help, suggest, fill, unit, trait, minimum, maximum, decimals, option, options, length",
                     name_tok.text
                 ),
             )
@@ -1361,12 +1385,15 @@ impl Parser {
     }
 
     fn parse_scalar_literal_value(&mut self) -> Result<Value, Error> {
+        self.parse_scalar_literal_value_with_context("value (number, text, boolean, date, etc.)")
+    }
+
+    fn parse_scalar_literal_value_with_context(&mut self, expected: &str) -> Result<Value, Error> {
         let peeked = self.peek()?;
         match &peeked.kind {
             TokenKind::StringLit => {
                 let tok = self.next()?;
-                let content = unquote_string(&tok.text);
-                Ok(Value::Text(content))
+                Ok(Value::Text(tok.text))
             }
             k if is_boolean_keyword(k) => {
                 let tok = self.next()?;
@@ -1376,13 +1403,8 @@ impl Parser {
             TokenKind::Minus | TokenKind::Plus => self.parse_signed_number_literal(),
             _ => {
                 let tok = self.next()?;
-                Err(self.error_at_token(
-                    &tok,
-                    format!(
-                        "Expected a value (number, text, boolean, date, etc.), found '{}'",
-                        tok.text
-                    ),
-                ))
+                Err(self
+                    .error_at_token(&tok, format!("Expected a {expected}, found '{}'", tok.text)))
             }
         }
     }
@@ -1550,7 +1572,7 @@ impl Parser {
 
         self.expect(&TokenKind::Colon)?;
 
-        let value = self.parse_meta_value()?;
+        let value = self.parse_meta_literal_value()?;
 
         let span = self.span_covering(&start_span, &self.last_span);
 
@@ -1561,66 +1583,17 @@ impl Parser {
         })
     }
 
-    fn parse_meta_value(&mut self) -> Result<MetaValue, Error> {
-        // Try literal first (string, number, boolean, date)
-        let peeked = self.peek()?;
-        match &peeked.kind {
-            TokenKind::StringLit => {
-                let value = self.parse_literal_value()?;
-                return Ok(MetaValue::Literal(value));
-            }
-            TokenKind::NumberLit => {
-                let value = self.parse_literal_value()?;
-                return Ok(MetaValue::Literal(value));
-            }
-            k if is_boolean_keyword(k) => {
-                let value = self.parse_literal_value()?;
-                return Ok(MetaValue::Literal(value));
-            }
-            _ => {}
-        }
-
-        // Otherwise, consume as unquoted meta identifier
-        // meta_identifier: (ASCII_ALPHANUMERIC | "_" | "-" | "." | "/")+
-        let mut ident = String::new();
-        loop {
-            let peeked = self.peek()?;
-            match &peeked.kind {
-                k if k.is_identifier_like() => {
-                    let tok = self.next()?;
-                    ident.push_str(&tok.text);
-                }
-                TokenKind::Dot => {
-                    self.next()?;
-                    ident.push('.');
-                }
-                TokenKind::Slash => {
-                    self.next()?;
-                    ident.push('/');
-                }
-                TokenKind::Minus => {
-                    self.next()?;
-                    ident.push('-');
-                }
-                TokenKind::NumberLit => {
-                    let tok = self.next()?;
-                    ident.push_str(&tok.text);
-                }
-                _ => break,
-            }
-        }
-
-        if ident.is_empty() {
-            let tok = self.peek()?.clone();
-            return Err(self.error_at_token(&tok, "Expected a meta value"));
-        }
-
-        Ok(MetaValue::Unquoted(ident))
-    }
-
     // ========================================================================
     // Literal value parsing
     // ========================================================================
+
+    fn parse_meta_literal_value(&mut self) -> Result<Value, Error> {
+        if self.at(&TokenKind::Ellipsis)? {
+            let tok = self.peek()?.clone();
+            return Err(self.error_at_token(&tok, "Expected a meta literal, found a range"));
+        }
+        self.parse_scalar_literal_value_with_context("meta literal")
+    }
 
     fn parse_literal_value(&mut self) -> Result<Value, Error> {
         let left = self.parse_scalar_literal_value()?;
@@ -2798,9 +2771,8 @@ impl Parser {
             // String literal
             TokenKind::StringLit => {
                 let tok = self.next()?;
-                let content = unquote_string(&tok.text);
                 self.new_expression(
-                    ExpressionKind::Literal(Value::Text(content)),
+                    ExpressionKind::Literal(Value::Text(tok.text)),
                     self.make_source(tok.span),
                 )
             }
@@ -2963,14 +2935,6 @@ impl Parser {
 // ============================================================================
 // Helper functions
 // ============================================================================
-
-fn unquote_string(s: &str) -> String {
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s.to_string()
-    }
-}
 
 fn parse_decimal_string(text: &str, span: &Span, parser: &Parser) -> Result<Decimal, Error> {
     text.parse::<crate::literals::NumberLiteral>()

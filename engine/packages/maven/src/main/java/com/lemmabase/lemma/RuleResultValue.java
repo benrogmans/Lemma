@@ -4,38 +4,30 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
+
 /**
- * RuleResultValue.
- * @param display display
- * @param measure measure
- * @param ratio ratio
- * @param number number
- * @param booleanValue booleanValue
- * @param text text
- * @param date date
- * @param time time
- * @param calendar calendar
- * @param range range
+ * Typed value shared by show fill/suggestion. Pattern-match on the variant.
  */
-public record RuleResultValue(
-    @Nullable String display,
-    @Nullable Map<String, BigDecimal> measure,
-    @Nullable Map<String, BigDecimal> ratio,
-    @Nullable BigDecimal number,
-    @Nullable Boolean booleanValue,
-    @Nullable String text,
-    @Nullable String date,
-    @Nullable String time,
-    @Nullable CalendarResult calendar,
-    @Nullable RangeResult range) {
+public sealed interface RuleResultValue {
   /**
-   * CalendarResult.
-   * @param value value
-   * @param unit unit
+   * Engine display string when present.
+   *
+   * @return display or null
    */
-  public record CalendarResult(BigDecimal value, String unit) {
+  @Nullable
+  String display();
+
+  /**
+   * Calendar value (measure whose unit is a calendar unit).
+   *
+   * @param value magnitude
+   * @param unit calendar unit name
+   */
+  record CalendarResult(BigDecimal value, String unit) {
     /**
      * Parses JSON.
      *
@@ -65,28 +57,83 @@ public record RuleResultValue(
       return new CalendarResult(value, unit);
     }
   }
+
   /**
-   * Endpoint.
-   * @param display display
-   * @param measure measure
-   * @param ratio ratio
-   * @param number number
-   * @param booleanValue booleanValue
-   * @param text text
-   * @param date date
-   * @param time time
-   * @param calendar calendar
+   * Non-range endpoint of a range value.
    */
-  public record Endpoint(
-      @Nullable String display,
-      @Nullable Map<String, BigDecimal> measure,
-      @Nullable Map<String, BigDecimal> ratio,
-      @Nullable BigDecimal number,
-      @Nullable Boolean booleanValue,
-      @Nullable String text,
-      @Nullable String date,
-      @Nullable String time,
-      @Nullable CalendarResult calendar) {
+  sealed interface Endpoint {
+    /**
+     * Engine display string when present.
+     *
+     * @return display or null
+     */
+    @Nullable
+    String display();
+
+    /**
+     * Number endpoint.
+     *
+     * @param display display or null
+     * @param number magnitude
+     */
+    record Number(@Nullable String display, BigDecimal number) implements Endpoint {}
+
+    /**
+     * Text endpoint.
+     *
+     * @param display display or null
+     * @param text text value
+     */
+    record Text(@Nullable String display, String text) implements Endpoint {}
+
+    /**
+     * Boolean endpoint.
+     *
+     * @param display display or null
+     * @param booleanValue boolean value
+     */
+    record BooleanValue(@Nullable String display, boolean booleanValue) implements Endpoint {}
+
+    /**
+     * Date endpoint.
+     *
+     * @param display display or null
+     * @param date calendar date
+     */
+    record Date(@Nullable String display, LocalDate date) implements Endpoint {}
+
+    /**
+     * Time endpoint.
+     *
+     * @param display display or null
+     * @param time time of day
+     */
+    record Time(@Nullable String display, LocalTime time) implements Endpoint {}
+
+    /**
+     * Measure endpoint.
+     *
+     * @param display display or null
+     * @param measure unit map
+     */
+    record Measure(@Nullable String display, Map<String, BigDecimal> measure) implements Endpoint {}
+
+    /**
+     * Ratio endpoint.
+     *
+     * @param display display or null
+     * @param ratio unit map
+     */
+    record Ratio(@Nullable String display, Map<String, BigDecimal> ratio) implements Endpoint {}
+
+    /**
+     * Calendar endpoint.
+     *
+     * @param display display or null
+     * @param calendar calendar value
+     */
+    record Calendar(@Nullable String display, CalendarResult calendar) implements Endpoint {}
+
     /**
      * Parses JSON.
      *
@@ -102,8 +149,8 @@ public record RuleResultValue(
       BigDecimal number = null;
       Boolean booleanValue = null;
       String text = null;
-      String date = null;
-      String time = null;
+      LocalDate date = null;
+      LocalTime time = null;
       CalendarResult calendar = null;
       while (p.nextToken() != JsonToken.END_OBJECT) {
         String field = p.currentName();
@@ -115,22 +162,47 @@ public record RuleResultValue(
           case "number" -> number = JsonReading.readDecimal(p);
           case "boolean" -> booleanValue = JsonReading.readBoolean(p);
           case "text" -> text = JsonReading.readString(p);
-          case "date" -> date = JsonReading.readString(p);
-          case "time" -> time = JsonReading.readString(p);
+          case "date" -> date = JsonReading.readLocalDate(p);
+          case "time" -> time = JsonReading.readLocalTime(p);
           case "calendar" -> calendar = CalendarResult.read(p);
           default -> JsonReading.unknownField(field, "RuleResultValueEndpoint");
         }
       }
-      return new Endpoint(
-          display, measure, ratio, number, booleanValue, text, date, time, calendar);
+      if (number != null) {
+        return new Number(display, number);
+      }
+      if (text != null) {
+        return new Text(display, text);
+      }
+      if (booleanValue != null) {
+        return new BooleanValue(display, booleanValue);
+      }
+      if (date != null) {
+        return new Date(display, date);
+      }
+      if (time != null) {
+        return new Time(display, time);
+      }
+      if (measure != null) {
+        return new Measure(display, measure);
+      }
+      if (ratio != null) {
+        return new Ratio(display, ratio);
+      }
+      if (calendar != null) {
+        return new Calendar(display, calendar);
+      }
+      throw new LemmaBugError("BUG: RuleResultValueEndpoint has no typed value field");
     }
   }
+
   /**
-   * RangeResult.
-   * @param from from
-   * @param to to
+   * Range endpoints.
+   *
+   * @param from start
+   * @param to end
    */
-  public record RangeResult(Endpoint from, Endpoint to) {
+  record RangeResult(Endpoint from, Endpoint to) {
     /**
      * Parses JSON.
      *
@@ -162,13 +234,86 @@ public record RuleResultValue(
   }
 
   /**
+   * Number value.
+   *
+   * @param display display or null
+   * @param number magnitude
+   */
+  record Number(@Nullable String display, BigDecimal number) implements RuleResultValue {}
+
+  /**
+   * Text value.
+   *
+   * @param display display or null
+   * @param text text value
+   */
+  record Text(@Nullable String display, String text) implements RuleResultValue {}
+
+  /**
+   * Boolean value.
+   *
+   * @param display display or null
+   * @param booleanValue boolean value
+   */
+  record BooleanValue(@Nullable String display, boolean booleanValue) implements RuleResultValue {}
+
+  /**
+   * Date value.
+   *
+   * @param display display or null
+   * @param date calendar date
+   */
+  record Date(@Nullable String display, LocalDate date) implements RuleResultValue {}
+
+  /**
+   * Time value.
+   *
+   * @param display display or null
+   * @param time time of day
+   */
+  record Time(@Nullable String display, LocalTime time) implements RuleResultValue {}
+
+  /**
+   * Measure value.
+   *
+   * @param display display or null
+   * @param measure unit map
+   */
+  record Measure(@Nullable String display, Map<String, BigDecimal> measure)
+      implements RuleResultValue {}
+
+  /**
+   * Ratio value.
+   *
+   * @param display display or null
+   * @param ratio unit map
+   */
+  record Ratio(@Nullable String display, Map<String, BigDecimal> ratio) implements RuleResultValue {}
+
+  /**
+   * Calendar value.
+   *
+   * @param display display or null
+   * @param calendar calendar value
+   */
+  record Calendar(@Nullable String display, CalendarResult calendar) implements RuleResultValue {}
+
+  /**
+   * Range value.
+   *
+   * @param display display or null
+   * @param range endpoints
+   */
+  record Range(@Nullable String display, RangeResult range) implements RuleResultValue {}
+
+  /**
    * Parses JSON.
    *
    * @param p parser at value start
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  public static RuleResultValue read(JsonParser p) throws IOException {
+  static RuleResultValue read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "RuleResultValue");
     String display = null;
     Map<String, BigDecimal> measure = null;
@@ -176,8 +321,8 @@ public record RuleResultValue(
     BigDecimal number = null;
     Boolean booleanValue = null;
     String text = null;
-    String date = null;
-    String time = null;
+    LocalDate date = null;
+    LocalTime time = null;
     CalendarResult calendar = null;
     RangeResult range = null;
     while (p.nextToken() != JsonToken.END_OBJECT) {
@@ -190,14 +335,40 @@ public record RuleResultValue(
         case "number" -> number = JsonReading.readDecimal(p);
         case "boolean" -> booleanValue = JsonReading.readBoolean(p);
         case "text" -> text = JsonReading.readString(p);
-        case "date" -> date = JsonReading.readString(p);
-        case "time" -> time = JsonReading.readString(p);
+        case "date" -> date = JsonReading.readLocalDate(p);
+        case "time" -> time = JsonReading.readLocalTime(p);
         case "calendar" -> calendar = CalendarResult.read(p);
         case "range" -> range = RangeResult.read(p);
         default -> JsonReading.unknownField(field, "RuleResultValue");
       }
     }
-    return new RuleResultValue(
-        display, measure, ratio, number, booleanValue, text, date, time, calendar, range);
+    if (number != null) {
+      return new Number(display, number);
+    }
+    if (text != null) {
+      return new Text(display, text);
+    }
+    if (booleanValue != null) {
+      return new BooleanValue(display, booleanValue);
+    }
+    if (date != null) {
+      return new Date(display, date);
+    }
+    if (time != null) {
+      return new Time(display, time);
+    }
+    if (measure != null) {
+      return new Measure(display, measure);
+    }
+    if (ratio != null) {
+      return new Ratio(display, ratio);
+    }
+    if (calendar != null) {
+      return new Calendar(display, calendar);
+    }
+    if (range != null) {
+      return new Range(display, range);
+    }
+    throw new LemmaBugError("BUG: RuleResultValue has no typed value field");
   }
 }

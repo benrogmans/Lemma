@@ -2,7 +2,7 @@
 //!
 //! Covers `engine.run(None, spec, ..., data: HashMap<String, String>, ...)` where each
 //! string flows through `parse_value_from_string` → `parse_number_unit::Ratio` →
-//! `RatioLiteral::parse`. Pins exact `ValueKind::Ratio(decimal, optional_unit)`,
+//! `RatioLiteral::parse`. Pins exact `ValueKind::Ratio(decimal)`,
 //! not substrings of `Display`, so a 100x off value cannot pass.
 //!
 //! Also includes a Measure-side regression: `"5%"` against a Measure type must veto
@@ -62,11 +62,22 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Ratio(n, u) => (
+        ValueKind::Ratio(n) => (
             lemma::ValueKind::Number(n.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
-            u.clone(),
+            rr.value
+                .as_ref()
+                .and_then(|v| v.ratio.as_ref())
+                .and_then(|m| {
+                    rr.rule
+                        .rule_type
+                        .measure_binding_unit
+                        .as_ref()
+                        .and_then(|u| m.contains_key(u).then(|| u.clone()))
+                        .or_else(|| m.contains_key("percent").then(|| "percent".to_string()))
+                        .or_else(|| m.keys().next().cloned())
+                }),
         ),
         other => panic!("input '{raw}' produced non-Ratio: {:?}", other),
     }

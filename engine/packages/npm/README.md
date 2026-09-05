@@ -35,7 +35,7 @@ const response = engine.run({ spec: 'pricing', data: { quantity: 50, is_vip: fal
 // response.results.total      → 800 eur
 ```
 
-The `Response` carries every rule's value (or `veto` if no result could be computed). When inputs are still unbound, that rule includes `missing_data` (`string[]` input keys). Types, prefilled literals, and suggestions are on `engine.show(...)` (`Show.data`) only, not on the evaluate response.
+The `Response` carries every rule's value (or `veto` if no result could be computed). When inputs are still unbound, that rule includes `missing_data` (`string[]` input keys). Types, filled literals, and suggestions are on `engine.show(...)` (`Show.data`) only, not on the evaluate response.
 
 ## Why use it from JavaScript?
 
@@ -112,33 +112,46 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | Method | Description |
 |--------|-------------|
 | `load(code)` | Load inline Lemma source as a volatile workspace source |
-| `load(sources)` | Load multiple sources in one planning pass (`Record<label, text>` or `[label, code][]`; object keys keep insertion order; `@org/pkg` keys tag dependencies) |
-| `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. Rejects with `EngineError[]`. |
+| `load(sources)` | Load multiple sources in one planning pass (`Record<label, text>` or `[label, code][]`; object keys keep insertion order; `@org/pkg` keys tag LemmaBase repositories) |
+| `Engine.withLimits(limits)` | Static: create engine with named limit overrides (unknown keys throw) |
+| `Engine.fromSnapshot(bytes)` | Static: restore engine from `snapshot()` bytes (`Uint8Array`) |
+| `install(name)` | Download a repository from LemmaBase; resolves with `{ source, id }`. Does not load. Rejects with `EngineError[]`. |
 | `list()` | Slim catalog: `ResolvedRepository[]` with `repository` and temporal `specs` rows. Always includes embedded `lemma` / `spec units`. |
 | `show(repo, name, effective?)` | Spec interface + temporal window; `repo` null for workspace. |
 | `source(repo, spec?, effective?)` | Canonical Lemma source text. Omit `spec` for whole repository. |
 | `run({ spec, repository?, effective?, data?, rules?, explain? })` | Evaluate. Omit `rules` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. `explain: true` adds per-rule explanation trees. |
 | `remove(repo, name, effective?)` | Remove a temporal spec slice. |
-| `update(repo, name, effective?, code, attribute?)` | Replace a temporal spec slice (atomic remove + load). |
+| `update(repo, code, attribute?)` | Upsert identities from `code`; Path/Dependency prune siblings with that label. |
 | `limits()` | Resource limits for this engine. |
+| `snapshot()` | Opaque bytes of parsed specs + plans + limits. Restore with `Engine.fromSnapshot`. |
 | `quality()` | Structural quality recommendations across loaded specs (advisory only). |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled - see `lemma.d.ts`.
 
-### Registry dependencies
+Persist and restore without re-parsing (Node):
 
-Specs that reference `uses … @org/pkg` need that package available. `fetch` only downloads; call `load` with the dependency id as the source label, then load your workspace:
+```javascript
+import { writeFileSync, readFileSync } from 'node:fs';
+
+const bytes = engine.snapshot();
+writeFileSync('engine.lems', bytes);
+const restored = Engine.fromSnapshot(readFileSync('engine.lems'));
+```
+
+### Install from LemmaBase
+
+Specs that reference `uses … @org/pkg` need that repository available. `install` downloads via the host `fetch` (LemmaBase at `https://lemmabase.com`); call `load` with the repository id as the source label, then load your workspace:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
-const { source, id } = await engine.fetch('@iso/countries');
+const { source, id } = await engine.install('@iso/countries');
 await engine.load({ [id]: source, 'app.lemma': sourceThatUsesStd });
 ```
 
-In the browser, the registry must allow your origin (CORS). Use `https` or `http://localhost` when using `fetch`.
+In the browser, LemmaBase must allow your origin (CORS). Use `https` or `http://localhost` when using `install`.
 
 ## Status
 

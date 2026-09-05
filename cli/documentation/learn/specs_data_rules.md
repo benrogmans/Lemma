@@ -64,13 +64,13 @@ data amount: measure
   -> decimals 2
 ```
 
-Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, and more, depending on the primitive. To inspect the static interface (types, constraints, rules) after normalize:
+Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, and more, depending on the primitive. To inspect the declared data catalog and rules (empty `needed_by_rules` = reuse-only):
 
 ```bash
 lemma show loan_application
 ```
 
-Which inputs a partial `run` still needs is run-data-aware: inspect each rule's `missing_data` on the evaluation response; static types and suggestions are on `show` only. See [CLI reference](../reference/cli.md).
+Which inputs a partial `run` still needs is run-data-aware: inspect each rule's `missing_data` on the evaluation response; types and suggestions are on `show` only. See [CLI reference](../reference/cli.md).
 
 See [Data in the language reference](../reference/readme.md#data).
 

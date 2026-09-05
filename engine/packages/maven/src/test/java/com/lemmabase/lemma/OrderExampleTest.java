@@ -1,8 +1,8 @@
 package com.lemmabase.lemma;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.util.Map;
@@ -36,8 +36,8 @@ final class OrderExampleTest {
       assertEquals("order", response.spec());
       RuleResult total = response.results().get("total");
       assertNotNull(total);
-      assertFalse(total.vetoed());
-      assertEquals(new BigDecimal("72.5637"), total.number());
+      assertTrue(total instanceof RuleResult.Number);
+      assertEquals(new BigDecimal("72.5637"), ((RuleResult.Number) total).number());
     }
   }
 }

@@ -8,7 +8,8 @@ use crate::planning::semantics::DataDefinition;
 use crate::planning::{LemmaSpecSet, PlanStore};
 use crate::{Error, ResourceLimits, Response};
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Load failure: errors plus the source texts we attempted to load.
@@ -77,7 +78,7 @@ pub struct ResolvedRepository {
 /// prefixes on the spec name. Repository names include the `@` prefix when present
 /// (e.g. `"@org/repo"`). Dependency isolation is enforced at `insert_spec`: all specs
 /// in a repository must share the same `dependency` provenance ID.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Context {
     repositories: IndexMap<Arc<LemmaRepository>, IndexMap<String, LemmaSpecSet>>,
     workspace: Arc<LemmaRepository>,
@@ -128,9 +129,6 @@ impl Context {
     /// Flat iterator over every loaded [`LemmaSpec`] across all repositories.
     ///
     /// Used by registry resolution to discover missing `@owner/repo` qualifiers.
-    /// Gated with the same `registry` + non-wasm cfg as that caller — without those
-    /// features the method has no production use.
-    #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
     pub fn iter(&self) -> impl Iterator<Item = &LemmaSpec> + '_ {
         self.repositories
             .values()
@@ -290,29 +288,39 @@ impl Context {
 
 /// One mutation in a transactional [`Engine::apply`] batch.
 ///
-/// Removes are applied before loads so replace = `[Remove, Load]` for the same
-/// identity cannot hit the duplicate-spec error or a mid-batch missing-dep replan.
+/// Removes are applied before loads/replaces so identity swaps cannot hit the
+/// duplicate-spec error or a mid-batch missing-dep replan. A batch is only
+/// `Remove`s, only `Load`s, or a single `Replace` — never `Load` mixed with `Replace`.
 enum Mutation {
     Remove {
         repository: Option<String>,
         spec: String,
-        effective: Option<DateTimeValue>,
+        effective_from: EffectiveDate,
     },
     Load {
         source_type: SourceType,
         code: String,
     },
+    /// Identity upsert from `code`, then prune other live specs with this
+    /// `source_type` when it is [`SourceType::Path`] or [`SourceType::Dependency`].
+    Replace {
+        repository: Option<String>,
+        source_type: SourceType,
+        code: String,
+    },
 }
+
+type StagedSpec = (SourceType, Arc<LemmaRepository>, LemmaSpec);
 
 /// Engine for evaluating Lemma rules.
 ///
 /// Pure Rust implementation that evaluates Lemma specs directly from the AST.
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
 ///
-/// The engine never performs network calls. External `@...` references must be
-/// pre-resolved before loading — either by including dependency sources
-/// in the source map or by calling `resolve_registry_references` separately
-/// (e.g. in a `lemma install` command).
+/// The engine never performs network calls. External `@` references must be
+/// pre-resolved (include dependency sources in the source map, or drive
+/// [`crate::Resolve`] with a host [`crate::HttpTransport`]) before loading.
+#[derive(Serialize, Deserialize)]
 pub struct Engine {
     pub(crate) context: Context,
     pub(crate) plans: PlanStore,
@@ -353,6 +361,26 @@ impl Engine {
         &self.limits
     }
 
+    /// Serialize this engine (parsed specs + execution plans + limits) to bytes.
+    ///
+    /// Format: postcard header (`LEMS` magic + crate version) then a CRC32-protected
+    /// postcard body. Same sources loaded into two engines produce identical bytes.
+    ///
+    /// Typical use: `std::fs::write(path, engine.snapshot()?)` then later
+    /// `Engine::from_snapshot(&std::fs::read(path)?)`.
+    pub fn snapshot(&self) -> Result<Vec<u8>, Error> {
+        crate::snapshot::encode(self)
+    }
+
+    /// Restore an engine from [`Self::snapshot`] bytes.
+    ///
+    /// Rejects wrong magic, engine version mismatch, CRC failure, or corrupt body
+    /// with [`Error`]. Does not re-load the embedded stdlib (it is inside the snapshot).
+    /// After restore, `run` / `show` / `list` / `update` / `remove` work as on a live engine.
+    pub fn from_snapshot(bytes: &[u8]) -> Result<Self, Error> {
+        crate::snapshot::decode(bytes)
+    }
+
     /// Load Lemma sources in one planning pass. Pairs are `(source_type, source_text)`.
     ///
     /// Provenance is derived solely from [`SourceType`]: [`SourceType::Path`] and
@@ -372,27 +400,30 @@ impl Engine {
         self.apply(mutations, false)
     }
 
-    /// Replace one temporal spec slice with new source in a single planning pass.
+    /// Replace identities present in `code` in a single planning pass.
     ///
-    /// Equivalent to remove then load, but atomic: dependents of `spec` stay valid
-    /// across the swap when the new source still satisfies them.
+    /// Parses `code` under `source_type`. Each parsed identity is inserted or
+    /// replaced by exact `(repository, name, effective_from)`. For
+    /// [`SourceType::Path`] and [`SourceType::Dependency`], live specs with the
+    /// same `source_type` that are absent from `code` are removed in the same
+    /// apply — including when `code` has zero specs (remove every live row of
+    /// that source). [`SourceType::Volatile`] never prunes siblings and requires
+    /// at least one spec in `code`.
+    ///
+    /// When `repository` is `Some(name)`, every staged spec's repository name must
+    /// equal `name`.
     pub fn update(
         &mut self,
         repository: Option<&str>,
-        spec: &str,
-        effective: Option<&DateTimeValue>,
-        source_type: SourceType,
         code: String,
+        source_type: SourceType,
     ) -> Result<(), Errors> {
         self.apply(
-            vec![
-                Mutation::Remove {
-                    repository: repository.map(str::to_string),
-                    spec: spec.to_string(),
-                    effective: effective.cloned(),
-                },
-                Mutation::Load { source_type, code },
-            ],
+            vec![Mutation::Replace {
+                repository: repository.map(str::to_string),
+                source_type,
+                code,
+            }],
             false,
         )
     }
@@ -404,11 +435,13 @@ impl Engine {
         spec: &str,
         effective: Option<&DateTimeValue>,
     ) -> Result<(), Error> {
+        let resolved = self.get_spec(spec, repository, effective)?;
+        let effective_from = resolved.effective_from.clone();
         self.apply(
             vec![Mutation::Remove {
                 repository: repository.map(str::to_string),
                 spec: spec.to_string(),
-                effective: effective.cloned(),
+                effective_from,
             }],
             false,
         )
@@ -451,7 +484,9 @@ impl Engine {
 
     /// Spec interface and resolved temporal window at `effective`.
     ///
-    /// `Show.data` lists only data used by the spec's rules.
+    /// `Show.data` lists every declared promptable slot. Empty
+    /// [`ShowData::needed_by_rules`] means offered for reuse (`data x: alias.slot`),
+    /// not needed by this spec's remaining rules after normalize.
     /// Lemma source text is [`Self::source`].
     pub fn show(
         &self,
@@ -497,35 +532,51 @@ impl Engine {
             }
         };
 
-        let needed_by_rules = &plan.needed_by_rules;
         let mut data_entries: Vec<(usize, usize, String, ShowData)> = plan
             .data
             .iter()
-            .filter(|(_, data)| {
+            .enumerate()
+            .filter(|(_, (_, data))| {
                 data.schema_type().is_some() && !matches!(data, DataDefinition::Reference { .. })
             })
-            .filter_map(|(path, data)| {
+            .map(|(position, (path, data))| {
                 let input_key = path.input_key();
-                let used_by = needed_by_rules.get(&input_key).cloned().unwrap_or_default();
-                if used_by.is_empty() {
-                    return None;
-                }
+                let used_by = plan.needed_by_rules.get(position).map_or_else(
+                    || {
+                        panic!(
+                            "BUG: needed_by_rules len {} < data position {position}",
+                            plan.needed_by_rules.len()
+                        )
+                    },
+                    |ids| {
+                        ids.iter()
+                            .map(|&rule_position| {
+                                plan.rules
+                                    .get_index(rule_position as usize)
+                                    .expect("BUG: needed_by_rules position out of plan.rules range")
+                                    .1
+                                    .name()
+                                    .to_string()
+                            })
+                            .collect()
+                    },
+                );
                 let lemma_type = data
                     .schema_type()
                     .expect("BUG: filter above ensured lemma_type is Some")
                     .clone();
                 let display = plan.data_display.get(path);
-                Some((
+                (
                     path.segments.len(),
                     data.source().span.start,
                     input_key,
                     ShowData {
                         lemma_type,
-                        prefilled: display.and_then(|d| d.prefilled.clone()),
+                        fill: display.and_then(|d| d.fill.clone()),
                         suggestion: display.and_then(|d| d.suggestion.clone()),
                         needed_by_rules: used_by,
                     },
-                ))
+                )
             })
             .collect();
         data_entries.sort_by_key(|(depth, pos, _, _)| (*depth, *pos));
@@ -534,7 +585,20 @@ impl Engine {
             .rules
             .values()
             .filter(|rule| rule.path.segments.is_empty())
-            .map(|rule| (rule.name().to_string(), (*rule.rule_type).clone()))
+            .map(|rule| {
+                (
+                    rule.name().to_string(),
+                    plan.show_rule_types
+                        .get(&rule.path)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "BUG: show_rule_types missing entry for rule '{}'",
+                                rule.name()
+                            )
+                        }),
+                )
+            })
             .collect();
 
         Ok(Show {
@@ -542,7 +606,7 @@ impl Engine {
             commentary: plan.commentary.clone(),
             effective_from: plan.effective_from.clone(),
             effective_to: plan.effective_to.clone(),
-            versions: plan.versions.clone(),
+            versions: plan.versions.to_vec(),
             start_line: plan.start_line,
             source_type: plan.source_type.clone(),
             data: data_entries
@@ -604,10 +668,7 @@ impl Engine {
             .collect();
         let run_data = RunData::resolve(plan, data_values, &self.limits)?;
         let now_semantic = crate::planning::semantics::date_time_to_semantic(&effective);
-        let now_literal = crate::planning::semantics::LiteralValue {
-            value: crate::planning::semantics::ValueKind::Date(now_semantic),
-            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
-        };
+        let now_literal = crate::planning::semantics::LiteralValue::date(now_semantic);
         let evaluator = Evaluator;
         let mut response =
             evaluator.evaluate(plan, &run_data, now_literal, &response_rules, explain);
@@ -723,35 +784,45 @@ impl Engine {
         }
     }
 
-    /// Apply removes then loads in one planning pass. Rolls back the whole batch on failure.
+    /// Apply removes then loads/replaces in one planning pass. Rolls back the whole batch on failure.
     ///
     /// Load sources are order-preserving so multi-source parse errors are reported in
     /// submission order rather than scrambled by hash iteration.
     fn apply(&mut self, mutations: Vec<Mutation>, embedded_stdlib: bool) -> Result<(), Errors> {
         let mut sources: IndexMap<SourceType, String> = IndexMap::new();
-        let mut errors: Vec<Error> = Vec::new();
         let mut to_restore: Vec<(Arc<LemmaRepository>, LemmaSpec)> = Vec::new();
+        let mut replace: Option<(Option<String>, SourceType, String)> = None;
+        let mut saw_load = false;
 
         for mutation in mutations {
             match mutation {
                 Mutation::Remove {
                     repository,
                     spec,
-                    effective,
+                    effective_from,
                 } => {
                     let repo_ref = repository.as_deref();
-                    let effective_dt = self.effective_or_now(effective.as_ref());
-                    match self.get_spec(&spec, repo_ref, Some(&effective_dt)) {
-                        Ok(spec_to_remove) => {
-                            let repository_arc = self
-                                .resolve_repository(repo_ref)
-                                .expect("BUG: get_spec succeeded so repository exists");
-                            to_restore.push((repository_arc, spec_to_remove.clone()));
-                        }
-                        Err(e) => errors.push(e),
-                    }
+                    let repository_arc = self.resolve_repository(repo_ref).unwrap_or_else(|e| {
+                        panic!(
+                            "BUG: Mutation::Remove repository must resolve after public remove validated it: {e}"
+                        )
+                    });
+                    let spec_to_remove = self
+                        .context
+                        .spec_set(&repository_arc, &spec)
+                        .and_then(|ss| ss.get_exact(effective_from.as_ref()))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "BUG: Mutation::Remove target '{spec}' must exist after public remove validated it"
+                            )
+                        });
+                    to_restore.push((Arc::clone(&repository_arc), spec_to_remove.clone()));
                 }
                 Mutation::Load { source_type, code } => {
+                    saw_load = true;
+                    if replace.is_some() {
+                        panic!("BUG: Load and Replace in one apply");
+                    }
                     if sources.insert(source_type.clone(), code).is_some() {
                         return Err(Errors {
                             errors: vec![Error::request(
@@ -762,136 +833,55 @@ impl Engine {
                         });
                     }
                 }
+                Mutation::Replace {
+                    repository,
+                    source_type,
+                    code,
+                } => {
+                    if saw_load || !sources.is_empty() {
+                        panic!("BUG: Load and Replace in one apply");
+                    }
+                    if replace.is_some() {
+                        panic!("BUG: multiple Replace mutations in one apply");
+                    }
+                    replace = Some((repository, source_type, code));
+                }
             }
         }
 
-        if !errors.is_empty() {
-            return Err(Errors {
-                errors,
-                sources: sources.into_iter().collect(),
-            });
+        if let Some((repo_constraint, source_type, code)) = replace {
+            return self.apply_replace(
+                repo_constraint.as_deref(),
+                source_type,
+                code,
+                to_restore,
+                embedded_stdlib,
+            );
         }
 
+        let sources_map: HashMap<SourceType, String> = sources.clone().into_iter().collect();
         for st in sources.keys() {
-            match st {
-                SourceType::Path(p) if p.as_os_str().to_string_lossy().trim().is_empty() => {
-                    return Err(Errors {
-                        errors: vec![Error::request(
-                            "Source path must be non-empty",
-                            None::<String>,
-                        )],
-                        sources: HashMap::new(),
-                    });
-                }
-                SourceType::Dependency(id) if id.is_empty() => {
-                    return Err(Errors {
-                        errors: vec![Error::request(
-                            "Dependency source identifier must be non-empty",
-                            None::<String>,
-                        )],
-                        sources: HashMap::new(),
-                    });
-                }
-                SourceType::Dependency(id)
-                    if !embedded_stdlib && id == EMBEDDED_STDLIB_REPOSITORY =>
-                {
-                    return Err(Errors {
-                        errors: vec![Self::reserved_stdlib_error(None)],
-                        sources: HashMap::new(),
-                    });
-                }
-                _ => {}
+            if let Err(e) = Self::validate_source_type_key(st, embedded_stdlib) {
+                return Err(Errors {
+                    errors: vec![e],
+                    sources: sources_map,
+                });
             }
         }
-        if !embedded_stdlib && !sources.is_empty() {
-            let limits = &self.limits;
-            if sources.len() > limits.max_sources {
-                return Err(Self::resource_limit_errors(
-                    "max_sources",
-                    limits.max_sources,
-                    sources.len(),
-                    "Reduce the number of paths or sources in one load",
-                    sources,
-                ));
-            }
-            let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
-            if total_loaded_bytes > limits.max_loaded_bytes {
-                return Err(Self::resource_limit_errors(
-                    "max_loaded_bytes",
-                    limits.max_loaded_bytes,
-                    total_loaded_bytes,
-                    "Load fewer or smaller sources",
-                    sources,
-                ));
-            }
-            if let Some(code) = sources
-                .values()
-                .find(|code| code.len() > limits.max_source_size_bytes)
-            {
-                return Err(Self::resource_limit_errors(
-                    "max_source_size_bytes",
-                    limits.max_source_size_bytes,
-                    code.len(),
-                    "Use a smaller source text or increase limit",
-                    sources,
-                ));
-            }
-        }
+        self.check_batch_limits(&sources, embedded_stdlib)?;
 
         let parse_limits = if embedded_stdlib {
             &ResourceLimits::default()
         } else {
             &self.limits
         };
-        let mut staged: Vec<(SourceType, Arc<LemmaRepository>, LemmaSpec)> = Vec::new();
+        let mut staged: Vec<StagedSpec> = Vec::new();
+        let mut errors: Vec<Error> = Vec::new();
 
         for (source_id, code) in &sources {
-            let dependency = match source_id {
-                SourceType::Dependency(id) => Some(id.as_str()),
-                _ => None,
-            };
-            match parse(code, source_id.clone(), parse_limits) {
-                Ok(result) => {
-                    if result.repositories.is_empty() {
-                        continue;
-                    }
-
-                    for (parsed_repo, specs) in result.repositories {
-                        let repository_arc = if let Some(dep_id) = dependency {
-                            let repo_name = parsed_repo
-                                .name
-                                .clone()
-                                // Use the dependency id as the repository name for the dependency's workspace specs
-                                .or_else(|| Some(dep_id.to_string()));
-                            Arc::new(
-                                LemmaRepository::new(repo_name)
-                                    .with_dependency(dep_id)
-                                    .with_start_line(parsed_repo.start_line),
-                            )
-                        } else {
-                            parsed_repo
-                        };
-                        if !embedded_stdlib
-                            && repository_arc.name.as_deref() == Some(EMBEDDED_STDLIB_REPOSITORY)
-                        {
-                            let source = crate::parsing::source::Source::new(
-                                source_id.clone(),
-                                crate::parsing::ast::Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: repository_arc.start_line,
-                                    col: 0,
-                                },
-                            );
-                            errors.push(Self::reserved_stdlib_error(Some(source)));
-                            continue;
-                        }
-                        for spec in specs {
-                            staged.push((source_id.clone(), Arc::clone(&repository_arc), spec));
-                        }
-                    }
-                }
-                Err(e) => errors.push(e),
+            match self.stage_parsed_source(source_id, code, parse_limits, embedded_stdlib) {
+                Ok(chunk) => staged.extend(chunk),
+                Err(es) => errors.extend(es),
             }
         }
 
@@ -901,6 +891,272 @@ impl Engine {
                 sources: sources.into_iter().collect(),
             });
         }
+
+        self.commit_staged(to_restore, staged, sources.into_iter().collect())
+    }
+
+    fn validate_source_type_key(
+        source_type: &SourceType,
+        embedded_stdlib: bool,
+    ) -> Result<(), Error> {
+        match source_type {
+            SourceType::Path(p) if p.as_os_str().to_string_lossy().trim().is_empty() => Err(
+                Error::request("Source path must be non-empty", None::<String>),
+            ),
+            SourceType::Dependency(id) if id.is_empty() => Err(Error::request(
+                "Dependency source identifier must be non-empty",
+                None::<String>,
+            )),
+            SourceType::Dependency(id) if !embedded_stdlib && id == EMBEDDED_STDLIB_REPOSITORY => {
+                Err(Self::reserved_stdlib_error(None))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn check_batch_limits(
+        &self,
+        sources: &IndexMap<SourceType, String>,
+        embedded_stdlib: bool,
+    ) -> Result<(), Errors> {
+        if embedded_stdlib || sources.is_empty() {
+            return Ok(());
+        }
+        let limits = &self.limits;
+        if sources.len() > limits.max_sources {
+            return Err(Self::resource_limit_errors(
+                "max_sources",
+                limits.max_sources,
+                sources.len(),
+                "Reduce the number of paths or sources in one load",
+                sources.clone(),
+            ));
+        }
+        let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
+        if total_loaded_bytes > limits.max_loaded_bytes {
+            return Err(Self::resource_limit_errors(
+                "max_loaded_bytes",
+                limits.max_loaded_bytes,
+                total_loaded_bytes,
+                "Load fewer or smaller sources",
+                sources.clone(),
+            ));
+        }
+        if let Some(code) = sources
+            .values()
+            .find(|code| code.len() > limits.max_source_size_bytes)
+        {
+            return Err(Self::resource_limit_errors(
+                "max_source_size_bytes",
+                limits.max_source_size_bytes,
+                code.len(),
+                "Use a smaller source text or increase limit",
+                sources.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn stage_parsed_source(
+        &self,
+        source_id: &SourceType,
+        code: &str,
+        parse_limits: &ResourceLimits,
+        embedded_stdlib: bool,
+    ) -> Result<Vec<StagedSpec>, Vec<Error>> {
+        let dependency = match source_id {
+            SourceType::Dependency(id) => Some(id.as_str()),
+            _ => None,
+        };
+        let result = parse(code, source_id.clone(), parse_limits).map_err(|e| vec![e])?;
+        if result.repositories.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut staged = Vec::new();
+        let mut errors = Vec::new();
+        for (parsed_repo, specs) in result.repositories {
+            let repository_arc = if let Some(dep_id) = dependency {
+                let repo_name = parsed_repo
+                    .name
+                    .clone()
+                    .or_else(|| Some(dep_id.to_string()));
+                Arc::new(
+                    LemmaRepository::new(repo_name)
+                        .with_dependency(dep_id)
+                        .with_start_line(parsed_repo.start_line),
+                )
+            } else {
+                parsed_repo
+            };
+            if !embedded_stdlib
+                && repository_arc.name.as_deref() == Some(EMBEDDED_STDLIB_REPOSITORY)
+            {
+                let source = crate::parsing::source::Source::new(
+                    source_id.clone(),
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: repository_arc.start_line,
+                        col: 0,
+                    },
+                );
+                errors.push(Self::reserved_stdlib_error(Some(source)));
+                continue;
+            }
+            for spec in specs {
+                staged.push((source_id.clone(), Arc::clone(&repository_arc), spec));
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(staged)
+    }
+
+    fn apply_replace(
+        &mut self,
+        repository_constraint: Option<&str>,
+        source_type: SourceType,
+        code: String,
+        mut to_restore: Vec<(Arc<LemmaRepository>, LemmaSpec)>,
+        embedded_stdlib: bool,
+    ) -> Result<(), Errors> {
+        let mut sources: IndexMap<SourceType, String> = IndexMap::new();
+        sources.insert(source_type.clone(), code.clone());
+
+        if let Err(e) = Self::validate_source_type_key(&source_type, embedded_stdlib) {
+            return Err(Errors {
+                errors: vec![e],
+                sources: sources.into_iter().collect(),
+            });
+        }
+
+        self.check_batch_limits(&sources, embedded_stdlib)?;
+
+        let parse_limits = if embedded_stdlib {
+            &ResourceLimits::default()
+        } else {
+            &self.limits
+        };
+
+        let staged =
+            match self.stage_parsed_source(&source_type, &code, parse_limits, embedded_stdlib) {
+                Ok(s) => s,
+                Err(errors) => {
+                    return Err(Errors {
+                        errors,
+                        sources: sources.into_iter().collect(),
+                    });
+                }
+            };
+
+        let prune = matches!(source_type, SourceType::Path(_) | SourceType::Dependency(_));
+        if staged.is_empty() && !prune {
+            return Err(Errors {
+                errors: vec![Error::request(
+                    "update requires at least one spec",
+                    None::<String>,
+                )],
+                sources: sources.into_iter().collect(),
+            });
+        }
+
+        if let Some(required) = repository_constraint {
+            let required_canonical =
+                crate::parsing::ast::ascii_lowercase_logical_name(required.to_string());
+            for (_, repository_arc, _) in &staged {
+                if repository_arc.name.as_deref() != Some(required_canonical.as_str()) {
+                    return Err(Errors {
+                        errors: vec![Error::request(
+                            format!(
+                                "update repository '{required}' does not match staged repository '{}'",
+                                repository_arc.name.as_deref().unwrap_or("(workspace)")
+                            ),
+                            None::<String>,
+                        )],
+                        sources: sources.into_iter().collect(),
+                    });
+                }
+            }
+        }
+
+        let mut staged_keys: std::collections::HashSet<(Option<String>, String, EffectiveDate)> =
+            std::collections::HashSet::new();
+        for (_, repository_arc, spec) in &staged {
+            staged_keys.insert((
+                repository_arc.name.clone(),
+                spec.name.clone(),
+                spec.effective_from.clone(),
+            ));
+        }
+
+        if prune {
+            for (repository, by_name) in self.context.repositories() {
+                for spec_set in by_name.values() {
+                    for spec in spec_set.iter_specs() {
+                        if spec.source_type.as_ref() != Some(&source_type) {
+                            continue;
+                        }
+                        let key = (
+                            repository.name.clone(),
+                            spec.name.clone(),
+                            spec.effective_from.clone(),
+                        );
+                        if !staged_keys.contains(&key) {
+                            to_restore.push((Arc::clone(repository), spec.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut to_insert: Vec<(Arc<LemmaRepository>, LemmaSpec)> = Vec::new();
+        let mut cross_source_errors: Vec<Error> = Vec::new();
+        for (_, repository_arc, staged_spec) in staged {
+            match self
+                .context
+                .spec_set(&repository_arc, &staged_spec.name)
+                .and_then(|ss| ss.get_exact(staged_spec.effective_from.as_ref()))
+            {
+                None => to_insert.push((repository_arc, staged_spec)),
+                Some(old) if old == &staged_spec => {}
+                Some(old) if old.source_type.as_ref() != Some(&source_type) => {
+                    cross_source_errors.extend(Context::duplicate_spec_errors(
+                        &staged_spec.name,
+                        &staged_spec,
+                        old,
+                    ));
+                }
+                Some(old) => {
+                    to_restore.push((Arc::clone(&repository_arc), old.clone()));
+                    to_insert.push((repository_arc, staged_spec));
+                }
+            }
+        }
+
+        if !cross_source_errors.is_empty() {
+            return Err(Errors {
+                errors: cross_source_errors,
+                sources: sources.into_iter().collect(),
+            });
+        }
+
+        let staged_for_commit: Vec<StagedSpec> = to_insert
+            .into_iter()
+            .map(|(repo, spec)| (source_type.clone(), repo, spec))
+            .collect();
+
+        self.commit_staged(to_restore, staged_for_commit, sources.into_iter().collect())
+    }
+
+    fn commit_staged(
+        &mut self,
+        to_restore: Vec<(Arc<LemmaRepository>, LemmaSpec)>,
+        staged: Vec<StagedSpec>,
+        sources: HashMap<SourceType, String>,
+    ) -> Result<(), Errors> {
+        let mut errors: Vec<Error> = Vec::new();
 
         for (repo, spec) in &to_restore {
             self.context.remove_spec(repo, spec);
@@ -915,24 +1171,63 @@ impl Engine {
                 Err(es) => {
                     errors.extend(es);
                     self.rollback_apply(&inserted, &to_restore);
-                    return Err(Errors {
-                        errors,
-                        sources: sources.into_iter().collect(),
-                    });
+                    return Err(Errors { errors, sources });
                 }
             }
         }
 
-        let result = crate::planning::plan(&self.context, &self.limits);
+        let mut changed: Vec<(Arc<LemmaRepository>, String, EffectiveDate)> =
+            Vec::with_capacity(to_restore.len() + inserted.len());
+        let mut restored_by_key: HashMap<crate::planning::SpecSetKey, HashSet<EffectiveDate>> =
+            HashMap::new();
+        let mut inserted_by_key: HashMap<crate::planning::SpecSetKey, HashSet<EffectiveDate>> =
+            HashMap::new();
+
+        for (repository, spec) in &to_restore {
+            let key = crate::planning::SpecSetKey::new(repository.name.as_deref(), &spec.name);
+            restored_by_key
+                .entry(key)
+                .or_default()
+                .insert(spec.effective_from.clone());
+            changed.push((
+                Arc::clone(repository),
+                spec.name.clone(),
+                spec.effective_from.clone(),
+            ));
+        }
+        for (repository, name, effective_from) in &inserted {
+            let key = crate::planning::SpecSetKey::new(repository.name.as_deref(), name);
+            inserted_by_key
+                .entry(key)
+                .or_default()
+                .insert(effective_from.clone());
+            changed.push((Arc::clone(repository), name.clone(), effective_from.clone()));
+        }
+
+        let mut whole_set: HashSet<crate::planning::SpecSetKey> = HashSet::new();
+        let mut all_keys: HashSet<crate::planning::SpecSetKey> = HashSet::new();
+        all_keys.extend(restored_by_key.keys().cloned());
+        all_keys.extend(inserted_by_key.keys().cloned());
+        for key in all_keys {
+            let restored = restored_by_key.get(&key).cloned().unwrap_or_default();
+            let inserted_effs = inserted_by_key.get(&key).cloned().unwrap_or_default();
+            if restored != inserted_effs {
+                whole_set.insert(key);
+            }
+        }
+
+        let scope = crate::planning::ReplanScope::from_changed(&self.context, changed, whole_set);
+
+        let result = crate::planning::plan(&self.context, &self.limits, &scope, &self.plans);
         if !result.errors.is_empty() {
             self.rollback_apply(&inserted, &to_restore);
             return Err(Errors {
                 errors: result.errors,
-                sources: sources.into_iter().collect(),
+                sources,
             });
         }
 
-        self.plans.replace(result.plans);
+        self.plans.commit(&self.context, &scope, result.plans);
         Ok(())
     }
 
@@ -2053,5 +2348,525 @@ rule total: helper.value + price"#
             .expect("shared repo in list");
         assert_eq!(shared_repo.specs.len(), 1);
         assert_eq!(shared_repo.specs[0].name, "a");
+    }
+
+    fn path_st(name: &str) -> SourceType {
+        SourceType::Path(Arc::new(std::path::PathBuf::from(name)))
+    }
+
+    #[test]
+    fn remove_none_removes_version_active_at_now() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                path_st("t.lemma"),
+                "spec t\ndata v: 1\nrule r: v\n\nspec t 2099-01-01\ndata v: 2\nrule r: v\n"
+                    .to_string(),
+            )])
+            .expect("load");
+        engine
+            .remove(None, "t", None)
+            .expect("remove active-at now (origin while before 2099)");
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|r| r.repository.is_none())
+            .expect("workspace");
+        assert_eq!(workspace.specs.iter().filter(|s| s.name == "t").count(), 1);
+        assert!(
+            workspace
+                .specs
+                .iter()
+                .any(|s| s.name == "t" && s.effective_from.is_some()),
+            "dated version must remain"
+        );
+    }
+
+    #[test]
+    fn remove_none_errors_when_no_version_active_at_now() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                path_st("t.lemma"),
+                "spec t 2099-01-01\ndata v: 1\nrule r: v\n".to_string(),
+            )])
+            .expect("load");
+        let err = engine
+            .remove(None, "t", None)
+            .expect_err("no version active at now");
+        assert_eq!(err.kind(), crate::ErrorKind::Request);
+        assert!(
+            engine.show(None, "t", Some(&date(2099, 1, 1))).is_ok(),
+            "future version must remain"
+        );
+    }
+
+    #[test]
+    fn update_origin_code_keeps_later_version() {
+        let mut engine = Engine::new();
+        let st = path_st("t.lemma");
+        engine
+            .load([(
+                st.clone(),
+                "spec t\ndata v: 1\nrule r: v\n\nspec t 2099-01-01\ndata v: 2\nrule r: v\n"
+                    .to_string(),
+            )])
+            .expect("load");
+        engine
+            .update(
+                None,
+                "spec t\ndata v: 9\nrule r: v\n\nspec t 2099-01-01\ndata v: 2\nrule r: v\n"
+                    .to_string(),
+                st,
+            )
+            .expect("update origin body while keeping later version in buffer");
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|r| r.repository.is_none())
+            .expect("workspace");
+        assert_eq!(workspace.specs.iter().filter(|s| s.name == "t").count(), 2);
+        let now = DateTimeValue::now();
+        let response = engine
+            .run(None, "t", Some(&now), HashMap::new(), None, false)
+            .expect("run origin");
+        assert_eq!(
+            response.results.get("r").and_then(|r| r.display()),
+            Some("9")
+        );
+    }
+
+    #[test]
+    fn update_path_prunes_dropped_version() {
+        let mut engine = Engine::new();
+        let st = path_st("t.lemma");
+        engine
+            .load([(
+                st.clone(),
+                "spec t\ndata v: 1\nrule r: v\n\nspec t 2025-06-01\ndata v: 2\nrule r: v\n"
+                    .to_string(),
+            )])
+            .expect("load");
+        engine
+            .update(None, "spec t\ndata v: 1\nrule r: v\n".to_string(), st)
+            .expect("prune second version");
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|r| r.repository.is_none())
+            .expect("workspace");
+        assert_eq!(workspace.specs.iter().filter(|s| s.name == "t").count(), 1);
+        assert!(workspace
+            .specs
+            .iter()
+            .any(|s| s.name == "t" && s.effective_from.is_none()));
+    }
+
+    #[test]
+    fn update_volatile_does_not_prune_sibling() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Volatile,
+                "spec a\ndata v: 1\nrule r: v\n\nspec b\ndata v: 2\nrule r: v\n".to_string(),
+            )])
+            .expect("load");
+        engine
+            .update(
+                None,
+                "spec a\ndata v: 3\nrule r: v\n".to_string(),
+                SourceType::Volatile,
+            )
+            .expect("update a");
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|r| r.repository.is_none())
+            .expect("workspace");
+        assert!(workspace.specs.iter().any(|s| s.name == "a"));
+        assert!(workspace.specs.iter().any(|s| s.name == "b"));
+    }
+
+    #[test]
+    fn update_upserts_new_identity() {
+        let mut engine = Engine::new();
+        let st = path_st("t.lemma");
+        engine
+            .load([(st.clone(), "spec a\ndata v: 1\nrule r: v\n".to_string())])
+            .expect("load");
+        engine
+            .update(
+                None,
+                "spec a\ndata v: 1\nrule r: v\n\nspec b\ndata v: 2\nrule r: v\n".to_string(),
+                st,
+            )
+            .expect("upsert b");
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|r| r.repository.is_none())
+            .expect("workspace");
+        assert!(workspace.specs.iter().any(|s| s.name == "a"));
+        assert!(workspace.specs.iter().any(|s| s.name == "b"));
+    }
+
+    #[test]
+    fn update_cross_path_identity_is_error() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                path_st("a.lemma"),
+                "spec conflict\ndata v: 1\nrule r: v\n".to_string(),
+            )])
+            .expect("load a");
+        let err = engine
+            .update(
+                None,
+                "spec conflict\ndata v: 2\nrule r: v\n".to_string(),
+                path_st("b.lemma"),
+            )
+            .expect_err("cross-path identity");
+        let joined: String = err
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("Duplicate spec") && joined.contains("also declared"),
+            "expected duplicate across paths, got: {joined}"
+        );
+        assert!(
+            engine.show(None, "conflict", None).is_ok(),
+            "failed cross-path update must leave the original identity loaded"
+        );
+    }
+
+    #[test]
+    fn update_empty_dependency_prunes_all_specs_of_source() {
+        let mut engine = Engine::new();
+        let st = SourceType::Dependency("@org/dep".to_string());
+        engine
+            .load([(
+                st.clone(),
+                "repo @org/dep\n\nspec a\ndata v: 1\nrule r: v\n\nspec b\ndata v: 2\nrule r: v\n"
+                    .to_string(),
+            )])
+            .expect("load");
+        engine
+            .update(None, "   \n".to_string(), st)
+            .expect("empty dependency update prunes");
+        let listed = engine.list();
+        assert!(
+            !listed.iter().any(|r| {
+                r.repository.as_deref() == Some("@org/dep")
+                    && r.specs.iter().any(|s| s.name == "a" || s.name == "b")
+            }),
+            "empty dependency update must remove every live row of that source"
+        );
+    }
+
+    #[test]
+    fn update_empty_path_prunes_all_specs_of_source() {
+        let mut engine = Engine::new();
+        let st = path_st("t.lemma");
+        engine
+            .load([(
+                st.clone(),
+                "spec a\ndata v: 1\nrule r: v\n\nspec b\ndata v: 2\nrule r: v\n".to_string(),
+            )])
+            .expect("load");
+        engine
+            .update(None, "   \n".to_string(), st)
+            .expect("empty path update prunes");
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|r| r.repository.is_none())
+            .expect("workspace");
+        assert!(
+            !workspace
+                .specs
+                .iter()
+                .any(|s| s.name == "a" || s.name == "b"),
+            "empty path update must remove every live row of that source"
+        );
+    }
+
+    #[test]
+    fn update_empty_volatile_is_error() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Volatile,
+                "spec a\ndata v: 1\nrule r: v\n".to_string(),
+            )])
+            .expect("load");
+        let err = engine
+            .update(None, "   \n".to_string(), SourceType::Volatile)
+            .expect_err("empty volatile update");
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.to_string().contains("at least one spec")),
+            "got: {:?}",
+            err.errors
+        );
+        assert!(
+            engine.show(None, "a", None).is_ok(),
+            "failed empty volatile update must leave the original identity loaded"
+        );
+    }
+
+    #[test]
+    fn update_repository_param_mismatch_is_error() {
+        let mut engine = Engine::new();
+        let st = path_st("t.lemma");
+        engine
+            .load([(
+                st.clone(),
+                "repo other\nspec a\ndata v: 1\nrule r: v\n".to_string(),
+            )])
+            .expect("load");
+        let err = engine
+            .update(
+                Some("expected"),
+                "repo other\nspec a\ndata v: 2\nrule r: v\n".to_string(),
+                st,
+            )
+            .expect_err("mismatch");
+        assert!(
+            err.errors
+                .iter()
+                .any(|e| e.to_string().contains("does not match")),
+            "got: {:?}",
+            err.errors
+        );
+    }
+
+    #[test]
+    fn update_rollback_restores_pruned_and_replaced() {
+        let mut engine = Engine::new();
+        let dep = path_st("dep.lemma");
+        let consumer = path_st("consumer.lemma");
+        engine
+            .load([
+                (
+                    dep.clone(),
+                    "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: 2\nrule r: v\n"
+                        .to_string(),
+                ),
+                (
+                    consumer,
+                    "spec consumer\nuses d: dep\nrule out: d.r\n".to_string(),
+                ),
+            ])
+            .expect("load");
+        let before = engine.list();
+        let err = engine
+            .update(
+                None,
+                "spec dep\ndata other: 5\nrule unrelated: other\n".to_string(),
+                dep,
+            )
+            .expect_err("consumer must break");
+        assert!(!err.errors.is_empty());
+        let after = engine.list();
+        assert_eq!(after.len(), before.len(), "repository count must match");
+        for (before_repo, after_repo) in before.iter().zip(after.iter()) {
+            assert_eq!(before_repo.repository, after_repo.repository);
+            let mut before_specs = before_repo.specs.clone();
+            let mut after_specs = after_repo.specs.clone();
+            before_specs
+                .sort_by(|a, b| (&a.name, &a.effective_from).cmp(&(&b.name, &b.effective_from)));
+            after_specs
+                .sort_by(|a, b| (&a.name, &a.effective_from).cmp(&(&b.name, &b.effective_from)));
+            assert_eq!(
+                before_specs, after_specs,
+                "failed update must restore listed specs for {:?}",
+                before_repo.repository
+            );
+        }
+        let now = DateTimeValue::now();
+        engine
+            .run(None, "consumer", Some(&now), HashMap::new(), None, false)
+            .expect("consumer still runs after rollback");
+        assert!(
+            engine.show(None, "dep", Some(&date(2025, 6, 1))).is_ok(),
+            "pruned later dep version must be restored"
+        );
+    }
+
+    #[test]
+    fn update_identical_bytes_succeeds() {
+        let mut engine = Engine::new();
+        let st = path_st("t.lemma");
+        let code = "spec t\ndata v: 1\nrule r: v\n".to_string();
+        engine.load([(st.clone(), code.clone())]).expect("load");
+        let before = engine.show(None, "t", None).expect("show before");
+        engine.update(None, code, st).expect("identical update");
+        let after = engine.show(None, "t", None).expect("show after");
+        assert_eq!(before.meta, after.meta);
+        assert_eq!(
+            before.rules.keys().collect::<Vec<_>>(),
+            after.rules.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// Body-only edit of one temporal version must not spuriously reject a consumer
+    /// whose window overlaps only the non-dirty sibling version.
+    #[test]
+    fn update_slice_mode_keeps_consumer_overlapping_sibling_version() {
+        let mut engine = Engine::new();
+        let dep = path_st("dep.lemma");
+        let consumer = path_st("consumer.lemma");
+        engine
+            .load([
+                (
+                    dep.clone(),
+                    "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: 2\nrule r: v\n"
+                        .to_string(),
+                ),
+                (
+                    consumer,
+                    "spec consumer\nuses d: dep\nrule out: d.r\n\nspec consumer 2025-06-01\nuses d: dep\nrule out: d.r\n"
+                        .to_string(),
+                ),
+            ])
+            .expect("load");
+        engine
+            .update(
+                None,
+                "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: 9\nrule r: v\n"
+                    .to_string(),
+                dep,
+            )
+            .expect("body-only edit of later dep version must keep consumers valid");
+        let before_breakpoint = date(2025, 1, 15);
+        let response = engine
+            .run(
+                None,
+                "consumer",
+                Some(&before_breakpoint),
+                HashMap::new(),
+                None,
+                false,
+            )
+            .expect("origin consumer still runs against non-dirty dep version");
+        assert_eq!(
+            response.results.get("out").and_then(|r| r.display()),
+            Some("1")
+        );
+        let after_breakpoint = date(2025, 7, 1);
+        let response = engine
+            .run(
+                None,
+                "consumer",
+                Some(&after_breakpoint),
+                HashMap::new(),
+                None,
+                false,
+            )
+            .expect("later consumer runs against dirty dep version");
+        assert_eq!(
+            response.results.get("out").and_then(|r| r.display()),
+            Some("9")
+        );
+    }
+
+    /// Body-only edit that introduces interface drift vs a sibling version must fail
+    /// the same way a cold load of the resulting files would.
+    #[test]
+    fn update_slice_mode_rejects_interface_drift_vs_sibling_version() {
+        let mut engine = Engine::new();
+        let dep = path_st("dep.lemma");
+        let consumer = path_st("consumer.lemma");
+        engine
+            .load([
+                (
+                    dep.clone(),
+                    "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: 2\nrule r: v\n"
+                        .to_string(),
+                ),
+                (
+                    consumer.clone(),
+                    "spec consumer\nuses d: dep\nrule out: d.r\n".to_string(),
+                ),
+            ])
+            .expect("load");
+        let err = engine
+            .update(
+                None,
+                "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: \"x\"\nrule r: v\n"
+                    .to_string(),
+                dep.clone(),
+            )
+            .expect_err("drift between dep versions must fail incremental update");
+        assert!(
+            err.errors.iter().any(|e| {
+                let msg = e.to_string();
+                msg.contains("interface") || msg.contains("changed")
+            }),
+            "expected interface-drift error, got: {:?}",
+            err.errors
+        );
+
+        let mut cold = Engine::new();
+        let cold_err = cold
+            .load([
+                (
+                    dep,
+                    "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: \"x\"\nrule r: v\n"
+                        .to_string(),
+                ),
+                (
+                    consumer,
+                    "spec consumer\nuses d: dep\nrule out: d.r\n".to_string(),
+                ),
+            ])
+            .expect_err("cold load must also reject the drift");
+        assert!(
+            cold_err.errors.iter().any(|e| {
+                let msg = e.to_string();
+                msg.contains("interface") || msg.contains("changed")
+            }),
+            "expected interface-drift error on cold load, got: {:?}",
+            cold_err.errors
+        );
+    }
+
+    /// Body-only edit of one temporal version that fails to plan must Error, not panic,
+    /// when a healthy sibling version remains and a consumer depends on the set.
+    #[test]
+    fn update_slice_mode_planning_error_on_dirty_version_is_error_not_panic() {
+        let mut engine = Engine::new();
+        let dep = path_st("dep.lemma");
+        let consumer = path_st("consumer.lemma");
+        engine
+            .load([
+                (
+                    dep.clone(),
+                    "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: 2\nrule r: v\n"
+                        .to_string(),
+                ),
+                (
+                    consumer,
+                    "spec consumer\nuses d: dep\nrule out: d.r\n".to_string(),
+                ),
+            ])
+            .expect("load");
+        let err = engine
+            .update(
+                None,
+                "spec dep\ndata v: 1\nrule r: v\n\nspec dep 2025-06-01\ndata v: 2\nrule r: v + nope\n"
+                    .to_string(),
+                dep,
+            )
+            .expect_err("planning error on dirty version must be Err, not panic");
+        assert!(!err.errors.is_empty());
+        let now = DateTimeValue::now();
+        engine
+            .run(None, "consumer", Some(&now), HashMap::new(), None, false)
+            .expect("failed update must leave previous engine state intact");
     }
 }

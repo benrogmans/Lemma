@@ -54,12 +54,10 @@
   },
   "meta": {
     "title": {
-      "literal": {
-        "text": "t"
-      }
+      "text": "t"
     },
     "author": {
-      "unquoted": "alice"
+      "text": "alice"
     }
   }
 }

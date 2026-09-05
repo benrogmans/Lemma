@@ -1,4 +1,7 @@
-package com.lemmabase.lemma;
+package com.lemmabase.lemma.schema;
+
+import com.lemmabase.lemma.JsonReading;
+import com.lemmabase.lemma.LemmaBugError;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -42,7 +45,7 @@ public sealed interface TypeExtends {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Custom read(JsonParser p) throws IOException {
+    public static Custom read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "TypeExtends.Custom");
       String parent = null;
       String family = null;
@@ -110,7 +113,7 @@ public sealed interface TypeExtends {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static TypeDefiningSpec read(JsonParser p) throws IOException {
+    public static TypeDefiningSpec read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "TypeDefiningSpec");
       String json = JsonReading.bufferObjectAsString(p);
       String kind = JsonReading.findTag(json, "kind");
@@ -157,7 +160,7 @@ public sealed interface TypeExtends {
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  static TypeExtends read(JsonParser p) throws IOException {
+  public static TypeExtends read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "TypeExtends");
     String json = JsonReading.bufferObjectAsString(p);
     String kind = JsonReading.findTag(json, "kind");

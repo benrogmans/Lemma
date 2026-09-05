@@ -88,33 +88,45 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | Method | Description |
 |--------|-------------|
 | `Engine.withLimits(limits)` | Static: create engine with named limit overrides (unknown keys throw) |
+| `Engine.fromSnapshot(bytes)` | Static: restore engine from `snapshot()` bytes (`Uint8Array`) |
 | `load(code)` | Load inline Lemma source as a volatile workspace source |
-| `load(sources)` | Load multiple sources in one planning pass (object or `[label, code][]`; object keys keep insertion order, array form is the explicit ordered API; `@owner/name` keys tag registry dependencies) |
-| `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. |
+| `load(sources)` | Load multiple sources in one planning pass (object or `[label, code][]`; object keys keep insertion order, array form is the explicit ordered API; `@owner/name` keys tag LemmaBase repositories) |
+| `install(name)` | Download a repository from LemmaBase; resolves with `{ source, id }`. Does not load and does not write `lemma_deps/`. |
 | `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs`. |
-| `show(repo?, spec, effective?)` | `Show`: interface + temporal window (no Lemma text) |
+| `show(repo?, spec, effective?)` | `Show`: declared data catalog + temporal window (no Lemma text; empty `needed_by_rules` = reuse-only) |
 | `source(repo?, spec?, effective?)` | Formatted Lemma source (omit `spec` for whole repo) |
 | `run({ spec, repository?, effective?, data?, rules?, explain? })` | Evaluate. Omit `rules` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [api.v1.json](../../../engine/schemas/api.v1.json). |
 | `remove(repo?, name, effective?)` | Remove a temporal spec slice. |
-| `update(repo?, spec, effective?, code, attribute?)` | Replace a temporal spec slice (atomic remove + load). |
+| `update(repo?, code, attribute?)` | Upsert identities from `code`; Path/Dependency prune siblings with that label. |
 | `limits()` | Resource limits for this engine. |
+| `snapshot()` | Opaque bytes of parsed specs + plans + limits. Restore with `Engine.fromSnapshot`. |
 | `quality()` | Structural quality recommendations across loaded specs (advisory only). |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled (see `lemma.d.ts`).
 
-**API values (`RuleResultValue`):** when present, always `display`, plus exactly one typed field (`measure` / `ratio` / `number` / …) or `range` instead. Same shape on `ShowData.prefilled` / `ShowData.suggestion`; non-veto rule results flatten those fields onto `RuleResult` (no `value` wrapper). Measure and ratio maps hold every declared unit name → magnitude string so interactive prompts can switch units.
+Persist and restore without re-parsing (Node):
 
-## Registry dependencies
+```javascript
+import { writeFileSync, readFileSync } from 'node:fs';
 
-Specs that `uses` a registry id such as `@iso/countries` need that dependency available. `fetch` only downloads; call `load` with the dependency id as the source label, then load your workspace:
+const bytes = engine.snapshot();
+writeFileSync('engine.lems', bytes);
+const restored = Engine.fromSnapshot(readFileSync('engine.lems'));
+```
+
+**API values (`RuleResultValue`):** when present, always `display`, plus exactly one typed field (`measure` / `ratio` / `number` / …) or `range` instead. Same shape on `ShowData.fill` / `ShowData.suggestion`; non-veto rule results flatten those fields onto `RuleResult` (no `value` wrapper). Measure and ratio maps hold every declared unit name → magnitude string so interactive prompts can switch units.
+
+## Install from LemmaBase
+
+Specs that `uses` a repository id such as `@iso/countries` need that repository available. `install` downloads via the host `fetch` (LemmaBase is hard-bound to `https://lemmabase.com`); call `load` with the repository id as the source label, then load your workspace:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
-const { source, id } = await engine.fetch('@iso/countries');
+const { source, id } = await engine.install('@iso/countries');
 await engine.load({ [id]: source, 'app.lemma': sourceThatUsesStd });
 ```
 
-In the browser, the registry must allow your origin (CORS).
+In the browser, LemmaBase must allow your origin (CORS).

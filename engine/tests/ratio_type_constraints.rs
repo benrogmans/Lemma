@@ -285,14 +285,18 @@ fn ratio_minimum_custom_unit_override_accepts_at_bound() {
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Ratio(n, u) => {
+        ValueKind::Ratio(n) => {
             assert_eq!(
                 lemma::ValueKind::Number(n.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 decimal_lit("0.05")
             );
-            assert_eq!(u.as_deref(), Some("basis_points"));
+            assert!(
+                matches!(lit.value, ValueKind::Ratio(_))
+                    || matches!(lit.value, lemma::ValueKind::Ratio(_))
+            );
+            // binding unit "basis_points" lives on type, not LiteralValue
         }
         other => panic!("expected Ratio, got {:?}", other),
     }

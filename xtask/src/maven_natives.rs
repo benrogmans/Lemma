@@ -13,7 +13,7 @@ pub fn run(root: &Path) -> Result<(), String> {
     let triple = host_triple()?;
     let lib_name = library_name();
 
-    let src = find_or_build_library(&cargo, &target_dir, &lib_name)?;
+    let src = build_release_library(&cargo, &target_dir, &lib_name)?;
 
     let maven_pkg = root.join("engine/packages/maven");
     let dest_dir = maven_pkg.join("src/main/resources/native").join(&triple);
@@ -63,39 +63,30 @@ fn library_name() -> String {
     }
 }
 
-fn find_or_build_library(
+/// Always builds the release profile so the packaged library is never a debug
+/// artifact; cargo makes the rebuild a no-op when nothing changed.
+fn build_release_library(
     cargo: &str,
     target_dir: &Path,
     lib_name: &str,
 ) -> Result<std::path::PathBuf, String> {
-    for profile in ["debug", "release"] {
-        let candidate = target_dir.join(profile).join(lib_name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    eprintln!(
-        "maven-natives: building lemma_jni (no {} under {}/{{debug,release}})",
-        lib_name,
-        target_dir.display()
-    );
+    eprintln!("maven-natives: cargo build --release -p lemma_jni");
 
     let status = Command::new(cargo)
-        .args(["build", "-p", "lemma_jni"])
+        .args(["build", "--release", "-p", "lemma_jni"])
         .status()
         .map_err(|e| format!("failed to run cargo build: {e}"))?;
 
     if !status.success() {
-        return Err("cargo build -p lemma_jni failed".to_string());
+        return Err("cargo build --release -p lemma_jni failed".to_string());
     }
 
-    let built = target_dir.join("debug").join(lib_name);
+    let built = target_dir.join("release").join(lib_name);
     if built.is_file() {
         Ok(built)
     } else {
         Err(format!(
-            "cargo build succeeded but {} not found",
+            "cargo build --release succeeded but {} not found",
             built.display()
         ))
     }

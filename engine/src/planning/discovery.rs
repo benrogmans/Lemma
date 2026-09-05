@@ -589,17 +589,25 @@ pub(crate) fn plan_breakpoints(
 /// (schema) is type-compatible across all dep specs active within the
 /// consumer's effective range. Qualified deps are pinned and skip this check.
 ///
+/// Only consumers inside `scope` are checked: a consumer outside it has unchanged
+/// edges into unchanged dependencies, so the previous pass already proved it.
+///
 /// Returns `(consumer_repository, consumer_spec_name, consumer_spec, error)` tuples.
 pub fn validate_dependency_interfaces<'a>(
     context: &'a Context,
-    plan_sets: &super::PlanStore,
+    plan_view: &super::PlanView<'_>,
+    scope: &super::ReplanScope,
     missing_repository_source_specs: &HashSet<(Arc<LemmaRepository>, String, EffectiveDate)>,
     failed_source_specs: &HashSet<(Arc<LemmaRepository>, String, EffectiveDate)>,
 ) -> Vec<(Arc<LemmaRepository>, String, &'a LemmaSpec, Error)> {
     let mut errors: Vec<(Arc<LemmaRepository>, String, &'a LemmaSpec, Error)> = Vec::new();
 
-    for (consumer_repository, by_name) in context.repositories().iter() {
-        for (consumer_spec_name, consumer_spec_set) in by_name.iter() {
+    for member in scope.members() {
+        let consumer_repository = &member.repository;
+        let consumer_spec_name = &member.spec;
+        // A member with no spec set left the context in this batch: it has no consumer
+        // interfaces left to check.
+        if let Some(consumer_spec_set) = context.spec_set(consumer_repository, consumer_spec_name) {
             for spec in consumer_spec_set.iter_specs() {
                 if missing_repository_source_specs.contains(&(
                     Arc::clone(consumer_repository),
@@ -654,7 +662,7 @@ pub fn validate_dependency_interfaces<'a>(
                         continue;
                     };
                     let Some(dep_plans) =
-                        plan_sets.get_plans(edge.dep_repository.name.as_deref(), &edge.dep_name)
+                        plan_view.get_plans(edge.dep_repository.name.as_deref(), &edge.dep_name)
                     else {
                         let dep_repo = Arc::clone(&edge.dep_repository);
                         let dep_name = edge.dep_name.clone();
@@ -1166,12 +1174,19 @@ mod tests {
             .expect("insert consumer");
 
         // Dep is in the context, healthy, but was never planned into plans.
-        let plan_sets = crate::planning::PlanStore::new();
+        let replanned = crate::planning::PlanStore::new();
+        let committed = crate::planning::PlanStore::new();
+        let scope = crate::planning::ReplanScope::from_changed_sets(
+            &ctx,
+            vec![(ctx.workspace(), "consumer".to_string())],
+        );
+        let plan_view = crate::planning::PlanView::new(&replanned, &committed, &scope, &ctx);
         let missing_repository_source_specs = HashSet::new();
 
         let _ = validate_dependency_interfaces(
             &ctx,
-            &plan_sets,
+            &plan_view,
+            &scope,
             &missing_repository_source_specs,
             &HashSet::new(),
         );

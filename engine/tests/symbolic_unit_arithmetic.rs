@@ -1,6 +1,6 @@
 //! Integration tests for unit-agnostic plan-time arithmetic and calendar units.
 
-use lemma::{Engine, LiteralValue, ValueKind};
+use lemma::{Engine, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ fn source() -> lemma::SourceType {
     lemma::SourceType::Path(Arc::new(PathBuf::from("symbolic_unit_arithmetic.lemma")))
 }
 
-fn eval_value(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
+fn eval_str(code: &str, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
     engine
         .load([(source(), code.to_string())])
@@ -21,17 +21,9 @@ fn eval_value(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name))
-        .explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("rule '{}' must return a value", rule_name))
-        .clone()
-}
-
-fn eval_str(code: &str, spec_name: &str, rule_name: &str) -> String {
-    eval_value(code, spec_name, rule_name).to_string()
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::Decimal {
@@ -47,22 +39,25 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name));
     if let Some(measure) = rule.value.as_ref().and_then(|v| v.measure.as_ref()) {
-        let value = rule
-            .explanation
-            .as_ref()
-            .expect("explanation")
-            .result
-            .value()
-            .expect("rule must return a value");
-        let unit = match &value.value {
-            ValueKind::Measure(_, signature) => signature
-                .first()
-                .map(|(unit, _)| unit.as_str())
-                .expect("BUG: measure result has empty signature"),
-            other => panic!("expected measure map for measure value, got {other:?}"),
-        };
+        let unit = rule
+            .rule
+            .rule_type
+            .measure_binding_unit
+            .clone()
+            .filter(|u| measure.contains_key(u))
+            .or_else(|| {
+                rule.display().and_then(|display| {
+                    let lower = display.to_lowercase();
+                    measure
+                        .keys()
+                        .find(|u| lower.contains(&u.to_lowercase()))
+                        .cloned()
+                })
+            })
+            .or_else(|| measure.keys().next().cloned())
+            .unwrap_or_else(|| panic!("BUG: measure map empty for rule '{rule_name}'"));
         return measure
-            .get(unit)
+            .get(&unit)
             .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
             .parse()
             .unwrap_or_else(|error| {
@@ -701,7 +696,7 @@ rule deadline: veto "Everything is fine: no deadline"
         .value()
         .expect("deadline value");
     let decimal = match &value.value {
-        ValueKind::Measure(n, ..) => lemma::ValueKind::Number(n.clone())
+        ValueKind::Measure(n) => lemma::ValueKind::Number(n.clone())
             .as_decimal_magnitude()
             .expect("deadline magnitude must commit to decimal"),
         other => panic!("expected measure deadline, got {:?}", other),

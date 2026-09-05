@@ -3,6 +3,9 @@
 //! Executes pre-validated execution plans by walking each rule's
 //! [`NormalForm`] equation DAG. When `explain` is true the same walk fills
 //! planning-time explanation trees; when false, values only.
+//!
+//! Request state is one value table indexed by [`NormalFormId`]: the plan's
+//! node table *is* the arena.
 
 pub(crate) mod branch_semantics;
 pub(crate) mod conversion_trace;
@@ -20,7 +23,7 @@ use crate::planning::execution_plan::{
 };
 use crate::planning::normalize::NormalFormId;
 use crate::planning::semantics::{
-    DataDefinition, DataPath, LiteralValue, ReferenceTarget, RulePath, ValueKind,
+    DataDefinition, DataPath, LemmaType, LiteralValue, ReferenceTarget, RulePath, ValueKind,
 };
 use indexmap::IndexMap;
 pub use response::{Response, RuleResult};
@@ -32,59 +35,65 @@ fn closest_ignored_key(needed: &str, ignored: &[String]) -> Option<String> {
     crate::string_distance::closest_name(needed, ignored)
 }
 
-/// Request-local mutable state for one plan run (run data, control decisions, explain caches).
-/// The [`ExecutionPlan`] is passed separately so the tree walk can match Kind in place.
+/// Request-local mutable state for one plan run.
+///
+/// The value table is indexed by [`NormalFormId`] and doubles as memo and data
+/// store. Rule-embed values live in [`Self::rule_values`], filled in plan
+/// topological order before a consumer body walks. Control decisions for
+/// missing-data walks are read from filled condition / scrutinee slots — there
+/// is no separate log.
 pub(crate) struct EvaluationContext {
-    pub(crate) data_values: HashMap<DataPath, Arc<LiteralValue>>,
-    /// Results of rules evaluated on demand for Rule embeds (value and explain).
-    pub(crate) rule_results: HashMap<RulePath, OperationResult>,
-    /// Explain mode only: Rule explanation nodes filled on demand for embeds.
-    pub(crate) rule_explanations: HashMap<RulePath, crate::planning::explanation::ExplanationNode>,
-    now: Arc<LiteralValue>,
-    /// Computation vetoes on data that cannot be read (bad override or reference constraint).
-    vetoes: HashMap<DataPath, VetoType>,
+    /// One slot per `plan.normal_forms` cell. Filled by data resolve and by
+    /// `eval`; never cleared mid-request (values are a function of data).
+    pub(crate) values: Vec<Option<OperationResult>>,
+    /// One slot per `plan.rules` entry (same index as `IndexMap`). Filled by
+    /// [`tree::evaluate_rule`] before consumers read embeds.
+    pub(crate) rule_values: Vec<Option<OperationResult>>,
+    now: LiteralValue,
     /// Ignored input keys from run data (typo hints for MissingData).
     ignored_unknown: Vec<String>,
     /// Whether this run data left any of the plan's promptable data paths unbound.
-    /// False means no rule can report missing data, so control decisions need no recording.
     any_promptable_data_unbound: bool,
-    /// Per And/Piecewise control node: immediate child NormalFormIds that are dead given
-    /// the control decisions observed so far in this evaluation.
-    pub(crate) dead_control_edges: HashMap<NormalFormId, HashSet<NormalFormId>>,
-    /// When false, And/Piecewise outcomes do not record dead control edges (fully bound
-    /// run data, or explain narration re-walking nodes after the value walk recorded them).
-    pub(crate) record_control_decisions: bool,
-    /// Value memo by NormalFormId for shared-DAG walks within one requested rule.
-    pub(crate) value_memo: HashMap<crate::planning::normalize::NormalFormId, OperationResult>,
+    /// Successful overlays stamped with the caller-supplied unit (display/veto).
+    overlay_types: HashMap<DataPath, Arc<LemmaType>>,
+    /// Explain mode only: Rule explanation nodes filled on demand for embeds.
+    pub(crate) rule_explanations: HashMap<RulePath, crate::planning::explanation::ExplanationNode>,
 }
 
 impl EvaluationContext {
     fn new(plan: &ExecutionPlan, run_data: &RunData, now: LiteralValue) -> Self {
-        let mut data_values: HashMap<DataPath, Arc<LiteralValue>> = HashMap::new();
-        let mut vetoes: HashMap<DataPath, VetoType> = HashMap::new();
+        let mut values: Vec<Option<OperationResult>> = vec![None; plan.normal_forms.len()];
 
+        // Caller bindings into their data-leaf slots.
         for (path, binding) in &run_data.bindings {
-            match binding {
-                OperationResult::Value(value) => {
-                    data_values.insert(path.clone(), Arc::clone(value));
-                }
-                OperationResult::Veto(veto) => {
-                    vetoes.insert(path.clone(), veto.clone());
-                }
-            }
+            let leaf = *plan
+                .data_leaf
+                .get(path)
+                .unwrap_or_else(|| panic!("BUG: run binding for '{path}' has no data_leaf entry"));
+            values[leaf.index()] = Some(binding.clone());
         }
 
+        // Plan defaults into unbound data-leaf slots.
         for (path, definition) in &plan.data {
-            if data_values.contains_key(path) || vetoes.contains_key(path) {
+            let leaf = *plan
+                .data_leaf
+                .get(path)
+                .expect("BUG: every plan.data path must have a data_leaf entry");
+            if values[leaf.index()].is_some() {
                 continue;
             }
             if let Some(value) = definition.value() {
-                data_values.insert(path.clone(), Arc::new(value.clone()));
+                values[leaf.index()] = Some(OperationResult::from_literal(value));
             }
         }
 
+        // Reference chains: copy target into reference leaf (data_reference_order).
         for reference_path in &plan.data_reference_order {
-            if data_values.contains_key(reference_path) || vetoes.contains_key(reference_path) {
+            let leaf = *plan
+                .data_leaf
+                .get(reference_path)
+                .expect("BUG: reference path missing from data_leaf");
+            if values[leaf.index()].is_some() {
                 continue;
             }
             match plan.data.get(reference_path) {
@@ -93,35 +102,38 @@ impl EvaluationContext {
                     resolved_type,
                     ..
                 }) => {
-                    if let Some(veto) = vetoes.get(target_path) {
-                        vetoes.insert(reference_path.clone(), veto.clone());
-                        continue;
-                    }
-                    let copied_kind: Option<ValueKind> =
-                        data_values.get(target_path).map(|v| v.value.clone());
-                    if let Some(value_kind) = copied_kind {
-                        let value = LiteralValue {
-                            value: value_kind,
-                            lemma_type: Arc::clone(resolved_type),
-                        };
-                        match validate_value_against_type(
-                            resolved_type.as_ref(),
-                            &value,
-                            &plan.resolved_types.unit_index,
-                        ) {
-                            Ok(()) => {
-                                data_values.insert(reference_path.clone(), Arc::new(value));
-                            }
-                            Err(msg) => {
-                                vetoes.insert(
-                                    reference_path.clone(),
-                                    VetoType::computation(format!(
-                                        "Reference '{}' violates declared constraint: {}",
-                                        reference_path, msg
-                                    )),
-                                );
+                    let target_leaf = *plan
+                        .data_leaf
+                        .get(target_path)
+                        .expect("BUG: reference target missing from data_leaf");
+                    match values[target_leaf.index()].as_ref() {
+                        Some(OperationResult::Veto(veto)) => {
+                            values[leaf.index()] = Some(OperationResult::Veto(veto.clone()));
+                        }
+                        Some(OperationResult::Value(value)) => {
+                            let copied = LiteralValue {
+                                value: value.value.clone(),
+                            };
+                            match validate_value_against_type(
+                                resolved_type.as_ref(),
+                                &copied,
+                                &plan.resolved_types.unit_index,
+                            ) {
+                                Ok(()) => {
+                                    values[leaf.index()] =
+                                        Some(OperationResult::from_literal(copied));
+                                }
+                                Err(msg) => {
+                                    values[leaf.index()] = Some(OperationResult::Veto(
+                                        VetoType::computation(format!(
+                                            "Reference '{}' violates declared constraint: {}",
+                                            reference_path, msg
+                                        )),
+                                    ));
+                                }
                             }
                         }
+                        None => {}
                     }
                 }
                 Some(DataDefinition::Reference {
@@ -136,75 +148,128 @@ impl EvaluationContext {
             }
         }
 
-        let any_promptable_data_unbound = plan
-            .promptable_data_paths()
-            .any(|path| !data_values.contains_key(path) && !vetoes.contains_key(path));
+        let any_promptable_data_unbound = plan.promptable_data_paths().any(|path| {
+            let leaf = *plan
+                .data_leaf
+                .get(path)
+                .expect("BUG: promptable path missing from data_leaf");
+            values[leaf.index()].is_none()
+        });
 
         Self {
-            data_values,
-            rule_results: HashMap::new(),
-            rule_explanations: HashMap::new(),
-            now: Arc::new(now),
-            vetoes,
+            values,
+            rule_values: vec![None; plan.rules.len()],
+            now,
             ignored_unknown: run_data.ignored_unknown.clone(),
             any_promptable_data_unbound,
-            dead_control_edges: HashMap::new(),
-            record_control_decisions: any_promptable_data_unbound,
-            value_memo: HashMap::new(),
+            overlay_types: run_data.overlay_types.clone(),
+            rule_explanations: HashMap::new(),
         }
     }
 
-    pub(crate) fn get_veto(&self, data_path: &DataPath) -> Option<&VetoType> {
-        self.vetoes.get(data_path)
+    /// Stored value for a rule previously evaluated in this request.
+    pub(crate) fn rule_value<'a>(
+        &'a self,
+        plan: &ExecutionPlan,
+        path: &RulePath,
+    ) -> &'a OperationResult {
+        let index = plan.rules.get_index_of(path).unwrap_or_else(|| {
+            panic!(
+                "BUG: rule '{}' missing from execution plan while reading embed value",
+                path.rule
+            )
+        });
+        self.rule_values[index].as_ref().unwrap_or_else(|| {
+            panic!(
+                "BUG: rule '{}' embedded before evaluation (plan.rules topological order broken)",
+                path.rule
+            )
+        })
     }
 
     pub(crate) fn now(&self) -> &LiteralValue {
-        self.now.as_ref()
+        &self.now
     }
 
-    pub(crate) fn get_data_value(&self, data_path: &DataPath) -> Option<&Arc<LiteralValue>> {
-        self.data_values.get(data_path)
+    /// Overlay type for a data path when the caller supplied an explicit unit.
+    #[must_use]
+    pub(crate) fn overlay_type(&self, path: &DataPath) -> Option<&Arc<LemmaType>> {
+        self.overlay_types.get(path)
+    }
+
+    /// Schema or overlay type for displaying a data path value.
+    #[must_use]
+    pub(crate) fn data_display_type(
+        &self,
+        plan: &ExecutionPlan,
+        path: &DataPath,
+    ) -> Arc<LemmaType> {
+        if let Some(overlay) = self.overlay_type(path) {
+            return Arc::clone(overlay);
+        }
+        plan.data
+            .get(path)
+            .and_then(|def| def.schema_type())
+            .map(|ty| Arc::new(ty.clone()))
+            .expect("BUG: data path leaf missing schema type")
+    }
+
+    /// Rule result type with overlay binding when the rule body is a bound data path.
+    #[must_use]
+    pub(crate) fn rule_result_type(
+        &self,
+        plan: &ExecutionPlan,
+        rule: &crate::planning::execution_plan::ExecutableRule,
+    ) -> Arc<LemmaType> {
+        let planned = Arc::clone(&rule.rule_type);
+        match &plan.normal_form(rule.normal_form).kind {
+            crate::planning::normalize::NormalFormKind::Leaf(
+                crate::planning::normalize::LeafKind::DataPath(path),
+            ) => {
+                if let Some(overlay) = self.overlay_type(path) {
+                    return Arc::new(
+                        planned.as_ref().clone().with_measure_binding_unit(
+                            overlay
+                                .measure_binding_unit
+                                .clone()
+                                .expect("BUG: overlay_types entry must carry binding unit"),
+                        ),
+                    );
+                }
+                planned
+            }
+            _ => planned,
+        }
+    }
+
+    /// Slot for a data path's leaf cell.
+    pub(crate) fn data_slot(
+        &self,
+        plan: &ExecutionPlan,
+        data_path: &DataPath,
+    ) -> Option<&OperationResult> {
+        let leaf = *plan
+            .data_leaf
+            .get(data_path)
+            .unwrap_or_else(|| panic!("BUG: data path '{data_path}' has no data_leaf entry"));
+        self.values[leaf.index()].as_ref()
     }
 
     pub(crate) fn missing_data_suggestion(&self, data_path: &DataPath) -> Option<String> {
         closest_ignored_key(&data_path.input_key(), &self.ignored_unknown)
     }
 
-    /// Begin evaluating one requested local rule: dead-edge tracking + per-rule caches.
-    pub(crate) fn begin_requested_rule(&mut self) {
-        self.dead_control_edges.clear();
-        self.value_memo.clear();
-        self.rule_results.clear();
-        self.rule_explanations.clear();
-    }
-
-    /// Record immediate child NormalFormIds of `control_id` that are dead given the
-    /// current control decision. Called once per control outcome during the value walk.
-    pub(crate) fn record_dead_control_edges(
-        &mut self,
-        control_id: NormalFormId,
-        dead_children: impl IntoIterator<Item = NormalFormId>,
-    ) {
-        if !self.record_control_decisions {
-            return;
-        }
-        let entry = self.dead_control_edges.entry(control_id).or_default();
-        for child in dead_children {
-            entry.insert(child);
-        }
-    }
-
     /// Whether this evaluation has a value or a veto for `data_path`.
-    fn is_data_bound(&self, data_path: &DataPath) -> bool {
-        self.data_values.contains_key(data_path) || self.vetoes.contains_key(data_path)
+    fn is_data_bound(&self, plan: &ExecutionPlan, data_path: &DataPath) -> bool {
+        self.data_slot(plan, data_path).is_some()
     }
 
-    /// Promptable data paths this rule still needs, in plan.data declaration order.
+    /// Promptable data paths this rule still needs, in evaluation / decision-tree order.
     ///
-    /// Returns immediately when the run data bound every promptable path: no rule can
-    /// report missing data, and no control decisions were recorded. Otherwise walks from
-    /// `rule_root` respecting the `dead_control_edges` recorded during the value walk,
-    /// and keeps the promptable paths that are both reachable and unbound.
+    /// First key is the next fact the live tree needs. Returns immediately when the run
+    /// data bound every promptable path: no rule can report missing data. Otherwise walks
+    /// from `rule_root` deriving liveness from filled condition/scrutinee slots, maps each
+    /// leaf through [`ExecutionPlan::promptable_data_path`], and keeps unbound keys.
     pub(crate) fn missing_data_for_rule(
         &self,
         plan: &ExecutionPlan,
@@ -213,15 +278,22 @@ impl EvaluationContext {
         if !self.any_promptable_data_unbound {
             return Vec::new();
         }
-        let reachable = reachable_data_paths(plan, rule_root, &self.dead_control_edges);
-        let promptable: HashSet<&DataPath> = reachable
-            .iter()
-            .filter_map(|path| plan.promptable_data_path(path))
-            .collect();
-        plan.promptable_data_paths()
-            .filter(|path| promptable.contains(path) && !self.is_data_bound(path))
-            .map(|path| path.input_key())
-            .collect()
+        let reachable = reachable_data_paths(plan, rule_root, &self.values);
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for path in &reachable {
+            let Some(promptable) = plan.promptable_data_path(path) else {
+                continue;
+            };
+            if self.is_data_bound(plan, promptable) {
+                continue;
+            }
+            let key = promptable.input_key();
+            if seen.insert(key.clone()) {
+                out.push(key);
+            }
+        }
+        out
     }
 }
 
@@ -230,12 +302,15 @@ impl EvaluationContext {
 pub(crate) struct Evaluator;
 
 impl Evaluator {
-    /// Evaluate an execution plan: one tree walk per requested local rule.
+    /// Evaluate an execution plan: dependency closure of requested local rules
+    /// in plan topological order, then report requested results.
     ///
-    /// Values come from walking Kind under those roots. Unbound live inputs are
-    /// reported per rule as `missing_data` (reachable under recorded control
-    /// decisions, intersected with unbound promptable paths). When `explain` is
-    /// true, Rule embeds evaluate dependency rules on demand.
+    /// Rule embeds are evaluation boundaries: a dependency's value is read from
+    /// [`EvaluationContext::rule_values`], never by re-entering its body.
+    /// Unbound live inputs are reported per rule as `missing_data` (reachable
+    /// under control decisions derived from filled slots, intersected with
+    /// unbound promptable paths). When `explain` is true, dependency
+    /// explanations are ensured before each requested rule's explain walk.
     pub(crate) fn evaluate(
         &self,
         plan: &ExecutionPlan,
@@ -260,22 +335,53 @@ impl Evaluator {
             results: IndexMap::new(),
         };
 
-        for exec_rule in plan.rules.values() {
-            if !(exec_rule.path.segments.is_empty() && response_rules.contains(exec_rule.name())) {
+        let mut marked = vec![false; plan.rules.len()];
+        let mut worklist: Vec<usize> = Vec::new();
+        for (index, (path, _)) in plan.rules.iter().enumerate() {
+            if path.segments.is_empty() && response_rules.contains(path.rule.as_str()) {
+                marked[index] = true;
+                worklist.push(index);
+            }
+        }
+        while let Some(index) = worklist.pop() {
+            let rule = plan
+                .rules
+                .get_index(index)
+                .map(|(_, rule)| rule)
+                .expect("BUG: marked rule index out of plan.rules range");
+            for dep in &rule.depends_on_rules {
+                let dep_index = plan.rules.get_index_of(dep).unwrap_or_else(|| {
+                    panic!(
+                        "BUG: depends_on_rules entry '{}' missing from plan.rules",
+                        dep.rule
+                    )
+                });
+                if !marked[dep_index] {
+                    marked[dep_index] = true;
+                    worklist.push(dep_index);
+                }
+            }
+        }
+
+        for (index, exec_rule) in plan.rules.values().enumerate() {
+            if !marked[index] {
                 continue;
             }
 
-            context.begin_requested_rule();
+            let result = tree::evaluate_rule(exec_rule, plan, &mut context);
+            let report =
+                exec_rule.path.segments.is_empty() && response_rules.contains(exec_rule.name());
+            if !report {
+                continue;
+            }
 
-            let (result, explanation) = if explain {
-                let (result, explanation) =
-                    tree::evaluate_rule_explained(exec_rule, plan, &mut context);
-                context
-                    .rule_results
-                    .insert(exec_rule.path.clone(), result.clone());
-                (result, Some(explanation))
+            let explanation = if explain {
+                for dep in &exec_rule.depends_on_rules {
+                    tree::ensure_rule_explained(dep, plan, &mut context);
+                }
+                Some(tree::evaluate_rule_explained(exec_rule, plan, &mut context).1)
             } else {
-                (tree::evaluate_rule(exec_rule, plan, &mut context), None)
+                None
             };
 
             let missing_data = match &result {
@@ -285,15 +391,18 @@ impl Evaluator {
                 _ => Vec::new(),
             };
 
+            let rule_type = context.rule_result_type(plan, exec_rule);
+
             response.add_result(RuleResult::from_operation_result(
                 EvaluatedRule {
                     name: exec_rule.name().to_string(),
                     path: exec_rule.path.clone(),
                     source_location: exec_rule.source.clone(),
-                    rule_type: (*exec_rule.rule_type).clone(),
+                    rule_type: Arc::clone(&rule_type),
                 },
                 &result,
-                exec_rule.rule_type.as_ref(),
+                rule_type.as_ref(),
+                &plan.family_units,
                 explanation,
                 missing_data,
             ));
@@ -361,23 +470,37 @@ rule r: i.slot
             value: crate::planning::semantics::ValueKind::Date(
                 crate::planning::semantics::date_time_to_semantic(&now),
             ),
-            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
         let context = EvaluationContext::new(plan_basis, &run_data, now_lit);
 
         let stored = context
-            .data_values
-            .get(&reference_path)
+            .data_slot(plan_basis, &reference_path)
             .expect("EvaluationContext must populate reference path with the copied value");
 
-        assert_eq!(
-            stored.as_ref().lemma_type,
-            resolved_type,
-            "stored LiteralValue must carry the reference's resolved_type \
-             (LHS-merged), not the target's loose type. \
-             stored = {:?}, resolved = {:?}",
-            stored.as_ref().lemma_type,
-            resolved_type,
+        let OperationResult::Value(value) = stored else {
+            panic!("reference path must hold a value, got {stored:?}");
+        };
+
+        // Type lives on DataDefinition::Reference.resolved_type, not LiteralValue.
+        assert!(
+            matches!(
+                resolved_type.specifications,
+                crate::planning::semantics::TypeSpecification::Number {
+                    minimum: Some(_),
+                    maximum: Some(_),
+                    ..
+                }
+            ),
+            "reference resolved_type must keep LHS constraints, got {:?}",
+            resolved_type.specifications
+        );
+        assert!(
+            matches!(
+                value.value,
+                crate::planning::semantics::ValueKind::Number(_)
+            ),
+            "stored value must be the copied number, got {:?}",
+            value.value
         );
     }
 }

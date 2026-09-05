@@ -55,7 +55,7 @@ public record ResolvedRepository(@Nullable String repository, List<ListedSpec> s
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  public static ResolvedRepository read(JsonParser p) throws IOException {
+  static ResolvedRepository read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "ResolvedRepository");
     String repository = null;
     List<ListedSpec> specs = null;

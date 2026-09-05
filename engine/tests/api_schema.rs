@@ -68,14 +68,23 @@ rule ok: amount
         .map(lemma::__test_support::current_binding_error_json)
         .collect();
 
+    let install = lemma::RepositoryInstallResult {
+        source: "repo @iso/countries\n\nspec alpha2\ndata code: text\n".to_string(),
+        id: "@iso/countries".to_string(),
+    };
+
     vec![
-        ("show", serde_json::to_value(&show).expect("show")),
+        (
+            "show",
+            serde_json::to_value(lemma::api::Show::from(&show)).expect("show"),
+        ),
         (
             "response",
-            serde_json::to_value(&response).expect("response"),
+            serde_json::to_value(lemma::api::Response::from(&response)).expect("response"),
         ),
         ("list", serde_json::to_value(&list).expect("list")),
         ("errors", serde_json::Value::Array(errors)),
+        ("install", serde_json::to_value(&install).expect("install")),
     ]
 }
 

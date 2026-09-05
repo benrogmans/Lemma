@@ -7,7 +7,7 @@ pub mod parser;
 pub mod source;
 
 pub use ast::*;
-pub use parser::ParseResult;
+pub use parser::{parse_repository_qualifier_str, ParseResult};
 
 pub fn parse(
     content: &str,

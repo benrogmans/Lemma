@@ -1,8 +1,10 @@
 """Benchmark the Python ports of the Lemma bench specs.
 
 Timed loop on both sides: build inline input literals, evaluate terminal rule.
-Lemma side (Criterion): parse + plan + eval from in-memory source every call.
-Python side: build_inputs + compute_terminal from imported module every call.
+Lemma side (Criterion): Engine loaded once; timed = inputs + Engine::run → terminal.
+Python side: module imported once; timed = build_inputs + compute_terminal.
+compute_terminal evaluates only the terminal rule dependency closure.
+Literal Fraction constants are module-level (import time).
 Harness stdout is JSON for xtask ingestion only (not timed).
 """
 

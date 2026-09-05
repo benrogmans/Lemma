@@ -2,7 +2,8 @@ use crate::computation::{OperationResult, VetoType};
 use crate::planning::execution_plan::{validate_value_against_type, ExecutionPlan};
 use crate::planning::semantics::{
     number_with_unit_to_value_kind, parse_value_from_string, parser_value_to_value_kind,
-    DataDefinition, DataPath, LemmaType, LiteralValue, Source, TypeSpecification, ValueKind,
+    DataDefinition, DataPath, LemmaType, LiteralValue, Source, TypeSpecification, TypedLiteral,
+    ValueKind,
 };
 use crate::Error;
 use crate::ResourceLimits;
@@ -151,16 +152,20 @@ pub fn parse_data_value(
     input: &RunDataValue,
     lemma_type: &Arc<LemmaType>,
     source: &Source,
-) -> Result<LiteralValue, Error> {
+) -> Result<TypedLiteral, Error> {
     let to_err = |msg: String| Error::validation(msg, Some(source.clone()), None::<String>);
     let type_spec = &lemma_type.specifications;
 
-    let kind = match (input, type_spec) {
+    let (kind, binding_unit) = match (input, type_spec) {
         (RunDataValue::String(s), _) => {
             let parsed = parse_value_from_string(s, type_spec, source)?;
-            parser_value_to_value_kind(&parsed, type_spec).map_err(to_err)?
+            let kind = parser_value_to_value_kind(&parsed, type_spec).map_err(to_err)?;
+            let binding = binding_unit_from_parser_value(&parsed);
+            (kind, binding)
         }
-        (RunDataValue::Boolean(b), TypeSpecification::Boolean { .. }) => ValueKind::Boolean(*b),
+        (RunDataValue::Boolean(b), TypeSpecification::Boolean { .. }) => {
+            (ValueKind::Boolean(*b), None)
+        }
         (RunDataValue::Boolean(_), _) => {
             return Err(to_err(format!(
                 "boolean input is only valid for boolean data, not {}",
@@ -168,12 +173,28 @@ pub fn parse_data_value(
             )));
         }
         (RunDataValue::MeasureMap(map), TypeSpecification::Measure { .. }) => {
-            measure_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?
+            let kind = measure_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?;
+            let binding = (map.len() == 1).then(|| {
+                map.keys()
+                    .next()
+                    .expect("BUG: map len checked == 1")
+                    .clone()
+            });
+            (kind, binding)
         }
         (
             RunDataValue::MeasureMap(map) | RunDataValue::RatioMap(map),
             TypeSpecification::Ratio { .. },
-        ) => ratio_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?,
+        ) => {
+            let kind = ratio_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?;
+            let binding = (map.len() == 1).then(|| {
+                map.keys()
+                    .next()
+                    .expect("BUG: map len checked == 1")
+                    .clone()
+            });
+            (kind, binding)
+        }
         (RunDataValue::MeasureMap(_), _) => {
             return Err(to_err(format!(
                 "measure unit map is only valid for measure data, not {}",
@@ -188,10 +209,30 @@ pub fn parse_data_value(
         }
     };
 
-    Ok(LiteralValue {
+    let typed_type = match binding_unit {
+        Some(unit) => Arc::new(lemma_type.as_ref().clone().with_measure_binding_unit(unit)),
+        None => Arc::clone(lemma_type),
+    };
+    Ok(TypedLiteral {
         value: kind,
-        lemma_type: Arc::clone(lemma_type),
+        lemma_type: typed_type,
     })
+}
+
+fn binding_unit_from_parser_value(value: &crate::parsing::ast::Value) -> Option<String> {
+    use crate::parsing::ast::Value;
+    match value {
+        Value::NumberWithUnit(_, unit) => Some(unit.clone()),
+        Value::Range(left, right) => match (left.as_ref(), right.as_ref()) {
+            (Value::NumberWithUnit(_, left_unit), Value::NumberWithUnit(_, right_unit))
+                if left_unit == right_unit =>
+            {
+                Some(left_unit.clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn measure_from_unit_map(
@@ -218,25 +259,13 @@ fn measure_from_unit_map(
     }
 
     let first = kinds.first().expect("BUG: map non-empty");
-    let ValueKind::Measure(first_magnitude, first_signature) = first else {
+    let ValueKind::Measure(first_magnitude) = first else {
         return Err("expected measure value".to_string());
     };
-    if first_signature.len() != 1 || first_signature[0].1 != 1 {
-        return Err(
-            "measure map produced a compound signature; use a convenience string instead"
-                .to_string(),
-        );
-    }
     for kind in kinds.iter().skip(1) {
-        let ValueKind::Measure(magnitude, signature) = kind else {
+        let ValueKind::Measure(magnitude) = kind else {
             return Err("expected measure value".to_string());
         };
-        if signature.len() != 1 || signature[0].1 != 1 {
-            return Err(
-                "measure map produced a compound signature; use a convenience string instead"
-                    .to_string(),
-            );
-        }
         if magnitude != first_magnitude {
             return Err(
                 "measure unit map values disagree when converted to a common basis".to_string(),
@@ -268,11 +297,11 @@ fn ratio_from_unit_map(
     }
 
     let first = kinds.first().expect("BUG: map non-empty");
-    let ValueKind::Ratio(first_canonical, first_unit) = first else {
+    let ValueKind::Ratio(first_canonical) = first else {
         return Err("expected ratio value".to_string());
     };
     for kind in kinds.iter().skip(1) {
-        let ValueKind::Ratio(canonical, _) = kind else {
+        let ValueKind::Ratio(canonical) = kind else {
             return Err("expected ratio value".to_string());
         };
         if canonical != first_canonical {
@@ -281,10 +310,7 @@ fn ratio_from_unit_map(
             );
         }
     }
-    Ok(ValueKind::Ratio(
-        first_canonical.clone(),
-        first_unit.clone(),
-    ))
+    Ok(ValueKind::Ratio(first_canonical.clone()))
 }
 
 /// User-provided data values resolved against a plan's type declarations.
@@ -296,6 +322,8 @@ fn ratio_from_unit_map(
 pub struct RunData {
     /// Caller bindings: successful literals or Veto (bad override) per Data.
     pub bindings: HashMap<DataPath, OperationResult>,
+    /// Schema type stamped with the unit supplied in a successful overlay (display/veto).
+    pub overlay_types: HashMap<DataPath, Arc<LemmaType>>,
     /// Input keys that did not match any plan Data (including Import aliases).
     pub ignored_unknown: Vec<String>,
 }
@@ -313,10 +341,6 @@ impl RunData {
     ) -> Result<Self, Error> {
         let mut run_data = Self::default();
         let mut seen_canonical = HashSet::with_capacity(raw_values.len());
-        let mut by_input_key: HashMap<String, &DataPath> = HashMap::with_capacity(plan.data.len());
-        for path in plan.data.keys() {
-            by_input_key.insert(path.input_key(), path);
-        }
 
         for (name, raw_value) in raw_values {
             let canonical = crate::parsing::ast::ascii_lowercase_logical_name(name.clone());
@@ -327,33 +351,32 @@ impl RunData {
                 ));
             }
 
-            let Some(data_path) = by_input_key.get(canonical.as_str()) else {
+            let Some(data_path) = plan.input_key_index.get(canonical.as_str()) else {
                 run_data.ignored_unknown.push(name);
                 continue;
             };
-            let data_path = (*data_path).clone();
 
             let data_definition = plan
                 .data
-                .get(&data_path)
-                .expect("BUG: data_path was just resolved from plan.data, must exist");
+                .get(data_path)
+                .expect("BUG: data_path was just resolved from plan.input_key_index, must exist");
 
-            let data_source = data_definition.source().clone();
+            let data_source = data_definition.source();
             let type_arc = match data_definition {
                 DataDefinition::TypeDeclaration { resolved_type, .. }
-                | DataDefinition::Reference { resolved_type, .. } => Arc::clone(resolved_type),
-                DataDefinition::Value { value, .. } => Arc::clone(&value.lemma_type),
+                | DataDefinition::Reference { resolved_type, .. }
+                | DataDefinition::Value { resolved_type, .. } => Arc::clone(resolved_type),
                 DataDefinition::Import { .. } => {
                     run_data.ignored_unknown.push(name);
                     continue;
                 }
             };
 
-            let input_key = data_path.input_key();
+            let input_key = canonical;
 
             if raw_value.is_empty() && type_arc.empty_runtime_input_vetoes() {
                 run_data.bindings.insert(
-                    data_path,
+                    data_path.clone(),
                     OperationResult::Veto(VetoType::computation(
                         type_arc.data_veto_message(&input_key, "cannot be empty."),
                     )),
@@ -361,11 +384,11 @@ impl RunData {
                 continue;
             }
 
-            let literal_value = match parse_data_value(&raw_value, &type_arc, &data_source) {
+            let typed = match parse_data_value(&raw_value, &type_arc, data_source) {
                 Ok(value) => value,
                 Err(error) => {
                     run_data.bindings.insert(
-                        data_path,
+                        data_path.clone(),
                         OperationResult::Veto(VetoType::computation(
                             type_arc.data_veto_message(&input_key, error.message()),
                         )),
@@ -374,10 +397,13 @@ impl RunData {
                 }
             };
 
+            let literal_value = LiteralValue {
+                value: typed.value.clone(),
+            };
             let size = literal_value.byte_size();
             if size > limits.max_data_value_bytes {
                 run_data.bindings.insert(
-                    data_path,
+                    data_path.clone(),
                     OperationResult::Veto(VetoType::computation(
                         type_arc.data_veto_message(&input_key, "exceeds the size limit."),
                     )),
@@ -386,12 +412,12 @@ impl RunData {
             }
 
             if let Err(message) = validate_value_against_type(
-                type_arc.as_ref(),
+                typed.lemma_type.as_ref(),
                 &literal_value,
                 plan.expression_unit_index(),
             ) {
                 run_data.bindings.insert(
-                    data_path,
+                    data_path.clone(),
                     OperationResult::Veto(VetoType::computation(
                         type_arc.data_veto_message(&input_key, &message),
                     )),
@@ -399,9 +425,15 @@ impl RunData {
                 continue;
             }
 
-            run_data
-                .bindings
-                .insert(data_path, OperationResult::from_literal(literal_value));
+            if typed.lemma_type.measure_binding_unit.is_some() {
+                run_data
+                    .overlay_types
+                    .insert(data_path.clone(), Arc::clone(&typed.lemma_type));
+            }
+            run_data.bindings.insert(
+                data_path.clone(),
+                OperationResult::from_literal(literal_value),
+            );
         }
 
         Ok(run_data)
@@ -507,10 +539,11 @@ mod tests {
         map.insert("kilogram".to_string(), "2".to_string());
         map.insert("gram".to_string(), "2000".to_string());
         let lit = parse_data_value(&RunDataValue::MeasureMap(map), &ty, &dummy_source()).unwrap();
-        let ValueKind::Measure(magnitude, signature) = &lit.value else {
+        let ValueKind::Measure(magnitude) = &lit.value else {
             panic!("expected measure");
         };
         assert_eq!(magnitude, &rational_new(2, 1));
+        let signature = ty.measure_runtime_signature();
         assert_eq!(signature.len(), 1);
         assert_eq!(signature[0].1, 1);
     }
@@ -533,13 +566,13 @@ mod tests {
         map.insert("percent".to_string(), "10".to_string());
         map.insert("fraction".to_string(), "0.1".to_string());
         let lit = parse_data_value(&RunDataValue::RatioMap(map), &ty, &dummy_source()).unwrap();
-        let ValueKind::Ratio(canonical, unit) = &lit.value else {
+        let ValueKind::Ratio(canonical) = &lit.value else {
             panic!("expected ratio");
         };
         assert_eq!(
             *canonical,
             decimal_to_rational(Decimal::new(1, 1)).expect("canonical")
         );
-        assert!(unit.is_some());
+        assert!(ty.ratio_primary_unit().is_some());
     }
 }

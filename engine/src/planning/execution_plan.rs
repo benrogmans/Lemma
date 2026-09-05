@@ -10,21 +10,24 @@
 //!   IO compatibility is the consumer-facing guarantee.
 
 use crate::computation::UnitResolutionContext;
-use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaSpec, MetaValue};
+use crate::literals::Value;
+use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaSpec};
 use crate::parsing::source::{Source, SourceType};
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
 use crate::planning::normalize::{
-    NormalForm, NormalFormId, NormalFormInterner, NormalizeContext, NormalizedRule,
+    data_path_result_type, NormalForm, NormalFormId, NormalFormInterner, NormalizeContext,
+    NormalizedRule,
 };
 use crate::planning::semantics::{
     value_kind_matches_spec, ComparisonComputation, DataDefinition, DataPath, LemmaType,
-    LiteralValue, ReferenceTarget, RulePath, TypeSpecification, ValueKind,
+    LiteralValue, ReferenceEnd, ReferenceTarget, RulePath, TypeSpecification, ValueKind,
 };
 use crate::planning::spec_set::LemmaSpecSet;
+use crate::planning::unit_family::FamilyUnitCatalog;
 use crate::result_value::RuleResultValue;
 use crate::Error;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -33,7 +36,7 @@ use std::sync::Arc;
 ///
 /// Contains drift-free normal-form equations in a table, named rule roots, and all data.
 /// Self-contained structure - no spec lookups required during evaluation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPlan {
     /// Main spec name
     pub spec_name: String,
@@ -58,12 +61,15 @@ pub struct ExecutionPlan {
     pub data_reference_order: Vec<DataPath>,
 
     /// Spec metadata, in declaration order.
-    pub meta: IndexMap<String, MetaValue>,
+    pub meta: IndexMap<String, Value>,
 
     /// Main-spec types from planning. [`ResolvedSpecTypes::unit_index`] is expression-scope
-    /// units (local types plus direct `uses` imports). Rule-result units live on each
-    /// [`ExecutableRule::rule_type`], not in this index.
+    /// units (local types plus direct `uses` imports). Rule-result unit maps use
+    /// [`Self::family_units`]; Show data inputs stay declared-only.
     pub resolved_types: ResolvedSpecTypes,
+
+    /// Precomputed measure/ratio family unit expansion for rule results and show rule schemas.
+    pub family_units: FamilyUnitCatalog,
 
     /// Reverse index: canonical-form unit signature `Vec<(unit_name, exponent)>` →
     /// (unit_name, owning type). Built from expression-scope units during planning so
@@ -80,8 +86,9 @@ pub struct ExecutionPlan {
     pub effective_to: Option<DateTimeValue>,
 
     /// All loaded temporal versions for this spec name (same list on every slice).
+    /// Shared via [`Arc`] so every slice of a set points at one allocation.
     /// Filled by [`attach_show_cache`].
-    pub versions: Vec<ShowVersion>,
+    pub versions: Arc<[ShowVersion]>,
 
     /// Source start line of the LemmaSpec version this plan was built from.
     pub start_line: usize,
@@ -89,29 +96,45 @@ pub struct ExecutionPlan {
     /// Source type of the LemmaSpec version this plan was built from.
     pub source_type: Option<SourceType>,
 
-    /// For each typed data input key, local rule names that transitively need it.
-    /// Built once at plan time; [`Engine::show`] reads it instead of re-walking the DAG.
-    pub(crate) needed_by_rules: HashMap<String, Vec<String>>,
+    /// Per [`Self::data`] position: positions in [`Self::rules`] of local rules that
+    /// transitively need that slot (through rule embeds), in alphabetical rule-name order.
+    /// Non-promptable slots (references, imports) have empty lists: leaves are mapped to
+    /// their promptable target before recording. `len() == data.len()`.
+    /// Built in [`build_execution_plan`].
+    pub(crate) needed_by_rules: Vec<Vec<u32>>,
 
     /// Prefill/suggestion [`RuleResultValue`]s for show, keyed by data path.
     /// Built once at plan time so show does not re-run unit expansion per request.
     pub(crate) data_display: IndexMap<DataPath, ShowDataCache>,
 
-    /// Every data-target [`DataDefinition::Reference`] path → its ultimate target.
-    /// `Some` = promptable (`Value` / `TypeDeclaration`); `None` = ends at rule or import.
-    /// Computed once in [`build_execution_plan`]. Missing key after planning is a bug.
-    pub(crate) ultimate_reference_targets: HashMap<DataPath, Option<DataPath>>,
+    /// Show rule schemas with family-merged unit metadata, keyed by rule path.
+    /// Filled by [`attach_show_cache`].
+    pub(crate) show_rule_types: IndexMap<RulePath, LemmaType>,
+
+    /// Every [`DataDefinition::Reference`] path → where its chain ends.
+    /// Copied from [`Graph::reference_ends`] in [`build_execution_plan`].
+    /// Missing key after planning is a bug.
+    pub(crate) reference_ends: IndexMap<DataPath, ReferenceEnd>,
+
+    /// Precomputed `input_key` → `DataPath` index for [`RunData::resolve`].
+    /// Built once at plan time so every `Engine::run` call avoids rebuilding it.
+    pub(crate) input_key_index: IndexMap<String, DataPath>,
+
+    /// Every [`Self::data`] path → its [`LeafKind::DataPath`] cell in
+    /// [`Self::normal_forms`]. Built once so evaluation writes bindings into
+    /// the value table by [`NormalFormId`] instead of a parallel path map.
+    pub(crate) data_leaf: IndexMap<DataPath, NormalFormId>,
 }
 
 /// Plan-time prefill/suggestion [`RuleResultValue`] for one data path (show cache).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ShowDataCache {
-    pub prefilled: Option<RuleResultValue>,
+    pub fill: Option<RuleResultValue>,
     pub suggestion: Option<RuleResultValue>,
 }
 
 /// A named rule's root in the normal-form table, plus declaration metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutableRule {
     /// Unique identifier for this rule
     pub path: RulePath,
@@ -125,6 +148,10 @@ pub struct ExecutableRule {
     /// Computed type of this rule's result
     /// Every rule MUST have a type (Lemma is strictly typed)
     pub rule_type: Arc<LemmaType>,
+
+    /// Direct rule dependencies (rule refs and rule-target data refs). Every
+    /// entry precedes this rule in [`ExecutionPlan::rules`] (topo order).
+    pub depends_on_rules: Vec<RulePath>,
 }
 
 impl ExecutableRule {
@@ -146,12 +173,17 @@ pub(crate) fn plan_at<'a>(
 }
 
 /// Builds an execution plan from a Graph for one temporal slice.
-/// Internal implementation detail - only called by plan()
+///
+/// `interner` is shared across every slice of the enclosing spec set for one
+/// planning pass: cons keys are span-insensitive, so identical subexpressions
+/// in different slices share cells. Each slice still extracts its own dense
+/// `normal_forms` table via [`NormalFormInterner::extract_reachable`].
 pub(crate) fn build_execution_plan(
     graph: &Graph<'_>,
     resolved_types: ResolvedSpecTypes,
     effective: &EffectiveDate,
     limits: &crate::limits::ResourceLimits,
+    interner: &mut NormalFormInterner,
 ) -> Result<ExecutionPlan, Vec<Error>> {
     let rule_order = graph.rule_order();
 
@@ -205,7 +237,9 @@ pub(crate) fn build_execution_plan(
         crate::planning::graph::build_signature_index(&main_spec.name, &resolved_types.unit_index)
             .expect("BUG: signature_index build already validated during resolve_and_validate");
 
-    let mut interner = NormalFormInterner::new();
+    let family_units = FamilyUnitCatalog::build(&resolved_types.unit_index);
+
+    let reference_ends = graph.reference_ends();
     let mut rules: IndexMap<RulePath, ExecutableRule> = IndexMap::new();
     let mut completed_rules: HashMap<RulePath, NormalFormId> = HashMap::new();
 
@@ -224,9 +258,10 @@ pub(crate) fn build_execution_plan(
         let normalized = crate::planning::normalize::build_normalized_rule(
             &normalize_ctx,
             &completed_rules,
+            reference_ends,
             &rule_node.branches,
             Some(rule_node.source.clone()),
-            &mut interner,
+            interner,
         )
         .map_err(|error| vec![error])?;
         let NormalizedRule { body } = normalized;
@@ -239,12 +274,13 @@ pub(crate) fn build_execution_plan(
                 normal_form: body,
                 source: rule_node.source.clone(),
                 rule_type: Arc::clone(&rule_node.rule_type),
+                depends_on_rules: rule_node.depends_on_rules.iter().cloned().collect(),
             },
         );
     }
 
     let root_ids: Vec<NormalFormId> = rules.values().map(|rule| rule.normal_form).collect();
-    let (normal_forms, remapped_roots) = interner.into_reachable(&root_ids);
+    let (normal_forms, remapped_roots) = interner.extract_reachable(&root_ids);
     for (rule, remapped) in rules.values_mut().zip(remapped_roots) {
         rule.normal_form = remapped;
     }
@@ -262,18 +298,22 @@ pub(crate) fn build_execution_plan(
             .map(|f| (f.key.clone(), f.value.clone()))
             .collect(),
         resolved_types,
+        family_units,
         signature_index,
         effective: effective.clone(),
         // Filled by attach_show_cache after this returns.
         effective_from: None,
         effective_to: None,
-        versions: Vec::new(),
+        versions: Arc::from(Vec::new().into_boxed_slice()),
         start_line: 1,
         source_type: None,
-        needed_by_rules: HashMap::new(),
+        needed_by_rules: Vec::new(),
         data_display: IndexMap::new(),
+        show_rule_types: IndexMap::new(),
         // Filled below after validation succeeds.
-        ultimate_reference_targets: HashMap::new(),
+        reference_ends: IndexMap::new(),
+        input_key_index: IndexMap::new(),
+        data_leaf: IndexMap::new(),
     };
 
     let mut plan_errors = validate_literal_data_against_types(&plan);
@@ -284,8 +324,56 @@ pub(crate) fn build_execution_plan(
         return Err(plan_errors);
     }
 
-    plan.ultimate_reference_targets = compute_ultimate_reference_targets(&plan.data);
+    plan.reference_ends = graph.reference_ends().clone();
+    plan.input_key_index = plan
+        .data
+        .keys()
+        .map(|path| (path.input_key(), path.clone()))
+        .collect();
+    plan.data_leaf = ensure_data_leaves(&mut plan.normal_forms, &plan.data);
+    for (path, &id) in &plan.data_leaf {
+        debug_assert_eq!(
+            plan.result_type(id).as_ref(),
+            data_path_result_type(&plan.data, path).as_ref(),
+            "BUG: DataPath leaf result_type drift for {path}"
+        );
+    }
+    plan.needed_by_rules = plan.build_needed_by_rules();
     Ok(plan)
+}
+
+/// Ensure every `plan.data` path has a [`LeafKind::DataPath`] cell in `normal_forms`
+/// and return the path → id index. Expression lowering already creates leaves for
+/// referenced paths; unused paths get orphan leaves appended so evaluation can
+/// still store bindings/defaults/reference copies in the value table.
+fn ensure_data_leaves(
+    normal_forms: &mut Vec<NormalForm>,
+    data: &IndexMap<DataPath, DataDefinition>,
+) -> IndexMap<DataPath, NormalFormId> {
+    use crate::planning::normalize::LeafKind;
+    use crate::planning::normalize::NormalFormKind;
+
+    let mut data_leaf: IndexMap<DataPath, NormalFormId> = IndexMap::new();
+    for (index, cell) in normal_forms.iter().enumerate() {
+        if let NormalFormKind::Leaf(LeafKind::DataPath(path)) = &cell.kind {
+            data_leaf.insert(path.clone(), NormalFormId::from_index(index));
+        }
+    }
+    for path in data.keys() {
+        if data_leaf.contains_key(path) {
+            continue;
+        }
+        let id = NormalFormId::from_index(normal_forms.len());
+        normal_forms.push(NormalForm {
+            kind: NormalFormKind::Leaf(LeafKind::DataPath(path.clone())),
+            result_type: data_path_result_type(data, path),
+            source: None,
+            origin: None,
+            rule_embed: None,
+        });
+        data_leaf.insert(path.clone(), id);
+    }
+    data_leaf
 }
 
 /// Fill show/response cache fields that are pure functions of the plan and its
@@ -295,76 +383,27 @@ pub(crate) fn attach_show_cache(
     plan: &mut ExecutionPlan,
     lemma_spec_set: &LemmaSpecSet,
     spec: &LemmaSpec,
-    versions: &[ShowVersion],
+    versions: &Arc<[ShowVersion]>,
 ) {
     let (effective_from, effective_to) = lemma_spec_set.effective_range(spec);
     plan.effective_from = effective_from;
     plan.effective_to = effective_to;
-    plan.versions = versions.to_vec();
+    plan.versions = Arc::clone(versions);
     plan.start_line = spec.start_line;
     plan.source_type = spec.source_type.clone();
-    plan.needed_by_rules = plan
-        .needed_by_rules_index()
-        .expect("BUG: local_rule_names sourced from plan.rules");
     plan.data_display = build_data_display(plan);
-}
-
-/// Every data-target reference → `Some(ultimate promptable target)` or `None` (rule/import end).
-///
-/// Cycles and missing targets panic — planning already rejected cycles; absence is a bug.
-fn compute_ultimate_reference_targets(
-    data: &IndexMap<DataPath, DataDefinition>,
-) -> HashMap<DataPath, Option<DataPath>> {
-    let mut targets = HashMap::new();
-    for (path, definition) in data {
-        let DataDefinition::Reference {
-            target: ReferenceTarget::Data(_),
-            ..
-        } = definition
-        else {
-            continue;
-        };
-        let mut cursor = path.clone();
-        let mut seen = HashSet::new();
-        loop {
-            if !seen.insert(cursor.clone()) {
-                panic!(
-                    "BUG: cyclic data reference at '{cursor}'; should have been caught during planning"
-                );
-            }
-            match data.get(&cursor) {
-                Some(DataDefinition::Reference {
-                    target: ReferenceTarget::Data(next),
-                    ..
-                }) => {
-                    cursor = next.clone();
-                }
-                _ => break,
-            }
-        }
-        match data.get(&cursor) {
-            Some(DataDefinition::Value { .. } | DataDefinition::TypeDeclaration { .. }) => {
-                targets.insert(path.clone(), Some(cursor));
-            }
-            Some(DataDefinition::Reference {
-                target: ReferenceTarget::Rule(_),
-                ..
-            })
-            | Some(DataDefinition::Import { .. }) => {
-                targets.insert(path.clone(), None);
-            }
-            None => {
-                panic!(
-                    "BUG: data-target reference chain from '{path}' ends at missing data '{cursor}'"
-                );
-            }
-            Some(DataDefinition::Reference {
-                target: ReferenceTarget::Data(_),
-                ..
-            }) => unreachable!("BUG: data-target reference loop exited without advancing"),
-        }
-    }
-    targets
+    plan.show_rule_types = plan
+        .rules
+        .values()
+        .filter(|rule| rule.path.segments.is_empty())
+        .map(|rule| {
+            (
+                rule.path.clone(),
+                plan.family_units
+                    .rule_type_for_show(rule.rule_type.as_ref()),
+            )
+        })
+        .collect();
 }
 
 fn build_data_display(plan: &ExecutionPlan) -> IndexMap<DataPath, ShowDataCache> {
@@ -377,34 +416,26 @@ fn build_data_display(plan: &ExecutionPlan) -> IndexMap<DataPath, ShowDataCache>
             .schema_type()
             .expect("BUG: filter above ensured lemma_type is Some");
         let input_key = path.input_key();
-        let prefilled = data.prefilled_value().map(|literal| {
-            crate::result_value::rule_result_value_from_literal(literal, lemma_type).unwrap_or_else(
-                |failure| {
+        let fill = data.value().map(|literal| {
+            crate::result_value::type_scoped_result_value_from_literal(&literal, lemma_type)
+                .unwrap_or_else(|failure| {
                     panic!(
-                        "BUG: show prefilled value for '{input_key}' failed rule_result_value_from_literal: {}",
+                        "BUG: show fill value for '{input_key}' failed type_scoped_result_value_from_literal: {}",
                         crate::result_value::rule_result_value_failure_message(failure)
                     )
-                },
-            )
+                })
         });
         let suggestion = data.suggestion().map(|literal| {
-            crate::result_value::rule_result_value_from_literal(&literal, lemma_type).unwrap_or_else(
-                |failure| {
+            crate::result_value::type_scoped_result_value_from_literal(&literal, lemma_type)
+                .unwrap_or_else(|failure| {
                     panic!(
-                        "BUG: show suggestion value for '{input_key}' failed rule_result_value_from_literal: {}",
+                        "BUG: show suggestion value for '{input_key}' failed type_scoped_result_value_from_literal: {}",
                         crate::result_value::rule_result_value_failure_message(failure)
                     )
-                },
-            )
+                })
         });
-        if prefilled.is_some() || suggestion.is_some() {
-            out.insert(
-                path.clone(),
-                ShowDataCache {
-                    prefilled,
-                    suggestion,
-                },
-            );
+        if fill.is_some() || suggestion.is_some() {
+            out.insert(path.clone(), ShowDataCache { fill, suggestion });
         }
     }
     out
@@ -413,25 +444,24 @@ fn build_data_display(plan: &ExecutionPlan) -> IndexMap<DataPath, ShowDataCache>
 /// One data entry in a [`Show`].
 ///
 /// A named struct instead of a tuple so JSON-native consumers (TypeScript, Python, ...)
-/// get stable field names. `prefilled` is a spec literal or literal `with` binding;
+/// get stable field names. `fill` is a spec literal or literal `with` binding;
 /// `suggestion` is a `-> suggest ...` hint only.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Empty `needed_by_rules` means the slot is offered for reuse (`data x: alias.slot`),
+/// not needed by this spec's remaining rules after normalize.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShowData {
-    #[serde(rename = "type")]
     pub lemma_type: LemmaType,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub prefilled: Option<RuleResultValue>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub fill: Option<RuleResultValue>,
     pub suggestion: Option<RuleResultValue>,
+    /// Local rule names that transitively need this data after normalize.
+    /// Empty = reuse catalog only (not an eval intake key for this spec).
     pub needed_by_rules: Vec<String>,
 }
 
 /// Half-open `[effective_from, effective_to)` for one loaded temporal row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShowVersion {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub effective_from: Option<crate::parsing::ast::DateTimeValue>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub effective_to: Option<crate::parsing::ast::DateTimeValue>,
 }
 
@@ -446,26 +476,22 @@ impl std::fmt::Display for ShowVersion {
     }
 }
 
-/// Consumer [`Engine::show`] result: data used by the spec's rules, local rule
-/// result types, and resolved temporal window. Source: [`Engine::source`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Consumer [`Engine::show`] result: declared promptable data catalog (with
+/// [`ShowData::needed_by_rules`] for intake vs reuse), local rule result types,
+/// and resolved temporal window. Source: [`Engine::source`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct Show {
     pub spec: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub commentary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub effective_from: Option<crate::parsing::ast::DateTimeValue>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub effective_to: Option<crate::parsing::ast::DateTimeValue>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub versions: Vec<ShowVersion>,
     pub start_line: usize,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_type: Option<crate::parsing::source::SourceType>,
     pub data: indexmap::IndexMap<String, ShowData>,
     pub rules: indexmap::IndexMap<String, LemmaType>,
     /// Spec metadata, in declaration order.
-    pub meta: IndexMap<String, MetaValue>,
+    pub meta: IndexMap<String, Value>,
 }
 
 impl std::fmt::Display for Show {
@@ -499,7 +525,7 @@ impl std::fmt::Display for Show {
 
         if !self.meta.is_empty() {
             write!(f, "\n\nMeta:")?;
-            let mut entries: Vec<(&String, &MetaValue)> = self.meta.iter().collect();
+            let mut entries: Vec<(&String, &Value)> = self.meta.iter().collect();
             entries.sort_by_key(|(k, _)| *k);
             for (key, value) in entries {
                 write!(f, "\n  {}: {}", key, value)?;
@@ -517,11 +543,18 @@ impl std::fmt::Display for Show {
                 if !help.is_empty() {
                     write!(f, "\n    help: {}", help)?;
                 }
-                if let Some(val) = &entry.prefilled {
-                    write!(f, "\n    prefilled: {}", val)?;
+                if let Some(val) = &entry.fill {
+                    write!(f, "\n    fill: {}", val)?;
                 }
                 if let Some(val) = &entry.suggestion {
                     write!(f, "\n    suggestion: {}", val)?;
+                }
+                if !entry.needed_by_rules.is_empty() {
+                    write!(
+                        f,
+                        "\n    needed_by_rules: {}",
+                        entry.needed_by_rules.join(", ")
+                    )?;
                 }
             }
         }
@@ -789,8 +822,6 @@ pub fn type_detail_lines(spec: &TypeSpecification) -> Vec<String> {
 
 impl ExecutionPlan {
     /// Expression-scope unit index (local types plus direct `uses` imports).
-    /// Rule-result units outside this scope are resolved from [`ExecutableRule::rule_type`]
-    /// when building RuleResultValue.
     pub(crate) fn expression_unit_index(&self) -> &crate::planning::unit_index::UnitIndex {
         &self.resolved_types.unit_index
     }
@@ -804,53 +835,122 @@ impl ExecutionPlan {
             .collect()
     }
 
-    /// For each typed data input key, local rule names that transitively need it.
-    pub(crate) fn needed_by_rules_index(&self) -> Result<HashMap<String, Vec<String>>, Error> {
-        let mut index: HashMap<String, Vec<String>> = HashMap::new();
-        for rule_name in self.local_rule_names() {
-            let needed = self.collect_needed_data_paths(std::slice::from_ref(&rule_name))?;
-            for path in needed {
-                let Some(target) = self.promptable_data_path(&path) else {
+    /// Per [`Self::data`] position: local [`Self::rules`] positions that transitively need
+    /// that slot (through rule embeds), in alphabetical rule-name order.
+    ///
+    /// Built in plan topological order: at a rule-embed cell, OR the target rule's
+    /// already-computed bitset instead of descending Kind (embeds are evaluation
+    /// boundaries). Walks the normalized body so constant-dead unless arms removed
+    /// by normalize stay out of the index.
+    fn build_needed_by_rules(&self) -> Vec<Vec<u32>> {
+        use crate::planning::normalize::{push_child_ids, LeafKind, NormalFormKind};
+
+        let data_len = self.data.len();
+        let words = data_len.div_ceil(64);
+        let mut bits_by_rule: Vec<Vec<u64>> = Vec::with_capacity(self.rules.len());
+
+        for (rule_pos, (_path, rule)) in self.rules.iter().enumerate() {
+            let mut bits = vec![0u64; words];
+            let mut visited = HashSet::new();
+            let mut stack = vec![rule.normal_form];
+            while let Some(id) = stack.pop() {
+                if !visited.insert(id) {
                     continue;
-                };
-                index
-                    .entry(target.input_key())
-                    .or_default()
-                    .push(rule_name.clone());
+                }
+                let nf = self.normal_form(id);
+                if let Some(embed_path) = &nf.rule_embed {
+                    let embed_pos = self.rules.get_index_of(embed_path).unwrap_or_else(|| {
+                        panic!(
+                            "BUG: embed target '{embed_path}' missing from plan.rules (rule '{}')",
+                            rule.path
+                        )
+                    });
+                    assert!(
+                        embed_pos < rule_pos,
+                        "BUG: embed target '{embed_path}' must precede '{}' in topo order",
+                        rule.path
+                    );
+                    let dep = &bits_by_rule[embed_pos];
+                    for (word, dep_word) in bits.iter_mut().zip(dep.iter()) {
+                        *word |= *dep_word;
+                    }
+                    continue;
+                }
+                match &nf.kind {
+                    NormalFormKind::Leaf(LeafKind::DataPath(path)) => {
+                        if let Some(target) = self.promptable_data_path(path) {
+                            let data_pos = self.data.get_index_of(target).unwrap_or_else(|| {
+                                panic!(
+                                    "BUG: promptable target '{target}' absent from plan.data (rule '{}')",
+                                    rule.path
+                                )
+                            });
+                            bits[data_pos / 64] |= 1u64 << (data_pos % 64);
+                        }
+                    }
+                    NormalFormKind::OrderedDispatch { .. } => {
+                        // Match static reachable_data_paths: walk origin Piecewise
+                        // so shadowed arms stay in the Show needed set.
+                        let origin = nf.origin.unwrap_or_else(|| {
+                            panic!(
+                                "BUG: non-embed OrderedDispatch must carry origin (rule '{}')",
+                                rule.path
+                            )
+                        });
+                        stack.push(origin);
+                    }
+                    _ => {
+                        push_child_ids(&nf.kind, &mut stack);
+                    }
+                }
+            }
+            bits_by_rule.push(bits);
+        }
+
+        let mut local: Vec<usize> = self
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(_, (path, _))| path.segments.is_empty())
+            .map(|(pos, _)| pos)
+            .collect();
+        local.sort_by(|&a, &b| self.rules[a].path.rule.cmp(&self.rules[b].path.rule));
+
+        let mut needed_by_rules = vec![Vec::new(); data_len];
+        for &rule_pos in &local {
+            let rule_id = u32::try_from(rule_pos).expect("BUG: rule count exceeds u32");
+            let bits = &bits_by_rule[rule_pos];
+            for (word_idx, &word) in bits.iter().enumerate() {
+                let mut remaining = word;
+                while remaining != 0 {
+                    let bit = remaining.trailing_zeros() as usize;
+                    let data_pos = word_idx * 64 + bit;
+                    needed_by_rules[data_pos].push(rule_id);
+                    remaining &= remaining - 1;
+                }
             }
         }
-        for rules in index.values_mut() {
-            rules.sort();
-            rules.dedup();
-        }
-        Ok(index)
+        needed_by_rules
     }
 
-    /// Promptable [`DataPath`] for a normal-form data leaf, following ultimate targets
-    /// for data-target references. `None` when the leaf is a rule-target or import
+    /// Promptable [`DataPath`] for a normal-form data leaf, following reference
+    /// chain ends for references. `None` when the leaf is a rule-target or import
     /// reference (not caller-promptable).
     ///
-    /// Data-target references must appear in [`Self::ultimate_reference_targets`].
+    /// Reference paths must appear in [`Self::reference_ends`].
     pub(crate) fn promptable_data_path<'a>(&'a self, path: &'a DataPath) -> Option<&'a DataPath> {
         match self.data.get(path) {
             Some(DataDefinition::Value { .. } | DataDefinition::TypeDeclaration { .. }) => {
                 Some(path)
             }
-            Some(DataDefinition::Reference {
-                target: ReferenceTarget::Data(_),
-                ..
-            }) => match self.ultimate_reference_targets.get(path) {
-                Some(Some(target)) => Some(target),
-                Some(None) => None,
-                None => panic!(
-                    "BUG: data-target reference '{path}' missing from ultimate_reference_targets after planning"
-                ),
+            Some(DataDefinition::Reference { .. }) => match self.reference_ends.get(path) {
+                Some(ReferenceEnd::Promptable(target)) => Some(target),
+                Some(ReferenceEnd::Rule(_) | ReferenceEnd::Import) => None,
+                None => {
+                    panic!("BUG: reference '{path}' missing from reference_ends after planning")
+                }
             },
-            Some(DataDefinition::Reference {
-                target: ReferenceTarget::Rule(_),
-                ..
-            })
-            | Some(DataDefinition::Import { .. }) => None,
+            Some(DataDefinition::Import { .. }) => None,
             None => panic!("BUG: normal-form DataPath leaf absent from plan.data: {path}"),
         }
     }
@@ -903,16 +1003,22 @@ impl ExecutionPlan {
         })
     }
 
+    /// Stamped result type of the cell at `id`.
+    pub(crate) fn result_type(&self, id: NormalFormId) -> &Arc<LemmaType> {
+        &self.normal_form(id).result_type
+    }
+
     /// Data paths a caller can be prompted for, in declaration order.
     ///
     /// A path is promptable when it carries its own value slot: [`DataDefinition::Value`]
     /// (spec prefill, overridable) or [`DataDefinition::TypeDeclaration`] (typed input).
     /// [`DataDefinition::Reference`] paths are not promptable — a data target copies from
-    /// its ultimate target (see [`ExecutionPlan::ultimate_reference_targets`]) and a rule target is
+    /// its ultimate target (see [`ExecutionPlan::reference_ends`]) and a rule target is
     /// computed — and [`DataDefinition::Import`] paths are owned by the imported spec.
     ///
-    /// This is the complete domain of `RuleResult.missing_data`: evaluation subtracts the
-    /// run data from it, and never classifies data definitions itself.
+    /// Domain of keys that may appear in `RuleResult.missing_data` (as a set).
+    /// Evaluation decides which unbound members are live and in what order; this
+    /// iterator does not fix list order.
     pub(crate) fn promptable_data_paths(&self) -> impl Iterator<Item = &DataPath> {
         self.data
             .iter()
@@ -921,68 +1027,104 @@ impl ExecutionPlan {
                 DataDefinition::Reference { .. } | DataDefinition::Import { .. } => None,
             })
     }
-
-    /// Statically-needed data paths for a set of rules (Show).
-    ///
-    /// Every DataPath leaf in the rules' normalized bodies, walking the shared
-    /// DAG (including rule-embed use-sites). Normalize has already removed
-    /// constant-dead unless arms; remaining arms are all included. Overlay-aware
-    /// last-wins pruning for a concrete `run` is done by the tree evaluator into
-    /// per-rule `RuleResult.missing_data` — not here.
-    pub fn collect_needed_data_paths(
-        &self,
-        rule_names: &[String],
-    ) -> Result<HashSet<DataPath>, Error> {
-        let mut needed: HashSet<DataPath> = HashSet::new();
-        for rule_name in rule_names {
-            let rule = self.get_rule(rule_name).ok_or_else(|| {
-                Error::request(
-                    format!(
-                        "Rule '{}' not found in spec '{}'",
-                        rule_name, self.spec_name
-                    ),
-                    None::<String>,
-                )
-            })?;
-            needed.extend(reachable_data_paths(
-                self,
-                rule.normal_form,
-                &HashMap::new(),
-            ));
-        }
-        Ok(needed)
-    }
 }
 
-/// DataPath leaves reachable from `root`, skipping children recorded as dead by their
-/// parent control node in `dead_control_edges`.
+/// DataPath leaves reachable from `root` in evaluator decision-tree preorder.
 ///
-/// `dead_control_edges[parent]` = set of immediate child [`NormalFormId`]s that are dead
-/// given the control decisions recorded during this evaluation. Each child not in that set
-/// is live and will be traversed.
+/// Control liveness is derived from `values` (the evaluation value table):
+/// - [`NormalFormKind::Piecewise`]: arms decided by filled condition slots
+/// - [`NormalFormKind::And`]: right child skipped when left slot is `false`
+/// - [`NormalFormKind::OrderedDispatch`]: only the region for the scrutinee slot
+///
+/// Empty / unfilled slots mean "no decision yet" — all children stay live
+/// (Show's static walk and mid-evaluation MissingData probes).
+///
+/// Order matches the evaluator walk (`tree.rs`): first-seen [`DataPath`] wins
+/// (rule embeds may share a leaf under distinct cell ids). Iterative DFS with
+/// pop-time visited; children pushed in reverse evaluation order.
 pub(crate) fn reachable_data_paths(
     plan: &ExecutionPlan,
     root: NormalFormId,
-    dead_control_edges: &HashMap<NormalFormId, HashSet<NormalFormId>>,
-) -> HashSet<DataPath> {
+    values: &[Option<crate::computation::OperationResult>],
+) -> IndexSet<DataPath> {
+    use crate::computation::OperationResult;
     use crate::planning::normalize::LeafKind;
     use crate::planning::normalize::NormalFormKind;
+    use crate::planning::ordered_dispatch::{
+        dispatch_probe_of, region_for_value, DispatchProbeOutcome,
+    };
 
-    fn push_live_child(
-        child: NormalFormId,
-        parent_dead: Option<&HashSet<NormalFormId>>,
-        visited: &HashSet<NormalFormId>,
-        stack: &mut Vec<NormalFormId>,
-    ) {
-        if parent_dead.is_some_and(|d| d.contains(&child)) {
-            return;
-        }
-        if !visited.contains(&child) {
-            stack.push(child);
+    fn slot_bool(values: &[Option<OperationResult>], id: NormalFormId) -> Option<bool> {
+        match values.get(id.index()).and_then(|s| s.as_ref()) {
+            Some(OperationResult::Value(literal)) => match &literal.value {
+                ValueKind::Boolean(b) => Some(*b),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
-    let mut out = HashSet::new();
+    fn slot_value_kind(values: &[Option<OperationResult>], id: NormalFormId) -> Option<&ValueKind> {
+        match values.get(id.index()).and_then(|s| s.as_ref()) {
+            Some(OperationResult::Value(literal)) => Some(&literal.value),
+            _ => None,
+        }
+    }
+
+    /// Push Piecewise children that are live given filled condition slots.
+    /// Evaluation order: cond_n, body_n, …, cond_1, body_1, default.
+    /// Push reverse so pop yields that order.
+    fn push_piecewise_live(
+        arms: &[(NormalFormId, NormalFormId)],
+        values: &[Option<OperationResult>],
+        stack: &mut Vec<NormalFormId>,
+    ) {
+        assert!(!arms.is_empty(), "BUG: empty piecewise");
+        // Decide from high to low (same as evaluate_piecewise).
+        let mut taken: Option<usize> = None;
+        for i in (1..arms.len()).rev() {
+            match slot_bool(values, arms[i].0) {
+                Some(true) => {
+                    taken = Some(i);
+                    break;
+                }
+                Some(false) => continue,
+                None => break,
+            }
+        }
+
+        match taken {
+            Some(i) => {
+                // Live: false conditions above i, condition i, body i.
+                stack.push(arms[i].1);
+                stack.push(arms[i].0);
+                for (cond, _) in arms.iter().skip(i + 1) {
+                    stack.push(*cond);
+                }
+            }
+            None => {
+                // Default wins (all conditions false), or a condition yielded
+                // MissingData/veto without recording dead edges — all arms live
+                // (same as the old empty dead_control_edges set), or no decisions.
+                let default_wins =
+                    (1..arms.len()).all(|i| matches!(slot_bool(values, arms[i].0), Some(false)));
+                if default_wins {
+                    stack.push(arms[0].1);
+                    for (cond, _) in arms.iter().skip(1) {
+                        stack.push(*cond);
+                    }
+                } else {
+                    stack.push(arms[0].1);
+                    for (cond, body) in arms.iter().skip(1) {
+                        stack.push(*body);
+                        stack.push(*cond);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = IndexSet::new();
     let mut visited = HashSet::new();
     let mut stack = vec![root];
 
@@ -991,7 +1133,6 @@ pub(crate) fn reachable_data_paths(
             continue;
         }
         let nf = plan.normal_form(id);
-        let dead_here = dead_control_edges.get(&id);
         match &nf.kind {
             NormalFormKind::Leaf(LeafKind::DataPath(path)) => {
                 out.insert(path.clone());
@@ -999,11 +1140,19 @@ pub(crate) fn reachable_data_paths(
             NormalFormKind::Leaf(LeafKind::Literal(_))
             | NormalFormKind::Now
             | NormalFormKind::Veto(_) => {}
-            NormalFormKind::Sum(children)
-            | NormalFormKind::Product(children)
-            | NormalFormKind::And(children) => {
-                for child in children {
-                    push_live_child(*child, dead_here, &visited, &mut stack);
+            NormalFormKind::Sum(children) | NormalFormKind::Product(children) => {
+                for child in children.iter().rev() {
+                    stack.push(*child);
+                }
+            }
+            NormalFormKind::And(children) => {
+                // Left false → right dead. Otherwise both live.
+                if children.len() >= 2 && matches!(slot_bool(values, children[0]), Some(false)) {
+                    stack.push(children[0]);
+                } else {
+                    for child in children.iter().rev() {
+                        stack.push(*child);
+                    }
                 }
             }
             NormalFormKind::Subtract(a, b)
@@ -1013,8 +1162,8 @@ pub(crate) fn reachable_data_paths(
             | NormalFormKind::Comparison(a, _, b)
             | NormalFormKind::RangeLiteral(a, b)
             | NormalFormKind::RangeContainment(a, b) => {
-                push_live_child(*a, dead_here, &visited, &mut stack);
-                push_live_child(*b, dead_here, &visited, &mut stack);
+                stack.push(*b);
+                stack.push(*a);
             }
             NormalFormKind::Negate(x)
             | NormalFormKind::Reciprocal(x)
@@ -1025,21 +1174,73 @@ pub(crate) fn reachable_data_paths(
             | NormalFormKind::DateCalendar(_, _, x)
             | NormalFormKind::PastFutureRange(_, x)
             | NormalFormKind::ResultIsVeto(x) => {
-                push_live_child(*x, dead_here, &visited, &mut stack);
+                stack.push(*x);
             }
             NormalFormKind::Piecewise(arms) => {
-                for (cond, body) in arms {
-                    push_live_child(*cond, dead_here, &visited, &mut stack);
-                    push_live_child(*body, dead_here, &visited, &mut stack);
-                }
+                push_piecewise_live(arms, values, &mut stack);
             }
             NormalFormKind::OrderedDispatch {
-                scrutinee, regions, ..
+                scrutinee,
+                boundaries,
+                regions,
             } => {
-                push_live_child(*scrutinee, dead_here, &visited, &mut stack);
-                for region in regions {
-                    push_live_child(*region, dead_here, &visited, &mut stack);
+                let origin_id = match nf.origin {
+                    Some(origin) => origin,
+                    None => {
+                        let embed_path = nf.rule_embed.as_ref().unwrap_or_else(|| {
+                            panic!("BUG: OrderedDispatch without origin must carry rule_embed")
+                        });
+                        let body_id = plan
+                            .rules
+                            .get(embed_path)
+                            .unwrap_or_else(|| {
+                                panic!("BUG: rule embed '{embed_path}' missing from plan.rules")
+                            })
+                            .normal_form;
+                        plan.normal_form(body_id).origin.unwrap_or_else(|| {
+                            panic!(
+                                "BUG: OrderedDispatch body for '{embed_path}' must have Piecewise origin"
+                            )
+                        })
+                    }
+                };
+                let origin_nf = plan.normal_form(origin_id);
+                let NormalFormKind::Piecewise(arms) = &origin_nf.kind else {
+                    panic!("BUG: OrderedDispatch origin must be Piecewise");
+                };
+                visited.insert(origin_id);
+
+                // Scrutinee always live.
+                stack.push(*scrutinee);
+
+                if let Some(scrutinee_kind) = slot_value_kind(values, *scrutinee) {
+                    match dispatch_probe_of(scrutinee_kind) {
+                        DispatchProbeOutcome::Probe(probe) => {
+                            if let Ok(region) = region_for_value(boundaries, &probe) {
+                                // Only selected region body + Piecewise conditions for order.
+                                let selected = regions[region];
+                                // Push conditions from origin (all evaluated conceptually via table).
+                                for (cond, body) in arms.iter().skip(1).rev() {
+                                    if *body == selected {
+                                        stack.push(*body);
+                                        stack.push(*cond);
+                                        // Higher conditions that were false
+                                    } else {
+                                        stack.push(*cond);
+                                    }
+                                }
+                                if arms[0].1 == selected {
+                                    stack.push(arms[0].1);
+                                }
+                                continue;
+                            }
+                        }
+                        DispatchProbeOutcome::CalendarFailure(_)
+                        | DispatchProbeOutcome::Unsupported => {}
+                    }
                 }
+                // No decision: all Piecewise origin children live.
+                push_piecewise_live(arms, &[], &mut stack);
             }
         }
     }
@@ -1051,9 +1252,7 @@ pub(crate) fn validate_value_against_type(
     value: &LiteralValue,
     unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> Result<(), String> {
-    use crate::computation::rational::{
-        checked_mul, rational_new, try_pow_i32, BigInt, RationalInteger,
-    };
+    use crate::computation::rational::{checked_mul, rational_new, try_pow_i32, RationalInteger};
     use crate::planning::semantics::TypeSpecification;
 
     fn exceeds_decimal_places(magnitude: &RationalInteger, max_decimals: u8) -> bool {
@@ -1066,7 +1265,7 @@ pub(crate) fn validate_value_against_type(
             Err(_) => return true,
         };
         match RationalInteger::try_reduce_ref(&scaled) {
-            Ok(reduced) => *reduced.denom() != BigInt::one(),
+            Ok(reduced) => !reduced.is_integer(),
             Err(_) => true,
         }
     }
@@ -1126,14 +1325,26 @@ pub(crate) fn validate_value_against_type(
                 units,
                 ..
             },
-            ValueKind::Measure(magnitude, signature),
+            ValueKind::Measure(magnitude),
         ) => {
             use crate::computation::rational::checked_div;
             use crate::planning::semantics::measure_declared_bound_to_canonical;
-            let unit = signature
-                .first()
-                .map(|(n, _)| n.as_str())
-                .expect("BUG: Measure value has empty signature in execution plan validation");
+            let unit = expected_type
+                .measure_binding_unit
+                .as_deref()
+                .or_else(|| {
+                    units
+                        .iter()
+                        .find(|u| u.is_canonical_factor())
+                        .or_else(|| units.iter().next())
+                        .map(|u| u.name.as_str())
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "measure type '{}' has no declared units for validation",
+                        expected_type.name()
+                    )
+                })?;
             let measure_unit = units.get(unit)?;
             let factor = &measure_unit.factor;
             let in_unit = checked_div(magnitude, factor).map_err(|failure| {
@@ -1231,12 +1442,17 @@ pub(crate) fn validate_value_against_type(
                 units,
                 ..
             },
-            ValueKind::Ratio(r, unit_name),
+            ValueKind::Ratio(r),
         ) => {
             use crate::computation::rational::checked_mul;
 
+            let primary_unit = expected_type
+                .measure_binding_unit
+                .as_deref()
+                .or_else(|| expected_type.ratio_primary_unit());
+
             if let Some(d) = decimals {
-                let magnitude_for_decimals = match unit_name.as_deref() {
+                let magnitude_for_decimals = match primary_unit {
                     Some(unit) => {
                         let ratio_unit = units.get(unit)?;
                         checked_mul(r, &ratio_unit.value).map_err(|failure| failure.to_string())?
@@ -1252,7 +1468,7 @@ pub(crate) fn validate_value_against_type(
             }
             if let Some(type_minimum) = minimum {
                 if r < type_minimum {
-                    let message = match unit_name.as_deref() {
+                    let message = match primary_unit {
                         Some(unit) => {
                             let ratio_unit = units.get(unit)?;
                             let value_per_unit = checked_mul(r, &ratio_unit.value)
@@ -1283,7 +1499,7 @@ pub(crate) fn validate_value_against_type(
             }
             if let Some(type_maximum) = maximum {
                 if r > type_maximum {
-                    let message = match unit_name.as_deref() {
+                    let message = match primary_unit {
                         Some(unit) => {
                             let ratio_unit = units.get(unit)?;
                             let value_per_unit = checked_mul(r, &ratio_unit.value)
@@ -1456,11 +1672,9 @@ fn validate_range_literal(
     let element_type = Arc::new(LemmaType::primitive(element_spec));
     let left = LiteralValue {
         value: left.value.clone(),
-        lemma_type: Arc::clone(&element_type),
     };
     let right = LiteralValue {
         value: right.value.clone(),
-        lemma_type: Arc::clone(&element_type),
     };
     validate_value_against_type(element_type.as_ref(), &left, unit_index)?;
     validate_value_against_type(element_type.as_ref(), &right, unit_index)?;
@@ -1469,15 +1683,8 @@ fn validate_range_literal(
         (ValueKind::Number(l), ValueKind::Number(r)) => l.cmp(r),
         (ValueKind::Date(l), ValueKind::Date(r)) => compare_semantic_dates(l, r),
         (ValueKind::Time(l), ValueKind::Time(r)) => compare_semantic_times(l, r),
-        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => l.cmp(r),
-        (ValueKind::Measure(l, ls), ValueKind::Measure(r, rs)) => {
-            if ls != rs {
-                unreachable!(
-                    "BUG: range endpoints have mismatched unit signatures after typing: {ls:?} vs {rs:?}"
-                );
-            }
-            l.cmp(r)
-        }
+        (ValueKind::Ratio(l), ValueKind::Ratio(r)) => l.cmp(r),
+        (ValueKind::Measure(l), ValueKind::Measure(r)) => l.cmp(r),
         (left_kind, right_kind) => unreachable!(
             "BUG: range endpoints have mismatched value kinds after typing: {left_kind:?} vs {right_kind:?}"
         ),
@@ -1490,17 +1697,20 @@ fn validate_range_literal(
 
     let range_lit = LiteralValue {
         value: ValueKind::Range(Box::new(left.clone()), Box::new(right.clone())),
-        lemma_type: Arc::new(expected_type.clone()),
     };
+    let range_type = Arc::new(expected_type.clone());
 
     let compare_width = |bound: &LiteralValue,
+                         bound_type: &Arc<LemmaType>,
                          op: ComparisonComputation,
                          fail_msg: String|
      -> Result<(), String> {
         match comparison_operation(
             &range_lit,
+            &range_type,
             &op,
             bound,
+            bound_type,
             UnitResolutionContext::WithIndex(unit_index),
         ) {
             OperationResult::Value(result) => match &result.value {
@@ -1519,6 +1729,7 @@ fn validate_range_literal(
             if let Some(min_w) = minimum {
                 compare_width(
                     &LiteralValue::number(min_w.clone()),
+                    crate::planning::semantics::primitive_number_arc(),
                     ComparisonComputation::GreaterThanOrEqual,
                     format!("span is below minimum width {}", min_w.display_str()),
                 )?;
@@ -1526,6 +1737,7 @@ fn validate_range_literal(
             if let Some(max_w) = maximum {
                 compare_width(
                     &LiteralValue::number(max_w.clone()),
+                    crate::planning::semantics::primitive_number_arc(),
                     ComparisonComputation::LessThanOrEqual,
                     format!("span is above maximum width {}", max_w.display_str()),
                 )?;
@@ -1536,14 +1748,16 @@ fn validate_range_literal(
         } => {
             if let Some(min_w) = minimum {
                 compare_width(
-                    &LiteralValue::ratio(min_w.clone(), None),
+                    &LiteralValue::ratio(min_w.clone()),
+                    crate::planning::semantics::primitive_ratio_arc(),
                     ComparisonComputation::GreaterThanOrEqual,
                     format!("span is below minimum width {}", min_w.display_str()),
                 )?;
             }
             if let Some(max_w) = maximum {
                 compare_width(
-                    &LiteralValue::ratio(max_w.clone(), None),
+                    &LiteralValue::ratio(max_w.clone()),
+                    crate::planning::semantics::primitive_ratio_arc(),
                     ComparisonComputation::LessThanOrEqual,
                     format!("span is above maximum width {}", max_w.display_str()),
                 )?;
@@ -1559,13 +1773,10 @@ fn validate_range_literal(
                 let canonical = measure_declared_bound_to_canonical(
                     &min_w.0, &min_w.1, units, "range", "minimum",
                 )?;
-                let bound = LiteralValue::measure_with_type(
-                    canonical,
-                    min_w.1.clone(),
-                    Arc::clone(&element_type),
-                );
+                let bound = LiteralValue::measure_with_type(canonical, Arc::clone(&element_type));
                 compare_width(
                     &bound,
+                    &element_type,
                     ComparisonComputation::GreaterThanOrEqual,
                     format!(
                         "span is below minimum width {} {}",
@@ -1578,13 +1789,10 @@ fn validate_range_literal(
                 let canonical = measure_declared_bound_to_canonical(
                     &max_w.0, &max_w.1, units, "range", "maximum",
                 )?;
-                let bound = LiteralValue::measure_with_type(
-                    canonical,
-                    max_w.1.clone(),
-                    Arc::clone(&element_type),
-                );
+                let bound = LiteralValue::measure_with_type(canonical, Arc::clone(&element_type));
                 compare_width(
                     &bound,
+                    &element_type,
                     ComparisonComputation::LessThanOrEqual,
                     format!(
                         "span is above maximum width {} {}",
@@ -1604,7 +1812,7 @@ fn validate_range_literal(
             let resolve_bound =
                 |bound: &(crate::computation::rational::RationalInteger, String),
                  command: &str|
-                 -> Result<LiteralValue, String> {
+                 -> Result<(LiteralValue, Arc<LemmaType>), String> {
                     let (bare, owner) = unit_index
                         .resolve(bound.1.as_str())
                         .map_err(|err| format!("{command} width unit '{}': {err}", bound.1))?;
@@ -1632,16 +1840,16 @@ fn validate_range_literal(
                         type_name.as_str(),
                         command,
                     )?;
-                    Ok(LiteralValue::measure_with_type(
-                        canonical,
-                        bare,
+                    Ok((
+                        LiteralValue::measure_with_type(canonical, Arc::clone(&owner)),
                         Arc::clone(&owner),
                     ))
                 };
             if let Some(min_w) = minimum {
-                let bound = resolve_bound(min_w, "minimum")?;
+                let (bound, bound_type) = resolve_bound(min_w, "minimum")?;
                 compare_width(
                     &bound,
+                    &bound_type,
                     ComparisonComputation::GreaterThanOrEqual,
                     format!(
                         "span is below minimum width {} {}",
@@ -1651,9 +1859,10 @@ fn validate_range_literal(
                 )?;
             }
             if let Some(max_w) = maximum {
-                let bound = resolve_bound(max_w, "maximum")?;
+                let (bound, bound_type) = resolve_bound(max_w, "maximum")?;
                 compare_width(
                     &bound,
+                    &bound_type,
                     ComparisonComputation::LessThanOrEqual,
                     format!(
                         "span is above maximum width {} {}",
@@ -1674,7 +1883,11 @@ fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<Error> {
 
     for (data_path, data_definition) in &plan.data {
         let (expected_type, lit) = match data_definition {
-            DataDefinition::Value { value, .. } => (&value.lemma_type, value),
+            DataDefinition::Value {
+                value,
+                resolved_type,
+                ..
+            } => (resolved_type, value),
             DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Import { .. }
             | DataDefinition::Reference { .. } => continue,
@@ -1701,95 +1914,39 @@ fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<Error> {
 }
 
 fn validate_unit_conversion_targets(plan: &ExecutionPlan) -> Result<(), Error> {
-    use crate::planning::normalize::NormalFormKind;
-
-    fn walk(
-        plan: &ExecutionPlan,
-        id: NormalFormId,
-        errors: &mut Vec<Error>,
-        visited: &mut HashSet<NormalFormId>,
-        spec_name: &str,
-    ) {
-        if !visited.insert(id) {
-            return;
-        }
-        let nf = plan.normal_form(id);
-        match &nf.kind {
-            NormalFormKind::UnitConversion(inner, target) => {
-                if let Some((unit_name, owning_type)) =
-                    crate::computation::units::conversion_target_declares_unit(target)
-                {
-                    if !crate::computation::units::owning_type_declares_unit_name(
-                        owning_type.as_ref(),
-                        unit_name,
-                    ) {
-                        errors.push(Error::validation(
-                            format!(
-                                "Unit conversion target '{unit_name}' is not declared on owning type '{}'",
-                                owning_type.name()
-                            ),
-                            None::<Source>,
-                            Some(spec_name.to_string()),
-                        ));
-                    }
-                }
-                walk(plan, *inner, errors, visited, spec_name);
-            }
-            NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => {}
-            NormalFormKind::Sum(children)
-            | NormalFormKind::Product(children)
-            | NormalFormKind::And(children) => {
-                for child in children {
-                    walk(plan, *child, errors, visited, spec_name);
-                }
-            }
-            NormalFormKind::Subtract(a, b)
-            | NormalFormKind::Divide(a, b)
-            | NormalFormKind::Power(a, b)
-            | NormalFormKind::Modulo(a, b)
-            | NormalFormKind::Comparison(a, _, b)
-            | NormalFormKind::RangeLiteral(a, b)
-            | NormalFormKind::RangeContainment(a, b) => {
-                walk(plan, *a, errors, visited, spec_name);
-                walk(plan, *b, errors, visited, spec_name);
-            }
-            NormalFormKind::Negate(x)
-            | NormalFormKind::Reciprocal(x)
-            | NormalFormKind::Not(x)
-            | NormalFormKind::MathOp(_, x)
-            | NormalFormKind::DateRelative(_, x)
-            | NormalFormKind::DateCalendar(_, _, x)
-            | NormalFormKind::PastFutureRange(_, x)
-            | NormalFormKind::ResultIsVeto(x) => {
-                walk(plan, *x, errors, visited, spec_name);
-            }
-            NormalFormKind::Piecewise(arms) => {
-                for (condition, result) in arms.iter() {
-                    walk(plan, *condition, errors, visited, spec_name);
-                    walk(plan, *result, errors, visited, spec_name);
-                }
-            }
-            NormalFormKind::OrderedDispatch {
-                scrutinee, regions, ..
-            } => {
-                walk(plan, *scrutinee, errors, visited, spec_name);
-                for region in regions.iter() {
-                    walk(plan, *region, errors, visited, spec_name);
-                }
-            }
-        }
-    }
+    use crate::planning::normalize::{push_child_ids, NormalFormKind};
 
     let mut errors: Vec<Error> = Vec::new();
     let mut visited = HashSet::new();
-    for rule in plan.rules.values() {
-        walk(
-            plan,
-            rule.normal_form,
-            &mut errors,
-            &mut visited,
-            &plan.spec_name,
-        );
+    let mut worklist: Vec<NormalFormId> =
+        plan.rules.values().map(|rule| rule.normal_form).collect();
+    while let Some(id) = worklist.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let nf = plan.normal_form(id);
+        if let NormalFormKind::UnitConversion(inner, target) = &nf.kind {
+            if let Some((unit_name, owning_type)) =
+                crate::computation::units::conversion_target_declares_unit(target)
+            {
+                if !crate::computation::units::owning_type_declares_unit_name(
+                    owning_type.as_ref(),
+                    unit_name,
+                ) {
+                    errors.push(Error::validation(
+                        format!(
+                            "Unit conversion target '{unit_name}' is not declared on owning type '{}'",
+                            owning_type.name()
+                        ),
+                        None::<Source>,
+                        Some(plan.spec_name.clone()),
+                    ));
+                }
+            }
+            worklist.push(*inner);
+        } else {
+            push_child_ids(&nf.kind, &mut worklist);
+        }
     }
     if let Some(error) = errors.into_iter().next() {
         return Err(error);
@@ -2019,10 +2176,13 @@ mod tests {
                     rational_new(0, 1),
                     Arc::new(max10.clone()),
                 ),
+                resolved_type: Arc::new(max10.clone()),
                 source: source.clone(),
             },
         );
 
+        let input_key_index = data.keys().map(|p| (p.input_key(), p.clone())).collect();
+        let data_len = data.len();
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
             commentary: None,
@@ -2032,16 +2192,20 @@ mod tests {
             data_reference_order: Vec::new(),
             meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
-            signature_index: HashMap::new(),
+            family_units: FamilyUnitCatalog::default(),
+            signature_index: IndexMap::new(),
             effective: EffectiveDate::Origin,
             effective_from: None,
             effective_to: None,
-            versions: Vec::new(),
+            versions: std::sync::Arc::from([]),
             start_line: 1,
             source_type: None,
-            needed_by_rules: HashMap::new(),
+            needed_by_rules: vec![Vec::new(); data_len],
             data_display: IndexMap::new(),
-            ultimate_reference_targets: HashMap::new(),
+            show_rule_types: IndexMap::new(),
+            reference_ends: IndexMap::new(),
+            input_key_index,
+            data_leaf: IndexMap::new(),
         };
 
         let values = input_data(&[("x", "11")]);
@@ -2087,10 +2251,13 @@ mod tests {
                     "silver".to_string(),
                     Arc::new(tier.clone()),
                 ),
+                resolved_type: Arc::new(tier.clone()),
                 source,
             },
         );
 
+        let input_key_index = data.keys().map(|p| (p.input_key(), p.clone())).collect();
+        let data_len = data.len();
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
             commentary: None,
@@ -2100,16 +2267,20 @@ mod tests {
             data_reference_order: Vec::new(),
             meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
-            signature_index: HashMap::new(),
+            family_units: FamilyUnitCatalog::default(),
+            signature_index: IndexMap::new(),
             effective: EffectiveDate::Origin,
             effective_from: None,
             effective_to: None,
-            versions: Vec::new(),
+            versions: std::sync::Arc::from([]),
             start_line: 1,
             source_type: None,
-            needed_by_rules: HashMap::new(),
+            needed_by_rules: vec![Vec::new(); data_len],
             data_display: IndexMap::new(),
-            ultimate_reference_targets: HashMap::new(),
+            show_rule_types: IndexMap::new(),
+            reference_ends: IndexMap::new(),
+            input_key_index,
+            data_leaf: IndexMap::new(),
         };
 
         let values = input_data(&[("tier", "platinum")]);
@@ -2165,13 +2336,15 @@ mod tests {
             crate::planning::semantics::DataDefinition::Value {
                 value: crate::planning::semantics::LiteralValue::measure_with_type(
                     rational_zero(),
-                    "eur".to_string(),
                     Arc::new(money.clone()),
                 ),
+                resolved_type: Arc::new(money.clone()),
                 source,
             },
         );
 
+        let input_key_index = data.keys().map(|p| (p.input_key(), p.clone())).collect();
+        let data_len = data.len();
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
             commentary: None,
@@ -2181,16 +2354,20 @@ mod tests {
             data_reference_order: Vec::new(),
             meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
-            signature_index: HashMap::new(),
+            family_units: FamilyUnitCatalog::default(),
+            signature_index: IndexMap::new(),
             effective: EffectiveDate::Origin,
             effective_from: None,
             effective_to: None,
-            versions: Vec::new(),
+            versions: std::sync::Arc::from([]),
             start_line: 1,
             source_type: None,
-            needed_by_rules: HashMap::new(),
+            needed_by_rules: vec![Vec::new(); data_len],
             data_display: IndexMap::new(),
-            ultimate_reference_targets: HashMap::new(),
+            show_rule_types: IndexMap::new(),
+            reference_ends: IndexMap::new(),
+            input_key_index,
+            data_leaf: IndexMap::new(),
         };
 
         let values = input_data(&[("price", "1.234 eur")]);
@@ -2217,16 +2394,20 @@ mod tests {
             data_reference_order: Vec::new(),
             meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
-            signature_index: HashMap::new(),
+            family_units: FamilyUnitCatalog::default(),
+            signature_index: IndexMap::new(),
             effective,
             effective_from: None,
             effective_to: None,
-            versions: Vec::new(),
+            versions: std::sync::Arc::from([]),
             start_line: 1,
             source_type: None,
-            needed_by_rules: HashMap::new(),
+            needed_by_rules: Vec::new(),
             data_display: IndexMap::new(),
-            ultimate_reference_targets: HashMap::new(),
+            show_rule_types: IndexMap::new(),
+            reference_ends: IndexMap::new(),
+            input_key_index: IndexMap::new(),
+            data_leaf: IndexMap::new(),
         }
     }
 
@@ -2436,7 +2617,8 @@ mod tests {
         let now = DateTimeValue::now();
         let schema = engine.show(None, "pricing", Some(&now)).unwrap();
 
-        let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
+        let value: serde_json::Value =
+            serde_json::to_value(crate::api::Show::from(&schema)).unwrap();
 
         let bh = &value["data"]["bridge_height"];
         assert!(
@@ -2452,8 +2634,8 @@ mod tests {
             "bridge_height exposes `-> suggest` as schema suggestion"
         );
         assert!(
-            bh.get("prefilled").is_none(),
-            "bridge_height is not prefilled from spec"
+            bh.get("fill").is_none(),
+            "bridge_height is not filled from spec"
         );
 
         let ty = &bh["type"];
@@ -2477,8 +2659,8 @@ mod tests {
             "quantity has no suggestion"
         );
         assert!(
-            quantity.get("prefilled").is_none(),
-            "quantity has no prefilled literal"
+            quantity.get("fill").is_none(),
+            "quantity has no fill literal"
         );
 
         let cost = &value["rules"]["cost"];
@@ -2521,7 +2703,8 @@ mod tests {
             .unwrap();
         let now = DateTimeValue::now();
         let schema = engine.show(None, "units_contract", Some(&now)).unwrap();
-        let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
+        let value: serde_json::Value =
+            serde_json::to_value(crate::api::Show::from(&schema)).unwrap();
 
         let money_units = &value["data"]["money"]["type"]["units"];
         assert!(money_units.is_array() && !money_units.as_array().unwrap().is_empty());
@@ -2586,9 +2769,10 @@ mod tests {
         let now = DateTimeValue::now();
         let schema = engine.show(None, "s", Some(&now)).unwrap();
 
-        let json = serde_json::to_string(&schema).unwrap();
-        let round_tripped: Show = serde_json::from_str(&json).unwrap();
-        assert_eq!(schema, round_tripped);
+        let api_show = crate::api::Show::from(&schema);
+        let json = serde_json::to_string(&api_show).unwrap();
+        let round_tripped: crate::api::Show = serde_json::from_str(&json).unwrap();
+        assert_eq!(api_show, round_tripped);
     }
 
     const COST_PRICE_SPEC: &str = r#"
@@ -3125,16 +3309,17 @@ rule band: allowed_band
         };
         for (label, endpoint) in [("left", left), ("right", right)] {
             assert!(
-                !matches!(
-                    &endpoint.lemma_type.specifications,
-                    TypeSpecification::Measure { .. }
+                matches!(
+                    &endpoint.value,
+                    crate::planning::semantics::ValueKind::Ratio(_)
                 ),
-                "{label} endpoint must not be lifted as Measure for a percent literal in a ratio range default",
+                "{label} endpoint must be Ratio for a percent literal in a ratio range default, got {:?}",
+                endpoint.value
             );
             assert!(
                 matches!(
                     &endpoint.value,
-                    crate::planning::semantics::ValueKind::Ratio(_, _)
+                    crate::planning::semantics::ValueKind::Ratio(_)
                 ),
                 "{label} endpoint ValueKind must be Ratio (got {:?})",
                 endpoint.value

@@ -27,7 +27,7 @@ public record Response(
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  public static Response read(JsonParser p) throws IOException {
+  static Response read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "Response");
     String spec = null;
     String effective = null;

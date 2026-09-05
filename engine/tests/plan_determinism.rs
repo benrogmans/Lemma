@@ -64,7 +64,7 @@ fn repeated_load_produces_identical_json_responses() {
                 true,
             )
             .unwrap();
-        let json = serde_json::to_string_pretty(&response).unwrap();
+        let json = serde_json::to_string_pretty(&lemma::api::Response::from(&response)).unwrap();
         jsons.push(json);
     }
 
@@ -87,7 +87,7 @@ fn repeated_show_is_identical() {
             .load([(lemma::SourceType::Volatile, SPEC.to_string())])
             .unwrap();
         let show = engine.show(None, "determinism_test", Some(&eff)).unwrap();
-        let json = serde_json::to_string_pretty(&show).unwrap();
+        let json = serde_json::to_string_pretty(&lemma::api::Show::from(&show)).unwrap();
         shows.push(json);
     }
 
@@ -95,6 +95,24 @@ fn repeated_show_is_identical() {
         assert_eq!(
             &shows[0], show_json,
             "Show run 0 vs run {i} produced different JSON"
+        );
+    }
+}
+
+#[test]
+fn repeated_load_produces_identical_snapshot_bytes() {
+    let mut snapshots = Vec::new();
+    for _ in 0..5 {
+        let mut engine = Engine::new();
+        engine
+            .load([(lemma::SourceType::Volatile, SPEC.to_string())])
+            .unwrap();
+        snapshots.push(engine.snapshot().expect("snapshot"));
+    }
+    for (i, bytes) in snapshots.iter().enumerate().skip(1) {
+        assert_eq!(
+            &snapshots[0], bytes,
+            "snapshot run 0 vs run {i} produced different bytes"
         );
     }
 }

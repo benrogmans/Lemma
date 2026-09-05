@@ -1,5 +1,6 @@
 //! Fallible signed arbitrary-precision integers.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
@@ -7,7 +8,7 @@ use std::str::FromStr;
 use super::alloc::AllocError;
 use super::biguint::BigUint;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Sign {
     Minus = -1,
     Zero = 0,
@@ -18,6 +19,35 @@ pub enum Sign {
 pub struct BigInt {
     sign: Sign,
     magnitude: BigUint,
+}
+
+impl Serialize for BigInt {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.sign, &self.magnitude).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BigInt {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (sign, magnitude) = <(Sign, BigUint)>::deserialize(deserializer)?;
+        match sign {
+            Sign::Zero => {
+                if !magnitude.is_zero() {
+                    return Err(serde::de::Error::custom(
+                        "BigInt Sign::Zero requires zero magnitude",
+                    ));
+                }
+            }
+            Sign::Plus | Sign::Minus => {
+                if magnitude.is_zero() {
+                    return Err(serde::de::Error::custom(
+                        "BigInt non-zero sign requires non-zero magnitude",
+                    ));
+                }
+            }
+        }
+        Ok(Self { sign, magnitude })
+    }
 }
 
 impl BigInt {
@@ -372,5 +402,44 @@ impl FromStr for BigInt {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from_str_radix(s, 10)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serde_round_trip_negative() {
+        let value = BigInt::from_i128(-1_000_000_000_000_000_000_000);
+        let bytes = serde_json::to_vec(&value).expect("serialize");
+        let restored: BigInt = serde_json::from_slice(&bytes).expect("deserialize");
+        assert_eq!(restored, value);
+    }
+
+    #[test]
+    fn serde_rejects_zero_sign_with_nonzero_magnitude() {
+        let magnitude = BigUint::try_from_u32(1).unwrap();
+        let payload = serde_json::to_vec(&(&Sign::Zero, &magnitude)).unwrap();
+        match serde_json::from_slice::<BigInt>(&payload) {
+            Ok(_) => panic!("zero sign with magnitude must fail"),
+            Err(err) => assert!(
+                err.to_string().contains("Sign::Zero"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn serde_rejects_nonzero_sign_with_zero_magnitude() {
+        let magnitude = BigUint::zero();
+        let payload = serde_json::to_vec(&(&Sign::Plus, &magnitude)).unwrap();
+        match serde_json::from_slice::<BigInt>(&payload) {
+            Ok(_) => panic!("nonzero sign with zero magnitude must fail"),
+            Err(err) => assert!(
+                err.to_string().contains("non-zero magnitude"),
+                "unexpected error: {err}"
+            ),
+        }
     }
 }

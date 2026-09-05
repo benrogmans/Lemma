@@ -55,9 +55,9 @@ rule has_discount:
 - Reference members: `alias.field` or `alias.rule_name`.
 - Under `uses`, `  -> with path: value` sets imported data (path relative to imported spec). Do not use `data alias.field`. Standalone `with alias.field: …` is deprecated (still parses; `quality` recommends block form). Local slots use `data`.
 
-**LemmaBase: shared specs from the registry**
+**LemmaBase: shared repositories**
 
-Specs on [LemmaBase.com](https://lemmabase.com) imported with `@` repo qualifiers. Search: [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (e.g. `?q=finance`).
+Repositories on [LemmaBase.com](https://lemmabase.com) imported with `@` repo qualifiers. Search: [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (e.g. `?q=finance`).
 
 ```lemma
 spec invoicing
@@ -81,10 +81,10 @@ rule total:
 ```
 
 Forms:
-- `uses @user/repo spec_name`: import registry spec (alias = spec name)
+- `uses @user/repo spec_name`: import LemmaBase spec (alias = spec name)
 - `uses alias: @user/repo spec_name`: import with alias (`iso.field`)
 - `uses @user/repo spec_name 2026-01-01`: pin effective date
 
-Reference imported members: `iso.code`. Detail: [LemmaBase Registry](https://lemma.run/reference/registry).
+Reference imported members: `iso.code`. Detail: [LemmaBase](https://lemma.run/reference/registry).
 
 `repo` blocks namespace specs across contexts (e.g., `repo accounting`). Skip unless asked. Details: [Composing specs](https://lemma.run/learn/composing_specs).

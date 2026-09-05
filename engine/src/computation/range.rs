@@ -1,76 +1,140 @@
+use std::sync::Arc;
+
 use crate::computation::arithmetic::SignatureIndex;
 use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::{rational_abs, rational_zero, RationalInteger};
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, LiteralValue, ValueKind,
+    ArithmeticComputation, ComparisonComputation, LemmaType, LiteralValue, ValueKind,
 };
-pub fn compute_span(left: &LiteralValue, right: &LiteralValue) -> OperationResult {
-    absolute_span(compute_signed_span(left, right))
+
+pub fn compute_span(
+    left: &LiteralValue,
+    left_type: &Arc<LemmaType>,
+    right: &LiteralValue,
+    right_type: &Arc<LemmaType>,
+) -> OperationResult {
+    let (signed, span_type) = compute_signed_span(left, left_type, right, right_type);
+    absolute_span(signed, &span_type)
 }
 
-fn compute_signed_span(left: &LiteralValue, right: &LiteralValue) -> OperationResult {
+/// Result type of a range span derived from the range's LemmaType.
+pub fn span_result_type(range_type: &LemmaType) -> Arc<LemmaType> {
+    if range_type.is_date_range() || range_type.is_time_range() {
+        return Arc::new(LemmaType::anonymous_for_decomposition(
+            crate::planning::semantics::duration_decomposition(),
+        ));
+    }
+    range_type
+        .specifications
+        .element_from_range()
+        .map(|element| Arc::new(LemmaType::primitive(element)))
+        .unwrap_or_else(|| Arc::new(range_type.clone()))
+}
+
+fn compute_signed_span(
+    left: &LiteralValue,
+    left_type: &Arc<LemmaType>,
+    right: &LiteralValue,
+    right_type: &Arc<LemmaType>,
+) -> (OperationResult, Arc<LemmaType>) {
     match (&left.value, &right.value) {
         (ValueKind::Date(left_date), ValueKind::Date(right_date)) => {
             let left_chrono = match super::datetime::semantic_datetime_to_chrono(left_date) {
                 Ok(d) => d,
-                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+                Err(msg) => {
+                    return (
+                        OperationResult::Veto(VetoType::computation(msg)),
+                        Arc::clone(left_type),
+                    )
+                }
             };
             let right_chrono = match super::datetime::semantic_datetime_to_chrono(right_date) {
                 Ok(d) => d,
-                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+                Err(msg) => {
+                    return (
+                        OperationResult::Veto(VetoType::computation(msg)),
+                        Arc::clone(left_type),
+                    )
+                }
             };
-            compute_elapsed_duration_span(left_chrono, right_chrono)
+            (
+                compute_elapsed_duration_span(left_chrono, right_chrono),
+                Arc::new(LemmaType::anonymous_for_decomposition(
+                    crate::planning::semantics::duration_decomposition(),
+                )),
+            )
         }
         (ValueKind::Time(left_time), ValueKind::Time(right_time)) => {
             let left_chrono = match super::datetime::semantic_time_to_chrono_datetime(left_time) {
                 Ok(d) => d,
-                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+                Err(msg) => {
+                    return (
+                        OperationResult::Veto(VetoType::computation(msg)),
+                        Arc::clone(left_type),
+                    )
+                }
             };
             let right_chrono = match super::datetime::semantic_time_to_chrono_datetime(right_time) {
                 Ok(d) => d,
-                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+                Err(msg) => {
+                    return (
+                        OperationResult::Veto(VetoType::computation(msg)),
+                        Arc::clone(left_type),
+                    )
+                }
             };
-            compute_elapsed_duration_span(left_chrono, right_chrono)
+            (
+                compute_elapsed_duration_span(left_chrono, right_chrono),
+                Arc::new(LemmaType::anonymous_for_decomposition(
+                    crate::planning::semantics::duration_decomposition(),
+                )),
+            )
         }
         _ => {
             // Span computation only performs Subtract, which never resolves a signature_index
             // entry (the result type matches the operand family).
             let empty_unit_index = crate::planning::unit_index::UnitIndex::new();
             let empty_signature_index = SignatureIndex::new();
-            super::arithmetic_operation(
-                right,
-                &ArithmeticComputation::Subtract,
-                left,
-                &empty_unit_index,
-                &empty_signature_index,
+            (
+                super::arithmetic_operation(
+                    right,
+                    right_type,
+                    &ArithmeticComputation::Subtract,
+                    left,
+                    left_type,
+                    &empty_unit_index,
+                    &empty_signature_index,
+                ),
+                Arc::clone(left_type),
             )
         }
     }
 }
 
-fn absolute_span(span: OperationResult) -> OperationResult {
+fn absolute_span(span: OperationResult, span_type: &Arc<LemmaType>) -> OperationResult {
     let OperationResult::Value(literal) = span else {
         return span;
     };
-    let magnitude = stored_magnitude(literal.as_ref());
+    let magnitude = stored_magnitude(&literal);
     match magnitude.try_cmp(&rational_zero()) {
         Ok(std::cmp::Ordering::Less) => {}
-        Ok(_) => return OperationResult::from_literal_arc(literal),
+        Ok(_) => return OperationResult::from_literal(literal),
         Err(e) => return OperationResult::Veto(VetoType::computation(e.to_string())),
     }
-    let negated = match negate_stored_magnitude(literal.as_ref()) {
+    let negated = match negate_stored_magnitude(&literal) {
         Ok(magnitude) => magnitude,
         Err(failure) => return OperationResult::Veto(VetoType::computation(failure.message())),
     };
-    OperationResult::from_literal(rebuild_literal_with_magnitude(literal.as_ref(), negated))
+    OperationResult::from_literal(rebuild_literal_with_magnitude(
+        &literal,
+        negated,
+        span_type.as_ref(),
+    ))
 }
 
 fn stored_magnitude(literal: &LiteralValue) -> RationalInteger {
     match &literal.value {
-        ValueKind::Number(n) => n.clone(),
-        ValueKind::Measure(value, _) if literal.lemma_type.is_calendar_like() => value.clone(),
-        ValueKind::Measure(magnitude, _) => magnitude.clone(),
-        ValueKind::Ratio(magnitude, _) => magnitude.clone(),
+        ValueKind::Number(n) | ValueKind::Measure(n) | ValueKind::Ratio(n) => n.clone(),
         other => unreachable!(
             "BUG: range span must be number, measure, ratio, or calendar measure, got {other:?}"
         ),
@@ -88,23 +152,17 @@ fn negate_stored_magnitude(
 fn rebuild_literal_with_magnitude(
     literal: &LiteralValue,
     magnitude: RationalInteger,
+    lemma_type: &LemmaType,
 ) -> LiteralValue {
     match &literal.value {
-        ValueKind::Number(_) => {
-            LiteralValue::number_with_type(magnitude, literal.lemma_type.clone())
-        }
-        ValueKind::Measure(_, sig) if literal.lemma_type.is_calendar_like() => {
+        ValueKind::Number(_) => LiteralValue::number(magnitude),
+        ValueKind::Measure(_) if lemma_type.is_calendar_like() => {
             let unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
-            LiteralValue::calendar_with_type(magnitude, unit, literal.lemma_type.clone())
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(lemma_type);
+            LiteralValue::calendar_with_type(magnitude, unit, Arc::new(lemma_type.clone()))
         }
-        ValueKind::Measure(_, signature) => LiteralValue {
-            value: ValueKind::Measure(magnitude, signature.clone()),
-            lemma_type: literal.lemma_type.clone(),
-        },
-        ValueKind::Ratio(_, unit) => {
-            LiteralValue::ratio_with_type(magnitude, unit.clone(), literal.lemma_type.clone())
-        }
+        ValueKind::Measure(_) => LiteralValue::measure(magnitude),
+        ValueKind::Ratio(_) => LiteralValue::ratio(magnitude),
         other => unreachable!(
             "BUG: range span must be number, measure, ratio, or calendar measure, got {other:?}"
         ),
@@ -124,14 +182,7 @@ fn compute_elapsed_duration_span(
         Ok(s) => s,
         Err(failure) => return OperationResult::Veto(VetoType::computation(failure.to_string())),
     };
-    OperationResult::from_literal(LiteralValue {
-        value: ValueKind::Measure(second, vec![("second".to_string(), 1)]),
-        lemma_type: std::sync::Arc::new(
-            crate::planning::semantics::LemmaType::anonymous_for_decomposition(
-                crate::planning::semantics::duration_decomposition(),
-            ),
-        ),
-    })
+    OperationResult::from_literal(LiteralValue::measure(second))
 }
 
 fn comparison_boolean_result(result: OperationResult, context: &str) -> Result<bool, VetoType> {
@@ -150,16 +201,20 @@ fn comparison_boolean_result(result: OperationResult, context: &str) -> Result<b
 /// Returns `OperationResult::from_literal(Boolean)` or propagates a Veto from inner comparisons.
 pub fn check_containment(
     value: &LiteralValue,
+    value_type: &Arc<LemmaType>,
     range_left: &LiteralValue,
     range_right: &LiteralValue,
+    endpoint_type: &Arc<LemmaType>,
 ) -> OperationResult {
     let unit_context = super::UnitResolutionContext::NamedMeasureOnly;
 
     let (lo, hi) = match comparison_boolean_result(
         super::comparison_operation(
             range_left,
+            endpoint_type,
             &ComparisonComputation::LessThan,
             range_right,
+            endpoint_type,
             unit_context,
         ),
         "range endpoint ordering",
@@ -172,8 +227,10 @@ pub fn check_containment(
     let lower_ok = match comparison_boolean_result(
         super::comparison_operation(
             value,
+            value_type,
             &ComparisonComputation::GreaterThanOrEqual,
             lo,
+            endpoint_type,
             unit_context,
         ),
         "range containment lower bound",
@@ -182,7 +239,14 @@ pub fn check_containment(
         Err(v) => return OperationResult::Veto(v),
     };
     let upper_ok = match comparison_boolean_result(
-        super::comparison_operation(value, &ComparisonComputation::LessThan, hi, unit_context),
+        super::comparison_operation(
+            value,
+            value_type,
+            &ComparisonComputation::LessThan,
+            hi,
+            endpoint_type,
+            unit_context,
+        ),
         "range containment upper bound",
     ) {
         Ok(b) => b,
@@ -196,13 +260,14 @@ pub fn check_containment(
 mod tests {
     use super::*;
     use crate::computation::rational::rational_new;
-    use crate::planning::semantics::LiteralValue;
+    use crate::planning::semantics::{anonymous_measure_type, primitive_number_arc, LiteralValue};
 
     #[test]
     fn compute_span_is_absolute_for_reversed_number_range() {
         let five = LiteralValue::number(rational_new(5, 1));
         let three = LiteralValue::number(rational_new(3, 1));
-        let OperationResult::Value(span) = compute_span(&five, &three) else {
+        let number_ty = primitive_number_arc();
+        let OperationResult::Value(span) = compute_span(&five, number_ty, &three, number_ty) else {
             panic!("expected span value");
         };
         match &span.value {
@@ -212,7 +277,8 @@ mod tests {
     }
 
     fn assert_contained(value: &LiteralValue, left: &LiteralValue, right: &LiteralValue) -> bool {
-        match check_containment(value, left, right) {
+        let number_ty = primitive_number_arc();
+        match check_containment(value, number_ty, left, right, number_ty) {
             OperationResult::Value(lit) => match &lit.value {
                 ValueKind::Boolean(b) => *b,
                 other => panic!("expected Boolean, got {other:?}"),
@@ -235,34 +301,15 @@ mod tests {
         assert!(assert_contained(&four, &five, &three));
     }
 
-    /// Phase 0 — pin that `rebuild_literal_with_magnitude` for a `Measure` value reads
-    /// only the signature from the source value (not decomposition or the empty-unit
-    /// workaround). After the rewrite, the function trivially constructs
-    /// `Measure(new_magnitude, original.signature)` with `original.lemma_type`.
-    ///
-    /// Today the function branches on `decomp.is_empty()` and `unit.is_empty()`; those
-    /// branches must collapse.
     #[test]
-    fn rebuild_literal_with_magnitude_uses_signature_only() {
-        // Build a Measure value that today has an empty-string unit and a non-empty decomposition
-        // (i.e. an anonymous intermediate). After the rewrite this is replaced by Measure(_, signature).
-        use crate::planning::semantics::{BaseMeasureVector, LemmaType, ValueKind};
-        let mut decomp = BaseMeasureVector::new();
-        decomp.insert("money".to_string(), 1);
-        let signature: Vec<(String, i32)> = vec![("eur".to_string(), 1)];
-        let original = LiteralValue {
-            value: ValueKind::Measure(rational_new(10, 1), signature.clone()),
-            lemma_type: std::sync::Arc::new(LemmaType::anonymous_for_decomposition(decomp)),
-        };
-        let rebuilt = rebuild_literal_with_magnitude(&original, rational_new(99, 1));
+    fn rebuild_literal_with_magnitude_preserves_measure_kind() {
+        let lemma_type = Arc::new(anonymous_measure_type());
+        let original = LiteralValue::measure(rational_new(10, 1));
+        let rebuilt =
+            rebuild_literal_with_magnitude(&original, rational_new(99, 1), lemma_type.as_ref());
         match &rebuilt.value {
-            ValueKind::Measure(n, _) => {
-                assert_eq!(n, &rational_new(99, 1));
-            }
+            ValueKind::Measure(n) => assert_eq!(n, &rational_new(99, 1)),
             other => panic!("expected Measure, got {:?}", other),
         }
-        // After the rewrite: the rebuilt value's signature must equal the original's.
-        // Today we check that lemma_type is preserved.
-        assert_eq!(rebuilt.lemma_type, original.lemma_type);
     }
 }

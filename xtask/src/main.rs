@@ -156,8 +156,8 @@ fn run_maven_precommit() {
         "java",
         "Install a JDK 21+ (https://adoptium.net/) for the Maven package tests.",
     );
-    eprintln!("xtask: cargo build -p lemma_jni");
-    run(&["build", "-p", "lemma_jni"]);
+    eprintln!("xtask: cargo build --release -p lemma_jni");
+    run(&["build", "--release", "-p", "lemma_jni"]);
     let maven_dir = versions::workspace_root().join(MAVEN_PACKAGE_DIR);
     let mvnw = maven_dir.join("mvnw");
     eprintln!("xtask: maven ./mvnw -B verify");
@@ -319,8 +319,6 @@ fn precommit(run_fuzz: bool) {
         "-D",
         "warnings",
     ]);
-    eprintln!("xtask: check engine without registry feature");
-    run(&["check", "-p", "lemma-engine", "--no-default-features"]);
     eprintln!("xtask: nextest");
     run(&[
         "nextest",

@@ -411,14 +411,20 @@ pub fn tokenize(text: &str) -> Vec<SemanticToken> {
         let start_line = (tok.span.line as u32).saturating_sub(1);
         let start_col = (tok.span.col as u32).saturating_sub(1);
 
-        // Commentary text excludes the `"""` delimiters but the span covers
-        // them. Reconstruct the full visual text so the delimiters get colored.
-        let full_commentary;
-        let display_text = if tok.kind == TokenKind::Commentary {
-            full_commentary = format!("\"\"\"{}\"\"\"", tok.text);
-            &full_commentary
-        } else {
-            &tok.text
+        // Commentary and string-literal token text excludes delimiters but the
+        // span covers them. Reconstruct the full visual text so lengths match
+        // the highlighted range.
+        let full_delimited;
+        let display_text = match tok.kind {
+            TokenKind::Commentary => {
+                full_delimited = format!("\"\"\"{}\"\"\"", tok.text);
+                &full_delimited
+            }
+            TokenKind::StringLit => {
+                full_delimited = format!("\"{}\"", tok.text);
+                &full_delimited
+            }
+            _ => &tok.text,
         };
 
         prev_token_kind = Some(tok.kind);
@@ -658,6 +664,42 @@ mod tests {
                 IDX_PUNCTUATION,
                 IDX_VALUE,
             ]
+        );
+    }
+
+    #[test]
+    fn string_literal_token_length_includes_quotes() {
+        let tokens = tokenize("rule a: \"hi\"");
+        let string_tok = tokens
+            .iter()
+            .find(|t| t.token_type == IDX_VALUE)
+            .expect("string value token");
+        assert_eq!(
+            string_tok.length, 4,
+            "\"hi\" must highlight 4 columns including both quotes"
+        );
+    }
+
+    #[test]
+    fn multiline_string_literal_token_lengths_include_quotes() {
+        let tokens = tokenize("rule a: \"line1\nline2\"");
+        let value_tokens: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.token_type == IDX_VALUE)
+            .collect();
+        assert!(
+            value_tokens.len() >= 2,
+            "multiline string must emit one token per visual line"
+        );
+        assert_eq!(
+            value_tokens[0].length, 6,
+            "first line \"line1 must include opening quote: got {}",
+            value_tokens[0].length
+        );
+        assert_eq!(
+            value_tokens[1].length, 6,
+            "second line line2\" must include closing quote: got {}",
+            value_tokens[1].length
         );
     }
 

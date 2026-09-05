@@ -60,7 +60,8 @@ final class RunDataValues {
       return bd.toPlainString();
     }
     if (value instanceof Float || value instanceof Double) {
-      throw new Invalid(key, "decimal values must be passed as strings to preserve exactness");
+      throw new Invalid(
+          key, "decimal values must be passed as BigDecimal (or integer) to preserve exactness");
     }
     if (value instanceof Map<?, ?> map) {
       return unitMapToRunString(key, map);
@@ -89,27 +90,11 @@ final class RunDataValues {
                 .map(Invalid::getMessage)
                 .reduce((a, b) -> a + "; " + b)
                 .orElseThrow();
-    StringBuilder json = new StringBuilder("[");
-    for (int i = 0; i < failures.size(); i++) {
-      if (i > 0) {
-        json.append(',');
-      }
-      Invalid failure = failures.get(i);
-      json.append("{\"kind\":\"request\",\"message\":\"")
-          .append(escape(failure.getMessage()))
-          .append("\",\"related_data\":\"")
-          .append(escape(failure.relatedData))
-          .append("\",\"spec\":null,\"related_spec\":null,\"source\":null,")
-          .append("\"suggestion\":null,\"repository\":null,")
-          .append("\"registry_kind\":null,\"request_kind\":\"invalid_request\",")
-          .append("\"limit_name\":null,\"limit_value\":null,\"actual_value\":null}");
+    List<EngineError> errors = new ArrayList<>(failures.size());
+    for (Invalid failure : failures) {
+      errors.add(EngineError.request(failure.getMessage(), failure.relatedData));
     }
-    json.append(']');
-    return new LemmaException(message, json.toString());
-  }
-
-  private static String escape(String s) {
-    return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    return new LemmaException(message, errors);
   }
 
   private static final class Invalid extends RuntimeException {

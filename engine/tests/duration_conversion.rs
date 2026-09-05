@@ -37,7 +37,7 @@ rule to_hours: duration as hour
         .expect("value")
         .clone();
 
-    if let ValueKind::Measure(_, _) = &val.value {
+    if let ValueKind::Measure(_) = &val.value {
         assert_eq!(
             rule_result
                 .value

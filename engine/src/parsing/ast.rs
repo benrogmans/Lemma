@@ -4,11 +4,11 @@
 //!
 //! # Human `Display` vs canonical `AsLemmaSource`
 //!
-//! [`MetaValue`], [`DataValue`], and [`CommandArg`] use human-oriented
-//! `Display` (stable for `to_string()`, logs, APIs). [`Expression`] and
-//! [`LemmaRule`]/[`LemmaSpec`] use canonical Lemma source for literals via
-//! [`AsLemmaSource`] around [`Value`]. Wrap [`MetaValue`]/[`DataValue`]
-//! in [`AsLemmaSource`] when emitting round-trippable source (e.g. the formatter).
+//! [`DataValue`] and [`CommandArg`] use human-oriented `Display` (stable for
+//! `to_string()`, logs, APIs). [`Expression`] and [`LemmaRule`]/[`LemmaSpec`]
+//! use canonical Lemma source for literals via [`AsLemmaSource`] around
+//! [`Value`]. Wrap [`DataValue`] in [`AsLemmaSource`] when emitting
+//! round-trippable source (e.g. the formatter).
 //!
 //! Logical identifier names (spec, data, rule, unit, reference path segments) are stored
 //! as ASCII lowercase after parse. String literals and text option values are unchanged.
@@ -255,12 +255,10 @@ impl fmt::Display for RepositoryQualifier {
 /// bundle — is preserved through the structural relationship in
 /// [`crate::engine::Context`], not via fields on this structure.
 ///
-/// `LemmaSpec` has **no global identity**. There is no `PartialEq`, `Eq`, `Ord`,
-/// or `Hash` implementation. Within one [`crate::engine::Context`], planning
-/// compares Context-owned rows by address (`std::ptr::eq`) or by
-/// `(repository, name, EffectiveDate)`. Outside a live Context, key by that
-/// composite triple.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// Context identity is `(repository, name, EffectiveDate)` or `std::ptr::eq` on a
+/// Context-owned row — not [`PartialEq`]. [`PartialEq`] is full AST equality
+/// (including statement [`Source`] spans) for [`crate::Engine::update`] skip only.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LemmaSpec {
     pub name: String,
     pub effective_from: EffectiveDate,
@@ -275,29 +273,13 @@ pub struct LemmaSpec {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MetaField {
     pub key: String,
-    pub value: MetaValue,
+    pub value: Value,
     pub source_location: Source,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MetaValue {
-    Literal(Value),
-    Unquoted(String),
-}
-
-impl fmt::Display for MetaValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MetaValue::Literal(v) => write!(f, "{}", v),
-            MetaValue::Unquoted(s) => write!(f, "{}", s),
-        }
-    }
 }
 
 impl fmt::Display for MetaField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "meta {}: {}", self.key, self.value)
+        write!(f, "meta {}: {}", self.key, AsLemmaSource(&self.value))
     }
 }
 
@@ -625,10 +607,8 @@ pub struct SpecRef {
     /// Optional explicit effective datetime pin written in source.
     pub effective: Option<DateTimeValue>,
     /// Source span of the repository qualifier (when `repository` is present).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository_span: Option<Span>,
     /// Source span of `name` and optional `effective`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_span: Option<Span>,
 }
 
@@ -711,8 +691,11 @@ pub struct UnitFactor {
 ///   factor references contribute; it defaults to `1` when omitted.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum UnitArg {
-    Factor(Decimal),
-    Expr(Decimal, Vec<UnitFactor>),
+    Factor(#[serde(with = "crate::literals::decimal_string_serde")] Decimal),
+    Expr(
+        #[serde(with = "crate::literals::decimal_string_serde")] Decimal,
+        Vec<UnitFactor>,
+    ),
 }
 
 impl fmt::Display for UnitArg {
@@ -777,7 +760,6 @@ impl fmt::Display for UnitArg {
 /// and rejects mismatches without coercion (a `Text` literal is never a `Number`,
 /// a `Ratio` literal is never a bare `Number`, etc.).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum CommandArg {
     /// A typed literal value parsed by [`crate::parsing::parser::Parser::parse_literal_value`].
     Literal(crate::literals::Value),
@@ -803,6 +785,7 @@ impl fmt::Display for CommandArg {
 pub enum TypeConstraintCommand {
     Help,
     Suggest,
+    Fill,
     Unit,
     Trait,
     Minimum,
@@ -820,6 +803,7 @@ impl fmt::Display for TypeConstraintCommand {
         let s = match self {
             TypeConstraintCommand::Help => "help",
             TypeConstraintCommand::Suggest => "suggest",
+            TypeConstraintCommand::Fill => "fill",
             TypeConstraintCommand::Unit => "unit",
             TypeConstraintCommand::Trait => "trait",
             TypeConstraintCommand::Minimum => "minimum",
@@ -838,19 +822,21 @@ impl fmt::Display for TypeConstraintCommand {
 /// Parses a constraint command name. Returns None for unknown (parser returns error).
 #[must_use]
 pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintCommand> {
-    match s.trim().to_lowercase().as_str() {
-        "help" => Some(TypeConstraintCommand::Help),
-        "suggest" => Some(TypeConstraintCommand::Suggest),
-        "unit" => Some(TypeConstraintCommand::Unit),
-        "trait" => Some(TypeConstraintCommand::Trait),
-        "minimum" => Some(TypeConstraintCommand::Minimum),
-        "maximum" => Some(TypeConstraintCommand::Maximum),
-        "lower" => Some(TypeConstraintCommand::Lower),
-        "upper" => Some(TypeConstraintCommand::Upper),
-        "decimals" => Some(TypeConstraintCommand::Decimals),
-        "option" => Some(TypeConstraintCommand::Option),
-        "options" => Some(TypeConstraintCommand::Options),
-        "length" => Some(TypeConstraintCommand::Length),
+    // ASCII fold without allocating a lowercased String on every `->` command.
+    match s.trim() {
+        s if s.eq_ignore_ascii_case("help") => Some(TypeConstraintCommand::Help),
+        s if s.eq_ignore_ascii_case("suggest") => Some(TypeConstraintCommand::Suggest),
+        s if s.eq_ignore_ascii_case("fill") => Some(TypeConstraintCommand::Fill),
+        s if s.eq_ignore_ascii_case("unit") => Some(TypeConstraintCommand::Unit),
+        s if s.eq_ignore_ascii_case("trait") => Some(TypeConstraintCommand::Trait),
+        s if s.eq_ignore_ascii_case("minimum") => Some(TypeConstraintCommand::Minimum),
+        s if s.eq_ignore_ascii_case("maximum") => Some(TypeConstraintCommand::Maximum),
+        s if s.eq_ignore_ascii_case("lower") => Some(TypeConstraintCommand::Lower),
+        s if s.eq_ignore_ascii_case("upper") => Some(TypeConstraintCommand::Upper),
+        s if s.eq_ignore_ascii_case("decimals") => Some(TypeConstraintCommand::Decimals),
+        s if s.eq_ignore_ascii_case("option") => Some(TypeConstraintCommand::Option),
+        s if s.eq_ignore_ascii_case("options") => Some(TypeConstraintCommand::Options),
+        s if s.eq_ignore_ascii_case("length") => Some(TypeConstraintCommand::Length),
         _ => None,
     }
 }
@@ -869,6 +855,7 @@ impl TypeConstraintCommand {
             TypeConstraintCommand::Unit => ContinuationShape::Assignment,
             TypeConstraintCommand::Help
             | TypeConstraintCommand::Suggest
+            | TypeConstraintCommand::Fill
             | TypeConstraintCommand::Trait
             | TypeConstraintCommand::Minimum
             | TypeConstraintCommand::Maximum
@@ -889,7 +876,6 @@ pub struct Constraint {
     pub args: Vec<CommandArg>,
     pub source_location: crate::parsing::source::Source,
     /// Parsed from deprecated `unit name value` without colon (removed in a future release).
-    #[serde(default, skip_serializing_if = "is_false")]
     pub deprecated_without_colon: bool,
 }
 
@@ -942,12 +928,7 @@ pub struct UsesBinding {
     pub rhs: WithRhs,
     pub source_location: Source,
     /// Parsed from deprecated standalone `with alias.path: …` (removed in a future release).
-    #[serde(default, skip_serializing_if = "is_false")]
     pub deprecated_standalone_with: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 /// Prefix import alias onto a relative binding path (`pricing.tax_rate` under alias `line` → `line.pricing.tax_rate`).
@@ -973,10 +954,8 @@ pub enum DataValue {
     /// - `data x: number -> minimum 0` → `base: Some(Number)`, `constraints: Some(...)`
     /// - `data x: finance.money` → `base: Some(Qualified { spec_alias: "finance", inner: Custom("money") })`
     Definition {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<ParentType>,
         constraints: Option<Vec<Constraint>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         value: Option<Value>,
     },
     /// Import from another spec (surface syntax is `uses`; alias is [`LemmaData::reference`]).
@@ -1504,7 +1483,6 @@ impl std::fmt::Display for PrimitiveKind {
 /// `name` is the declared type name (the data name that introduces this type).
 /// For `data temperature: measure`, name = "temperature", primitive = Measure.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParentType {
     Primitive {
         primitive: PrimitiveKind,
@@ -1718,16 +1696,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
     }
 }
 
-// -- AsLemmaSource: MetaValue, DataValue (formatter / round-trip) ---
-
-impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            MetaValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-            MetaValue::Unquoted(s) => write!(f, "{}", s),
-        }
-    }
-}
+// -- AsLemmaSource: DataValue (formatter / round-trip) ---
 
 impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2092,12 +2061,12 @@ mod tests {
     }
 
     #[test]
-    fn parent_type_primitive_serde_internally_tagged() {
+    fn parent_type_primitive_serde_externally_tagged() {
         let p = ParentType::Primitive {
             primitive: PrimitiveKind::Number,
         };
         let json = serde_json::to_string(&p).expect("ParentType::Primitive must serialize");
-        assert!(json.contains("\"kind\"") && json.contains("\"primitive\""));
+        assert!(json.contains("\"Primitive\"") && json.contains("\"primitive\""));
         let back: ParentType = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, p);
     }

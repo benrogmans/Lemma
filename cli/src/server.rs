@@ -21,11 +21,14 @@ pub mod http {
     use tower_http::cors::CorsLayer;
     use tracing::{error, info, warn};
 
-    /// Requests read-lock only long enough to clone the inner `Arc<Engine>`
-    /// (a pointer copy) and never hold the lock during evaluation. The file
-    /// watcher builds a reloaded `Engine` off to the side and write-locks only
-    /// for the instant it takes to swap the `Arc`.
-    type SharedEngine = Arc<RwLock<Arc<Engine>>>;
+    /// Requests take a read lock for the duration of list/show/run. The file
+    /// watcher takes a write lock to refresh the same long-lived `Engine` via
+    /// per-file `update` (PartialEq skip on unchanged files). On incremental
+    /// failure it cold-loads into a scratch engine and swaps only on success;
+    /// scratch failure keeps the previous engine (never emptied). Eval holds
+    /// the read lock for its full duration, so a runaway evaluation that
+    /// outlives the response timeout still blocks the watcher's write lock.
+    type SharedEngine = Arc<RwLock<Engine>>;
 
     fn parse_spec_path(path: &str) -> String {
         path.trim_matches('/').to_string()
@@ -72,10 +75,9 @@ pub mod http {
         eval_timeout: Duration,
     }
 
-    /// Owned snapshot of the engine for this request; the read guard lives
-    /// only for the duration of the `Arc` clone.
-    async fn engine_snapshot(state: &AppState) -> Arc<Engine> {
-        Arc::clone(&*state.engine.read().await)
+    /// Read guard for request handlers; held for the duration of the call.
+    async fn engine_read(state: &AppState) -> tokio::sync::RwLockReadGuard<'_, Engine> {
+        state.engine.read().await
     }
 
     #[derive(Debug, serde::Serialize)]
@@ -157,11 +159,13 @@ pub mod http {
             )
             .init();
 
-        let shared_engine: SharedEngine = Arc::new(RwLock::new(Arc::new(engine)));
+        let shared_engine: SharedEngine = Arc::new(RwLock::new(engine));
 
-        if watch {
-            start_file_watcher(shared_engine.clone(), workdir)?;
-        }
+        let watch_guard = if watch {
+            Some(start_file_watcher(shared_engine.clone(), workdir)?)
+        } else {
+            None
+        };
 
         let state = AppState {
             engine: shared_engine,
@@ -198,9 +202,72 @@ pub mod http {
         info!("Interactive docs at http://{}/docs", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        let os_shutdown_signal = shutdown_signal()?;
+        let (drain_timeout_started, drain_timeout_wait) = tokio::sync::oneshot::channel();
+        let shutdown = async move {
+            os_shutdown_signal.await;
+            if drain_timeout_started.send(()).is_err() {
+                // serve already finished; drain timer not needed
+            }
+        };
+        let serve_result = tokio::select! {
+            result = axum::serve(listener, app).with_graceful_shutdown(shutdown) => {
+                if result.is_ok() {
+                    info!("all connections drained");
+                }
+                result
+            }
+            _ = async {
+                match drain_timeout_wait.await {
+                    Ok(()) => {
+                        tokio::time::sleep(Duration::from_secs(eval_timeout_secs)).await;
+                        warn!(
+                            "drain timeout after {}s, dropping remaining connections",
+                            eval_timeout_secs
+                        );
+                    }
+                    Err(_) => std::future::pending::<()>().await,
+                }
+            } => Ok(())
+        };
 
+        drop(watch_guard);
+        serve_result?;
         Ok(())
+    }
+
+    /// Wait for SIGINT or SIGTERM (Unix) / Ctrl-C (Windows).
+    ///
+    /// Installs handlers eagerly; install failure is an environment error.
+    fn shutdown_signal() -> anyhow::Result<impl std::future::Future<Output = ()>> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut interrupt = signal(SignalKind::interrupt())?;
+            let mut terminate = signal(SignalKind::terminate())?;
+            Ok(async move {
+                tokio::select! {
+                    _ = interrupt.recv() => {
+                        info!("SIGINT received, draining in-flight requests");
+                    }
+                    _ = terminate.recv() => {
+                        info!("SIGTERM received, draining in-flight requests");
+                    }
+                }
+            })
+        }
+        #[cfg(windows)]
+        {
+            let mut ctrl_c = tokio::signal::windows::ctrl_c()?;
+            Ok(async move {
+                ctrl_c.recv().await;
+                info!("Ctrl-C received, draining in-flight requests");
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            anyhow::bail!("shutdown signals are not supported on this platform")
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -210,7 +277,7 @@ pub mod http {
     async fn list(
         State(state): State<AppState>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let engine = engine_snapshot(&state).await;
+        let engine = engine_read(&state).await;
         Ok(Json(engine.list()))
     }
 
@@ -237,13 +304,13 @@ pub mod http {
         Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let effective = resolve_effective(q.effective.as_deref())?;
-        let engine = engine_snapshot(&state).await;
+        let engine = engine_read(&state).await;
         let spec = lemma_openapi::generate_openapi_effective(&engine, state.explain, &effective);
         Ok(Json(spec))
     }
 
     async fn scalar_docs(State(state): State<AppState>) -> impl IntoResponse {
-        let engine = engine_snapshot(&state).await;
+        let engine = engine_read(&state).await;
         let sources = lemma_openapi::temporal_api_sources(&engine);
 
         let shared_opts = r#"layout: 'modern',
@@ -402,7 +469,7 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let raw_path = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
-        let engine = engine_snapshot(&state).await;
+        let engine = engine_read(&state).await;
 
         let spec_name = lemma::parse_spec_set_id(&raw_path).map_err(|e| {
             (
@@ -428,7 +495,7 @@ pub mod http {
 
                 let effective_from = show.effective_from.clone();
 
-                let mut response = Json(show).into_response();
+                let mut response = Json(lemma::api::Show::from(&show)).into_response();
                 let headers_mut = response.headers_mut();
                 for (k, v) in spec_response_headers(effective_from.as_ref()) {
                     headers_mut.insert(k, v);
@@ -542,12 +609,13 @@ pub mod http {
         };
 
         let include_explanations = want_explain(&state, &headers);
-        let engine = engine_snapshot(&state).await;
+        let engine = Arc::clone(&state.engine);
 
-        // Evaluate on a blocking thread with no lock held. Post-planning
-        // evaluation is loop-free/terminating by design; the wall-clock
-        // timeout is a boundary safeguard, not an engine mechanism.
+        // Evaluate on a blocking thread under a read lock so refresh waits.
+        // Post-planning evaluation is loop-free/terminating by design; the
+        // wall-clock timeout is a boundary safeguard, not an engine mechanism.
         let eval_task = tokio::task::spawn_blocking(move || {
+            let engine = engine.blocking_read();
             let response = engine
                 .run(
                     None,
@@ -651,76 +719,97 @@ pub mod http {
     // File watcher (--watch mode)
     // -----------------------------------------------------------------------
 
-    fn start_file_watcher(shared_engine: SharedEngine, workdir: PathBuf) -> anyhow::Result<()> {
+    fn start_file_watcher(
+        shared_engine: SharedEngine,
+        workdir: PathBuf,
+    ) -> anyhow::Result<lemma_cli::workspace::WatchGuard> {
         let watch_dir = workdir.clone();
-        let on_change =
-            Arc::new(
-                move |watch_result: Result<(), lemma_cli::workspace::WorkspaceDiskError>| {
-                    match watch_result {
-                        Ok(()) => {}
-                        Err(error) => {
-                            error!("Workspace watch failed: {}", error);
+        let on_change = Arc::new(
+            move |watch_result: Result<(), lemma_cli::workspace::WorkspaceDiskError>| {
+                match watch_result {
+                    Ok(()) => {}
+                    Err(error) => {
+                        error!("Workspace watch failed: {}", error);
+                        return;
+                    }
+                }
+                info!("Detected .lemma file changes, refreshing...");
+                let engine_clone = shared_engine.clone();
+                let workdir_clone = workdir.clone();
+
+                // Spawn a dedicated OS thread for reloading. The notify
+                // callback is synchronous, so we create a fresh tokio
+                // runtime on a new thread to run the async reload.
+                std::thread::spawn(move || {
+                    let runtime = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(err) => {
+                            error!("Failed to create tokio runtime for reload: {}", err);
                             return;
                         }
-                    }
-                    info!("Detected .lemma file changes, reloading...");
-                    let engine_clone = shared_engine.clone();
-                    let workdir_clone = workdir.clone();
+                    };
 
-                    // Spawn a dedicated OS thread for reloading. The notify
-                    // callback is synchronous, so we create a fresh tokio
-                    // runtime on a new thread to run the async reload.
-                    std::thread::spawn(move || {
-                        let runtime = match tokio::runtime::Runtime::new() {
-                            Ok(rt) => rt,
+                    runtime.block_on(async {
+                        // Build scratch outside the write lock so HTTP readers
+                        // are not blocked for the full workspace load.
+                        let mut scratch = Engine::new();
+                        match lemma_cli::workspace::load_workspace(&mut scratch, &workdir_clone) {
+                            Ok(()) => {
+                                let mut engine = engine_clone.write().await;
+                                *engine = scratch;
+                                let workspace_specs = engine
+                                    .list()
+                                    .into_iter()
+                                    .find(|repository_group| repository_group.repository.is_none())
+                                    .expect(
+                                        "BUG: workspace repository must exist after Engine::new",
+                                    )
+                                    .specs;
+                                let unique_specs: std::collections::BTreeSet<&str> =
+                                    workspace_specs.iter().map(|ls| ls.name.as_str()).collect();
+                                let spec_count = unique_specs.len();
+                                info!("Refreshed engine with {} spec(s)", spec_count);
+                            }
+                            Err(lemma_cli::workspace::WorkspaceDiskError::EngineLoad(load_err)) => {
+                                for err in load_err.iter() {
+                                    tracing::error!(
+                                        "{}",
+                                        crate::error_formatter::format_error(
+                                            err,
+                                            &load_err.sources
+                                        )
+                                    );
+                                }
+                                warn!(
+                                    "Refresh failed ({} error(s)); keeping previous engine",
+                                    load_err.errors.len()
+                                );
+                            }
                             Err(err) => {
-                                error!("Failed to create tokio runtime for reload: {}", err);
-                                return;
+                                warn!("Refresh failed (keeping previous engine): {}", err);
                             }
-                        };
-
-                        runtime.block_on(async {
-                            match reload_engine(&workdir_clone).await {
-                                Ok(new_engine) => {
-                                    let workspace_specs = new_engine
-                                .list()
-                                .into_iter()
-                                .find(|repository_group| repository_group.repository.is_none())
-                                .expect("BUG: workspace repository must exist after Engine::new")
-                                .specs;
-                                    let unique_specs: std::collections::BTreeSet<&str> =
-                                        workspace_specs.iter().map(|ls| ls.name.as_str()).collect();
-                                    let spec_count = unique_specs.len();
-                                    // Write lock held only for the Arc swap.
-                                    *engine_clone.write().await = Arc::new(new_engine);
-                                    info!("Reloaded engine with {} spec(s)", spec_count);
-                                }
-                                Err(err) => {
-                                    warn!("Reload failed (keeping previous state): {}", err);
-                                }
-                            }
-                        });
+                        }
                     });
-                },
-            );
+                });
+            },
+        );
 
         let guard = lemma_cli::workspace::watch_lemma_workspace(watch_dir.clone(), on_change)
             .map_err(|error| anyhow::Error::msg(error.to_string()))?;
 
         info!("Watching {:?} for .lemma file changes", watch_dir);
 
-        // Leak the guard so the watcher stays alive for the process lifetime.
-        std::mem::forget(guard);
-
-        Ok(())
+        Ok(guard)
     }
 
-    /// Create a fresh engine by loading all .lemma files from the workspace
-    /// directory (including `lemma_deps/` for cached registry dependencies).
-    async fn reload_engine(workdir: &std::path::Path) -> anyhow::Result<Engine> {
-        let mut engine = Engine::new();
-        match lemma_cli::workspace::load_workspace(&mut engine, workdir) {
-            Ok(()) => Ok(engine),
+    /// Cold-load into a scratch engine; swap into `engine` only on success.
+    #[cfg(test)]
+    fn cold_load_into_live_or_keep(
+        engine: &mut Engine,
+        workdir: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        match lemma_cli::workspace::refresh_workspace_via_update(engine, workdir) {
+            Ok(()) => Ok(()),
             Err(lemma_cli::workspace::WorkspaceDiskError::EngineLoad(load_err)) => {
                 for err in load_err.iter() {
                     tracing::error!(
@@ -728,9 +817,99 @@ pub mod http {
                         crate::error_formatter::format_error(err, &load_err.sources)
                     );
                 }
-                anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
+                warn!(
+                    "Cold load failed ({} error(s)); keeping previous engine",
+                    load_err.errors.len()
+                );
+                anyhow::bail!(
+                    "Workspace load failed ({} error(s)); previous engine kept",
+                    load_err.errors.len()
+                )
             }
-            Err(error) => Err(anyhow::Error::msg(error.to_string())),
+            Err(error) => {
+                warn!("Cold load failed ({}); keeping previous engine", error);
+                Err(anyhow::Error::msg(format!("{error}; previous engine kept")))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod refresh_tests {
+        use super::*;
+        use std::fs;
+
+        fn write_lemma(dir: &std::path::Path, name: &str, body: &str) {
+            fs::write(dir.join(name), body).expect("write lemma");
+        }
+
+        #[test]
+        fn broken_file_refresh_keeps_previously_loaded_specs() {
+            let root = tempfile::tempdir().expect("tempdir");
+            write_lemma(
+                root.path(),
+                "good.lemma",
+                "spec good\ndata v: 1\nrule r: v\n",
+            );
+            let mut engine = Engine::new();
+            lemma_cli::workspace::load_workspace(&mut engine, root.path()).expect("initial load");
+            assert!(engine.show(None, "good", None).is_ok());
+
+            write_lemma(root.path(), "bad.lemma", "this is not valid lemma!!!\n");
+
+            let err = cold_load_into_live_or_keep(&mut engine, root.path())
+                .expect_err("cold load with bad file must fail");
+            assert!(
+                err.to_string().contains("previous engine kept"),
+                "got: {err}"
+            );
+            assert!(
+                engine.show(None, "good", None).is_ok(),
+                "previous good spec must still be served after failed refresh"
+            );
+        }
+
+        #[test]
+        fn failed_refresh_keeps_engine_when_disk_has_planning_errors() {
+            let root = tempfile::tempdir().expect("tempdir");
+            write_lemma(
+                root.path(),
+                "good.lemma",
+                "spec good\ndata v: 1\nrule r: v\n",
+            );
+            let mut engine = Engine::new();
+            lemma_cli::workspace::load_workspace(&mut engine, root.path()).expect("initial load");
+
+            write_lemma(
+                root.path(),
+                "broken.lemma",
+                "spec broken\nuses missing: nonexistent\nrule r: 1\n",
+            );
+            let result =
+                lemma_cli::workspace::refresh_workspace_via_update(&mut engine, root.path());
+            assert!(result.is_err(), "broken dependency must fail refresh");
+            assert!(engine.show(None, "good", None).is_ok());
+
+            let err = cold_load_into_live_or_keep(&mut engine, root.path())
+                .expect_err("scratch cold load must also fail");
+            assert!(err.to_string().contains("previous engine kept"));
+            assert!(
+                engine.show(None, "good", None).is_ok(),
+                "must not wipe engine on scratch failure"
+            );
+        }
+
+        #[test]
+        fn successful_scratch_swap_replaces_engine() {
+            let root = tempfile::tempdir().expect("tempdir");
+            write_lemma(root.path(), "a.lemma", "spec a\ndata v: 1\nrule r: v\n");
+            let mut engine = Engine::new();
+            lemma_cli::workspace::load_workspace(&mut engine, root.path()).expect("initial load");
+
+            fs::remove_file(root.path().join("a.lemma")).expect("remove a");
+            write_lemma(root.path(), "b.lemma", "spec b\ndata v: 2\nrule r: v\n");
+            cold_load_into_live_or_keep(&mut engine, root.path()).expect("scratch swap");
+            assert!(engine.show(None, "a", None).is_err());
+            assert!(engine.show(None, "b", None).is_ok());
         }
     }
 }
