@@ -70,7 +70,7 @@ fn show_meta_iterates_in_declaration_order() {
         "meta must preserve declaration order, not HashMap randomization"
     );
 
-    let json = serde_json::to_value(&show).expect("Show JSON");
+    let json = serde_json::to_value(lemma::api::Show::from(&show)).expect("Show JSON");
     assert_eq!(
         json_object_keys(&json["meta"]),
         vec!["zebra", "yankee", "xray", "whiskey", "victor", "uniform"]
@@ -84,7 +84,7 @@ fn show_data_iterates_in_declaration_order() {
     let show = engine.show(None, "data_order", Some(&now)).expect("show");
     let keys: Vec<_> = show.data.keys().cloned().collect();
     assert_eq!(keys, vec!["zebra", "yankee", "alpha"]);
-    let json = serde_json::to_value(&show).expect("Show JSON");
+    let json = serde_json::to_value(lemma::api::Show::from(&show)).expect("Show JSON");
     assert_eq!(
         json_object_keys(&json["data"]),
         vec!["zebra", "yankee", "alpha"]
@@ -122,7 +122,7 @@ fn response_results_follow_same_order_as_show_rules() {
         .expect("run");
     let result_keys: Vec<_> = response.results.keys().cloned().collect();
     assert_eq!(result_keys, show_keys);
-    let json = serde_json::to_value(&response).expect("Response JSON");
+    let json = serde_json::to_value(lemma::api::Response::from(&response)).expect("Response JSON");
     assert_eq!(json_object_keys(&json["results"]), show_keys);
 }
 

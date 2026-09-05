@@ -70,18 +70,8 @@ fn eval_literal_with_data(
         .clone()
 }
 
-fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
-    eval_literal_with_data(
-        code,
-        spec_name,
-        rule_name,
-        &default_effective(),
-        HashMap::new(),
-    )
-}
-
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
-    eval_literal(code, spec_name, rule_name).to_string()
+    eval_rule_with_effective(code, spec_name, rule_name, &default_effective())
 }
 
 fn eval_rule_number(code: &str, spec_name: &str, rule_name: &str) -> String {
@@ -118,7 +108,27 @@ fn eval_rule_with_effective(
     rule_name: &str,
     effective: &DateTimeValue,
 ) -> String {
-    eval_literal_with_data(code, spec_name, rule_name, effective, HashMap::new()).to_string()
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            HashMap::new(),
+            Some(&[rule_name.to_string()]),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str, effective: &DateTimeValue) -> bool {

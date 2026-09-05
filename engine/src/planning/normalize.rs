@@ -17,13 +17,16 @@ use crate::planning::ordered_dispatch::{
     sorted_unique_boundaries, DispatchClass, DispatchKey, DispatchKeyBuildError,
 };
 use crate::planning::semantics::{
-    mirrored_comparison, negated_comparison, primitive_number_arc, ArithmeticComputation,
-    ComparisonComputation, DataDefinition, DataPath, Expression, ExpressionKind, LemmaType,
-    LiteralValue, MathematicalComputation, ReferenceTarget, RulePath, SemanticConversionTarget,
-    Source, TypeSpecification, ValueKind, VetoExpression,
+    mirrored_comparison, negated_comparison, primitive_boolean_arc, primitive_date_arc,
+    primitive_date_range_arc, primitive_number_arc, primitive_ratio_arc, primitive_text_arc,
+    primitive_time_arc, ArithmeticComputation, ComparisonComputation, DataDefinition, DataPath,
+    Expression, ExpressionKind, LemmaType, LiteralValue, MathematicalComputation, ReferenceEnd,
+    RulePath, SemanticConversionTarget, Source, TypeSpecification, TypedLiteral, ValueKind,
+    VetoExpression,
 };
 use crate::Error;
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -94,39 +97,40 @@ pub(crate) struct NormalizeContext<'a> {
     pub(crate) max_normal_form_depth: usize,
 }
 
-/// Completed rule roots and rule-target data paths for Expression→NormalForm lower.
+/// Completed rule roots and reference-chain ends for Expression→NormalForm lower.
 struct LowerCtx<'a> {
     completed_rules: &'a HashMap<RulePath, NormalFormId>,
-    rule_target_data: &'a HashMap<DataPath, RulePath>,
+    reference_ends: &'a IndexMap<DataPath, ReferenceEnd>,
+    data: &'a IndexMap<DataPath, DataDefinition>,
 }
 
 pub(crate) fn build_normalized_rule(
     ctx: &NormalizeContext<'_>,
     completed_rules: &HashMap<RulePath, NormalFormId>,
+    reference_ends: &IndexMap<DataPath, ReferenceEnd>,
     branches: &[(Option<Expression>, Expression)],
     source: Option<Source>,
     interner: &mut NormalFormInterner,
 ) -> Result<NormalizedRule, Error> {
-    let data = ctx.data;
     let max_normalized_expression_nodes = ctx.max_normalized_expression_nodes;
     let piecewise = unless_branches_to_piecewise(branches);
-    let rule_target_data = build_in_plan_rule_target_data_map(data);
     let lower = LowerCtx {
         completed_rules,
-        rule_target_data: &rule_target_data,
+        reference_ends,
+        data: ctx.data,
     };
 
     let root = to_normal_form(&piecewise, interner, &lower);
     let nf = normalize_once(root, interner, ctx, source.clone())?;
 
-    if normal_form_exceeds_node_budget(interner, nf, max_normalized_expression_nodes) {
+    if normal_form_exceeds_node_budget(&interner.forms, nf, max_normalized_expression_nodes) {
         return Err(expression_node_limit_error(
             max_normalized_expression_nodes,
             source,
         ));
     }
 
-    let depth = normal_form_depth(interner, nf);
+    let depth = normal_form_depth(&interner.forms, nf);
     if depth > ctx.max_normal_form_depth {
         return Err(Error::resource_limit_exceeded(
             "max_normal_form_depth",
@@ -146,7 +150,9 @@ fn expression_node_limit_error(limit: usize, source: Option<Source>) -> Error {
     Error::resource_limit_exceeded(
         "max_normalized_expression_nodes",
         format!("{limit} expression nodes"),
-        format!("more than {limit} unique normal-form cells reachable from the rule root"),
+        format!(
+            "more than {limit} unique normal-form cells reachable from the rule root (rule embeds count as one cell)"
+        ),
         "Restructure the rule or reduce repeated references to other rules",
         source,
         None,
@@ -156,8 +162,11 @@ fn expression_node_limit_error(limit: usize, source: Option<Source>) -> Error {
 
 /// Whether the normal form, counted as unique DAG cells reachable from `root`,
 /// exceeds the node budget (IR size = distinct cells, not tree expansion).
-fn normal_form_exceeds_node_budget(
-    interner: &NormalFormInterner,
+/// Rule embeds count as one cell: the target body was already budgeted when its
+/// rule completed. Embeds are evaluation boundaries, so this measures only
+/// intra-rule IR size.
+pub(crate) fn normal_form_exceeds_node_budget(
+    forms: &[NormalForm],
     root: NormalFormId,
     budget: usize,
 ) -> bool {
@@ -170,188 +179,120 @@ fn normal_form_exceeds_node_budget(
         if visited.len() > budget {
             return true;
         }
-        match &interner.get(current).kind {
-            NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => {}
-            NormalFormKind::Sum(children)
-            | NormalFormKind::Product(children)
-            | NormalFormKind::And(children) => {
-                worklist.extend(children.iter().copied());
-            }
-            NormalFormKind::Subtract(a, b)
-            | NormalFormKind::Divide(a, b)
-            | NormalFormKind::Power(a, b)
-            | NormalFormKind::Modulo(a, b)
-            | NormalFormKind::Comparison(a, _, b)
-            | NormalFormKind::RangeLiteral(a, b)
-            | NormalFormKind::RangeContainment(a, b) => {
-                worklist.push(*a);
-                worklist.push(*b);
-            }
-            NormalFormKind::Negate(x)
-            | NormalFormKind::Reciprocal(x)
-            | NormalFormKind::Not(x)
-            | NormalFormKind::MathOp(_, x)
-            | NormalFormKind::UnitConversion(x, _)
-            | NormalFormKind::DateRelative(_, x)
-            | NormalFormKind::DateCalendar(_, _, x)
-            | NormalFormKind::PastFutureRange(_, x)
-            | NormalFormKind::ResultIsVeto(x) => {
-                worklist.push(*x);
-            }
-            NormalFormKind::Piecewise(arms) => {
-                for (condition, result) in arms.iter() {
-                    worklist.push(*condition);
-                    worklist.push(*result);
-                }
-            }
-            NormalFormKind::OrderedDispatch {
-                scrutinee, regions, ..
-            } => {
-                worklist.push(*scrutinee);
-                worklist.extend(regions.iter().copied());
-            }
+        let cell = forms.get(current.index()).unwrap_or_else(|| {
+            panic!(
+                "BUG: NormalFormId {} out of range during node budget walk (table len {})",
+                current.0,
+                forms.len()
+            )
+        });
+        if cell.rule_embed.is_some() {
+            continue;
         }
-        if let Some(origin) = interner.get(current).origin {
+        push_child_ids(&cell.kind, &mut worklist);
+        if let Some(origin) = cell.origin {
             worklist.push(origin);
         }
     }
     false
 }
 
-/// Maximum nesting depth of a NormalForm DAG (leaves have depth 1). Used by
-/// planning to guarantee a recursive evaluator can never overflow the stack.
-pub(crate) fn normal_form_depth(interner: &NormalFormInterner, root: NormalFormId) -> usize {
-    fn child_depth(
-        interner: &NormalFormInterner,
-        id: NormalFormId,
-        memo: &mut HashMap<NormalFormId, usize>,
-    ) -> usize {
-        if let Some(depth) = memo.get(&id) {
-            return *depth;
-        }
-        let depth = match &interner.get(id).kind {
-            NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => 1,
-            NormalFormKind::Sum(children)
-            | NormalFormKind::Product(children)
-            | NormalFormKind::And(children) => {
-                1 + children
-                    .iter()
-                    .map(|child| child_depth(interner, *child, memo))
-                    .max()
-                    .unwrap_or(0)
-            }
-            NormalFormKind::Subtract(a, b)
-            | NormalFormKind::Divide(a, b)
-            | NormalFormKind::Power(a, b)
-            | NormalFormKind::Modulo(a, b)
-            | NormalFormKind::Comparison(a, _, b)
-            | NormalFormKind::RangeLiteral(a, b)
-            | NormalFormKind::RangeContainment(a, b) => {
-                1 + child_depth(interner, *a, memo).max(child_depth(interner, *b, memo))
-            }
-            NormalFormKind::Negate(x)
-            | NormalFormKind::Reciprocal(x)
-            | NormalFormKind::Not(x)
-            | NormalFormKind::MathOp(_, x)
-            | NormalFormKind::UnitConversion(x, _)
-            | NormalFormKind::DateRelative(_, x)
-            | NormalFormKind::DateCalendar(_, _, x)
-            | NormalFormKind::PastFutureRange(_, x)
-            | NormalFormKind::ResultIsVeto(x) => 1 + child_depth(interner, *x, memo),
-            NormalFormKind::Piecewise(arms) => {
-                1 + arms
-                    .iter()
-                    .map(|(c, r)| {
-                        child_depth(interner, *c, memo).max(child_depth(interner, *r, memo))
-                    })
-                    .max()
-                    .unwrap_or(0)
-            }
-            NormalFormKind::OrderedDispatch {
-                scrutinee, regions, ..
-            } => {
-                1 + regions
-                    .iter()
-                    .map(|region| child_depth(interner, *region, memo))
-                    .max()
-                    .unwrap_or(0)
-                    .max(child_depth(interner, *scrutinee, memo))
-            }
-        };
-        let depth = if let Some(origin) = interner.get(id).origin {
-            depth.max(1 + child_depth(interner, origin, memo))
-        } else {
-            depth
-        };
-        memo.insert(id, depth);
-        depth
-    }
-    let mut memo = HashMap::new();
-    child_depth(interner, root, &mut memo)
-}
-
-pub(crate) fn follow_data_reference_to_rule_target(
-    data: &IndexMap<DataPath, DataDefinition>,
-    start: &DataPath,
-) -> Option<RulePath> {
-    let mut visited: HashSet<DataPath> = HashSet::new();
-    let mut cursor = start.clone();
-    loop {
-        if !visited.insert(cursor.clone()) {
-            return None;
-        }
-        let Some(DataDefinition::Reference { target, .. }) = data.get(&cursor) else {
-            return None;
-        };
-        match target {
-            ReferenceTarget::Data(next) => cursor = next.clone(),
-            ReferenceTarget::Rule(rule_path) => return Some(rule_path.clone()),
-        }
-    }
-}
-
-fn build_in_plan_rule_target_data_map(
-    data: &IndexMap<DataPath, DataDefinition>,
-) -> HashMap<DataPath, RulePath> {
-    let mut out: HashMap<DataPath, RulePath> = HashMap::new();
-    for (path, definition) in data {
-        if !matches!(definition, DataDefinition::Reference { .. }) {
+/// Maximum nesting depth of a NormalForm DAG (leaves and rule embeds have
+/// depth 1). Rule embeds are evaluation boundaries, so planning measures only
+/// intra-rule Kind nesting. Used to guarantee the recursive per-rule evaluator
+/// never overflows the stack.
+pub(crate) fn normal_form_depth(forms: &[NormalForm], root: NormalFormId) -> usize {
+    let mut memo: HashMap<NormalFormId, usize> = HashMap::new();
+    // Explicit post-order: (id, children_pushed). Embeds are leaves (depth 1).
+    let mut stack: Vec<(NormalFormId, bool)> = vec![(root, false)];
+    while let Some((id, children_pushed)) = stack.pop() {
+        if memo.contains_key(&id) {
             continue;
         }
-        if let Some(rule_path) = follow_data_reference_to_rule_target(data, path) {
-            out.insert(path.clone(), rule_path);
+        let cell = forms.get(id.index()).unwrap_or_else(|| {
+            panic!(
+                "BUG: NormalFormId {} out of range during depth walk (table len {})",
+                id.0,
+                forms.len()
+            )
+        });
+        if cell.rule_embed.is_some() {
+            memo.insert(id, 1);
+            continue;
         }
+        if !children_pushed {
+            stack.push((id, true));
+            let mut children = Vec::new();
+            push_child_ids(&cell.kind, &mut children);
+            if let Some(origin) = cell.origin {
+                children.push(origin);
+            }
+            for child in children {
+                if !memo.contains_key(&child) {
+                    stack.push((child, false));
+                }
+            }
+            continue;
+        }
+        let mut child_ids = Vec::new();
+        push_child_ids(&cell.kind, &mut child_ids);
+        let mut depth = 1usize;
+        for child in &child_ids {
+            let child_depth = *memo.get(child).unwrap_or_else(|| {
+                panic!(
+                    "BUG: child NormalFormId {} missing from depth memo after post-order push",
+                    child.0
+                )
+            });
+            depth = depth.max(1 + child_depth);
+        }
+        if let Some(origin) = cell.origin {
+            let origin_depth = *memo.get(&origin).unwrap_or_else(|| {
+                panic!(
+                    "BUG: origin NormalFormId {} missing from depth memo after post-order push",
+                    origin.0
+                )
+            });
+            depth = depth.max(1 + origin_depth);
+        }
+        memo.insert(id, depth);
     }
-    out
+    *memo
+        .get(&root)
+        .unwrap_or_else(|| panic!("BUG: root NormalFormId {} missing from depth memo", root.0))
 }
 
 fn literal_bool_expression(value: bool, source: Option<Source>) -> Expression {
     Expression::with_source(
-        ExpressionKind::Literal(Box::new(LiteralValue::from_bool(value))),
+        ExpressionKind::Literal(Box::new(TypedLiteral::from_bool(value))),
         source,
     )
 }
 
 /// Leaves in the shipped equation DAG: literals and data only.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum LeafKind {
-    Literal(Arc<LiteralValue>),
+    Literal(LiteralValue),
     DataPath(crate::planning::semantics::DataPath),
 }
 
 /// Index into a [`NormalFormInterner`] / shipped [`crate::planning::execution_plan::ExecutionPlan::normal_forms`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct NormalFormId(u32);
 
 impl NormalFormId {
     pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
+
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(u32::try_from(index).expect("BUG: normal_forms table exceeds u32::MAX"))
+    }
 }
 
 /// Algebraic structure only. Children are [`NormalFormId`]. Hash/Eq drive cons —
 /// no source spans or rule-embed identity here (those live on [`NormalForm`]).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum NormalFormKind {
     Leaf(LeafKind),
     Sum(Vec<NormalFormId>),
@@ -388,16 +329,19 @@ pub(crate) enum NormalFormKind {
     },
 }
 
-/// One node in THE DAG: algebraic Kind, optional conversion span, optional fold
-/// origin, optional rule use-site identity.
+/// One node in THE DAG: algebraic Kind, stamped result type, optional conversion
+/// span, optional fold origin, optional rule use-site identity.
 ///
 /// A rule use-site shares the completed body's Kind (same child ids) and sets
 /// `rule_embed`. That keeps algebra visible to normalize while naming the embed
-/// for explanation. Cons keys on `(kind, rule_embed)` so an embed never collapses
-/// into the bare body cell.
-#[derive(Clone, Debug)]
+/// for explanation. Cons keys on `(kind, rule_embed, result_type)` so an embed
+/// never collapses into the bare body cell, and DataPath leaves that differ only
+/// in resolved type (shared interner across temporal slices) stay distinct.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct NormalForm {
     pub(crate) kind: NormalFormKind,
+    /// Type of the value this cell evaluates to. Stamped at planning.
+    pub(crate) result_type: Arc<LemmaType>,
     /// Span for unit-conversion nodes; does not affect sharing.
     pub(crate) source: Option<Source>,
     /// Pre-image destroyed by a fold; blocks sharing when present.
@@ -406,10 +350,13 @@ pub(crate) struct NormalForm {
     pub(crate) rule_embed: Option<RulePath>,
 }
 
-/// Cons key: algebraic Kind plus optional rule-embed identity.
-type ConsKey = (NormalFormKind, Option<RulePath>);
+/// Cons key: algebraic Kind, optional rule-embed identity, and stamped result
+/// type. Type is part of the key so a shared interner across temporal slices
+/// never collapses DataPath leaves that differ only in resolved type (Literal
+/// leaves already distinguish via [`LiteralValue::lemma_type`] inside Kind).
+type ConsKey = (NormalFormKind, Option<RulePath>, Arc<LemmaType>);
 
-/// Build-local table + origin-free cons. Ship via [`Self::into_reachable`].
+/// Build-local table + origin-free cons. Ship via [`Self::extract_reachable`].
 pub(crate) struct NormalFormInterner {
     forms: Vec<NormalForm>,
     cons: HashMap<ConsKey, NormalFormId>,
@@ -429,8 +376,9 @@ impl NormalFormInterner {
         source: Option<Source>,
         origin: Option<NormalFormId>,
         rule_embed: Option<RulePath>,
+        result_type: Arc<LemmaType>,
     ) -> NormalFormId {
-        let key = (kind, rule_embed);
+        let key = (kind, rule_embed, result_type);
         if origin.is_none() {
             if let Some(id) = self.cons.get(&key) {
                 return *id;
@@ -444,6 +392,7 @@ impl NormalFormInterner {
         }
         self.forms.push(NormalForm {
             kind: key.0,
+            result_type: key.2,
             source,
             origin,
             rule_embed: key.1,
@@ -461,10 +410,17 @@ impl NormalFormInterner {
         })
     }
 
+    pub(crate) fn result_type(&self, id: NormalFormId) -> &Arc<LemmaType> {
+        &self.get(id).result_type
+    }
+
     /// Ship only cells reachable from `roots`. Dense-remap ids in ascending
     /// old-index order. Walks shape children and origin. Remaps both.
-    pub(crate) fn into_reachable(
-        self,
+    ///
+    /// Keeps the interner so one planning pass can share it across every
+    /// temporal slice of a spec set.
+    pub(crate) fn extract_reachable(
+        &self,
         roots: &[NormalFormId],
     ) -> (Vec<NormalForm>, Vec<NormalFormId>) {
         let mut reachable: HashSet<u32> = HashSet::new();
@@ -502,6 +458,7 @@ impl NormalFormInterner {
             let cell = &self.forms[*old as usize];
             table.push(NormalForm {
                 kind: remap_kind(&cell.kind, &remap),
+                result_type: Arc::clone(&cell.result_type),
                 source: cell.source.clone(),
                 origin: cell.origin.map(|o| {
                     *remap.get(&o.0).unwrap_or_else(|| {
@@ -523,7 +480,7 @@ impl NormalFormInterner {
     }
 }
 
-fn push_child_ids(kind: &NormalFormKind, worklist: &mut Vec<NormalFormId>) {
+pub(crate) fn push_child_ids(kind: &NormalFormKind, worklist: &mut Vec<NormalFormId>) {
     match kind {
         NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => {}
         NormalFormKind::Sum(children)
@@ -621,8 +578,212 @@ fn remap_kind(kind: &NormalFormKind, remap: &HashMap<u32, NormalFormId>) -> Norm
     }
 }
 
+pub(crate) fn data_path_result_type(
+    data: &IndexMap<DataPath, DataDefinition>,
+    path: &DataPath,
+) -> Arc<LemmaType> {
+    match data.get(path) {
+        Some(DataDefinition::Value { resolved_type, .. })
+        | Some(DataDefinition::TypeDeclaration { resolved_type, .. })
+        | Some(DataDefinition::Reference { resolved_type, .. }) => Arc::clone(resolved_type),
+        // Import, or absent from the map (normalize unit tests with an empty
+        // data scope): same as graph `infer_data_type` — undetermined.
+        Some(DataDefinition::Import { .. }) | None => Arc::new(LemmaType::undetermined_type()),
+    }
+}
+
+fn fold_arithmetic_child_types(
+    interner: &NormalFormInterner,
+    children: &[NormalFormId],
+    op: ArithmeticComputation,
+) -> Arc<LemmaType> {
+    assert!(
+        !children.is_empty(),
+        "BUG: arithmetic NormalForm with zero children"
+    );
+    let mut acc = Arc::clone(interner.result_type(children[0]));
+    for &child in &children[1..] {
+        acc = crate::planning::graph::compute_arithmetic_result_type(
+            acc,
+            &op,
+            Arc::clone(interner.result_type(child)),
+        );
+    }
+    acc
+}
+
+fn unit_conversion_result_type(
+    source_type: &Arc<LemmaType>,
+    target: &SemanticConversionTarget,
+) -> Arc<LemmaType> {
+    match target {
+        SemanticConversionTarget::Type(PrimitiveKind::Number) => primitive_number_arc().clone(),
+        SemanticConversionTarget::Type(PrimitiveKind::Text) => primitive_text_arc().clone(),
+        SemanticConversionTarget::Type(PrimitiveKind::Boolean) => primitive_boolean_arc().clone(),
+        SemanticConversionTarget::Type(kind) if source_type.matches_primitive_kind(*kind) => {
+            Arc::clone(source_type)
+        }
+        SemanticConversionTarget::Unit {
+            unit_name,
+            owning_type,
+        } => Arc::new(
+            owning_type
+                .as_ref()
+                .clone()
+                .with_measure_binding_unit(unit_name.clone()),
+        ),
+        SemanticConversionTarget::Type(_) => Arc::new(LemmaType::undetermined_type()),
+    }
+}
+
+fn math_op_result_type(
+    op: &MathematicalComputation,
+    operand_type: &Arc<LemmaType>,
+) -> Arc<LemmaType> {
+    if operand_type.vetoed() {
+        return Arc::new(LemmaType::veto_type());
+    }
+    if operand_type.is_undetermined() {
+        return Arc::new(LemmaType::undetermined_type());
+    }
+    if crate::computation::mathematical_computation_preserves_measure_magnitude(op)
+        && operand_type.is_measure()
+    {
+        return Arc::clone(operand_type);
+    }
+    primitive_number_arc().clone()
+}
+
+/// Derive `result_type` from an already-interned children's types (and leaf payloads).
+///
+/// [`NormalFormKind::Leaf`] [`LeafKind::DataPath`] must not reach here — callers
+/// stamp those from `plan.data` via [`data_path_result_type`].
+/// Default primitive type for a folded/constructed literal when no richer type is available.
+/// Named measure types must be stamped explicitly via [`fold_into`] / [`intern_literal_leaf`].
+fn literal_value_default_result_type(value: &ValueKind) -> Arc<LemmaType> {
+    match value {
+        ValueKind::Number(_) => primitive_number_arc().clone(),
+        ValueKind::Boolean(_) => primitive_boolean_arc().clone(),
+        ValueKind::Text(_) => primitive_text_arc().clone(),
+        ValueKind::Date(_) => primitive_date_arc().clone(),
+        ValueKind::Time(_) => primitive_time_arc().clone(),
+        ValueKind::Ratio(_) => primitive_ratio_arc().clone(),
+        ValueKind::Measure(_) => {
+            panic!(
+                "BUG: Measure literal result_type must be stamped from expression/fold survivor type"
+            )
+        }
+        ValueKind::Range(_, _) => {
+            panic!("BUG: Range literal result_type must be stamped from expression/endpoint types")
+        }
+    }
+}
+
+fn intern_literal_leaf(
+    interner: &mut NormalFormInterner,
+    literal: LiteralValue,
+    result_type: Arc<LemmaType>,
+) -> NormalFormId {
+    interner.intern(
+        NormalFormKind::Leaf(LeafKind::Literal(literal)),
+        None,
+        None,
+        None,
+        result_type,
+    )
+}
+
+fn result_type_for_kind(interner: &NormalFormInterner, kind: &NormalFormKind) -> Arc<LemmaType> {
+    match kind {
+        NormalFormKind::Leaf(LeafKind::Literal(literal)) => {
+            literal_value_default_result_type(&literal.value)
+        }
+        NormalFormKind::Leaf(LeafKind::DataPath(_)) => {
+            panic!("BUG: DataPath leaf result_type must be stamped from plan.data")
+        }
+        NormalFormKind::Now => primitive_date_arc().clone(),
+        NormalFormKind::Veto(_) => Arc::new(LemmaType::veto_type()),
+        NormalFormKind::Sum(children) => {
+            fold_arithmetic_child_types(interner, children, ArithmeticComputation::Add)
+        }
+        NormalFormKind::Product(children) => {
+            fold_arithmetic_child_types(interner, children, ArithmeticComputation::Multiply)
+        }
+        NormalFormKind::Subtract(a, b) => crate::planning::graph::compute_arithmetic_result_type(
+            Arc::clone(interner.result_type(*a)),
+            &ArithmeticComputation::Subtract,
+            Arc::clone(interner.result_type(*b)),
+        ),
+        NormalFormKind::Divide(a, b) => crate::planning::graph::compute_arithmetic_result_type(
+            Arc::clone(interner.result_type(*a)),
+            &ArithmeticComputation::Divide,
+            Arc::clone(interner.result_type(*b)),
+        ),
+        NormalFormKind::Power(a, b) => crate::planning::graph::compute_arithmetic_result_type(
+            Arc::clone(interner.result_type(*a)),
+            &ArithmeticComputation::Power,
+            Arc::clone(interner.result_type(*b)),
+        ),
+        NormalFormKind::Modulo(a, b) => crate::planning::graph::compute_arithmetic_result_type(
+            Arc::clone(interner.result_type(*a)),
+            &ArithmeticComputation::Modulo,
+            Arc::clone(interner.result_type(*b)),
+        ),
+        NormalFormKind::Negate(x) => Arc::clone(interner.result_type(*x)),
+        NormalFormKind::Reciprocal(x) => crate::planning::graph::compute_arithmetic_result_type(
+            primitive_number_arc().clone(),
+            &ArithmeticComputation::Divide,
+            Arc::clone(interner.result_type(*x)),
+        ),
+        NormalFormKind::Comparison(_, _, _)
+        | NormalFormKind::And(_)
+        | NormalFormKind::Not(_)
+        | NormalFormKind::DateRelative(_, _)
+        | NormalFormKind::DateCalendar(_, _, _)
+        | NormalFormKind::RangeContainment(_, _)
+        | NormalFormKind::ResultIsVeto(_) => primitive_boolean_arc().clone(),
+        NormalFormKind::MathOp(op, x) => math_op_result_type(op, interner.result_type(*x)),
+        NormalFormKind::UnitConversion(x, target) => {
+            unit_conversion_result_type(interner.result_type(*x), target)
+        }
+        NormalFormKind::RangeLiteral(a, b) => {
+            crate::planning::graph::infer_range_type_from_endpoint_types(
+                interner.result_type(*a).as_ref(),
+                interner.result_type(*b).as_ref(),
+            )
+        }
+        NormalFormKind::PastFutureRange(_, _) => primitive_date_range_arc().clone(),
+        NormalFormKind::Piecewise(arms) => {
+            first_non_veto_body_type(interner, arms.iter().map(|(_, body)| *body))
+        }
+        NormalFormKind::OrderedDispatch { regions, .. } => {
+            first_non_veto_body_type(interner, regions.iter().copied())
+        }
+    }
+}
+
+/// Piecewise / OrderedDispatch default arm is often `veto`; prefer a concrete arm type
+/// (same rule as [`crate::planning::graph::infer_rule_types`]).
+fn first_non_veto_body_type(
+    interner: &NormalFormInterner,
+    bodies: impl IntoIterator<Item = NormalFormId>,
+) -> Arc<LemmaType> {
+    let mut fallback: Option<Arc<LemmaType>> = None;
+    for body in bodies {
+        let ty = Arc::clone(interner.result_type(body));
+        if fallback.is_none() {
+            fallback = Some(Arc::clone(&ty));
+        }
+        if !ty.vetoed() && !ty.is_undetermined() {
+            return ty;
+        }
+    }
+    fallback.expect("BUG: Piecewise/OrderedDispatch with zero bodies")
+}
+
 fn intern_empty(interner: &mut NormalFormInterner, kind: NormalFormKind) -> NormalFormId {
-    interner.intern(kind, None, None, None)
+    let result_type = result_type_for_kind(interner, &kind);
+    interner.intern(kind, None, None, None, result_type)
 }
 
 /// Use-site of a named rule: share the completed body's Kind (child ids), set rule_embed.
@@ -631,8 +792,10 @@ fn intern_rule_embed(
     body: NormalFormId,
     rule_path: RulePath,
 ) -> NormalFormId {
-    let kind = interner.get(body).kind.clone();
-    interner.intern(kind, None, None, Some(rule_path))
+    let body_cell = interner.get(body);
+    let kind = body_cell.kind.clone();
+    let result_type = Arc::clone(&body_cell.result_type);
+    interner.intern(kind, None, None, Some(rule_path), result_type)
 }
 
 fn rebuild(
@@ -641,7 +804,27 @@ fn rebuild(
     source: Option<Source>,
     origin: Option<NormalFormId>,
 ) -> NormalFormId {
-    interner.intern(kind, source, origin, None)
+    let result_type = result_type_for_kind(interner, &kind);
+    interner.intern(kind, source, origin, None, result_type)
+}
+
+/// Intern `kind` only when it differs from the node at `id`.
+///
+/// No-op rewrite passes used to `kind.clone()` a wide node (Piecewise with
+/// hundreds of arms), rebuild it unchanged, and re-hash the whole vector for a
+/// cons hit. Returning `id` when the algebraic kind is equal skips that work.
+fn rebuild_if_changed(
+    interner: &mut NormalFormInterner,
+    id: NormalFormId,
+    kind: NormalFormKind,
+    source: Option<Source>,
+    origin: Option<NormalFormId>,
+) -> NormalFormId {
+    if interner.get(id).kind == kind {
+        return id;
+    }
+    let result_type = result_type_for_kind(interner, &kind);
+    interner.intern(kind, source, origin, None, result_type)
 }
 
 fn rebuild_nary(
@@ -651,7 +834,9 @@ fn rebuild_nary(
     children: Vec<NormalFormId>,
     wrap: fn(Vec<NormalFormId>) -> NormalFormKind,
 ) -> NormalFormId {
-    interner.intern(wrap(children), source, origin, None)
+    let kind = wrap(children);
+    let result_type = result_type_for_kind(interner, &kind);
+    interner.intern(kind, source, origin, None, result_type)
 }
 
 fn node_source_origin(
@@ -667,7 +852,15 @@ fn fold_into(
     kind: NormalFormKind,
     destroyed_id: NormalFormId,
 ) -> NormalFormId {
-    interner.intern(kind, None, Some(destroyed_id), None)
+    // Folded literals keep the destroyed node's type (e.g. measure family), not a
+    // ValueKind-default primitive — measure/ratio identity lives on result_type.
+    let result_type = match &kind {
+        NormalFormKind::Leaf(LeafKind::Literal(_)) => {
+            Arc::clone(interner.result_type(destroyed_id))
+        }
+        _ => result_type_for_kind(interner, &kind),
+    };
+    interner.intern(kind, None, Some(destroyed_id), None, result_type)
 }
 
 fn fold_into_survivor(
@@ -692,6 +885,7 @@ fn fold_into_survivor(
         survivor.source.clone(),
         Some(destroyed_id),
         survivor.rule_embed.clone(),
+        Arc::clone(&survivor.result_type),
     )
 }
 
@@ -703,6 +897,23 @@ fn return_if_rule_embed(id: NormalFormId, interner: &NormalFormInterner) -> Opti
         Some(id)
     } else {
         None
+    }
+}
+
+/// Wide value nodes that arithmetic and logical rewrite passes do not transform.
+/// Early-returning them avoids cloning a Piecewise arm vector (and re-hashing it
+/// through cons) on every no-op pass of [`simplify`].
+fn return_if_opaque_to_algebra(
+    id: NormalFormId,
+    interner: &NormalFormInterner,
+) -> Option<NormalFormId> {
+    match &interner.get(id).kind {
+        NormalFormKind::Piecewise(_)
+        | NormalFormKind::OrderedDispatch { .. }
+        | NormalFormKind::Leaf(_)
+        | NormalFormKind::Veto(_)
+        | NormalFormKind::Now => Some(id),
+        _ => None,
     }
 }
 
@@ -745,11 +956,9 @@ fn normalize_once(
                 );
                 normalized = fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        LiteralValue::number_with_type(
-                            number.clone(),
-                            primitive_number_arc().clone(),
-                        ),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number_with_type(
+                        number.clone(),
+                        primitive_number_arc().clone(),
                     ))),
                     destroyed,
                 );
@@ -955,8 +1164,9 @@ fn normalize_children(
                 let r = normalize_once(result, interner, ctx, source.clone())?;
                 normalized_arms.push((c, r));
             }
-            Ok(rebuild(
+            Ok(rebuild_if_changed(
                 interner,
+                id,
                 NormalFormKind::Piecewise(normalized_arms),
                 carried,
                 origin,
@@ -974,8 +1184,9 @@ fn normalize_children(
             for region in regions {
                 normalized_regions.push(normalize_once(region, interner, ctx, source.clone())?);
             }
-            Ok(rebuild(
+            Ok(rebuild_if_changed(
                 interner,
+                id,
                 NormalFormKind::OrderedDispatch {
                     scrutinee,
                     boundaries,
@@ -986,7 +1197,7 @@ fn normalize_children(
             ))
         }
         leaf @ (NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now) => {
-            Ok(rebuild(interner, leaf, carried, origin))
+            Ok(rebuild_if_changed(interner, id, leaf, carried, origin))
         }
     }
 }
@@ -1160,11 +1371,9 @@ fn fold_unit_literals(
                 {
                     return Ok(fold_into(
                         interner,
-                        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                            LiteralValue::number_with_type(
-                                number.clone(),
-                                primitive_number_arc().clone(),
-                            ),
+                        NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number_with_type(
+                            number.clone(),
+                            primitive_number_arc().clone(),
                         ))),
                         id,
                     ));
@@ -1232,8 +1441,9 @@ fn fold_unit_literals(
                     fold_unit_literals(result, interner, unit_ctx, source.clone())?,
                 ));
             }
-            Ok(rebuild(
+            Ok(rebuild_if_changed(
                 interner,
+                id,
                 NormalFormKind::Piecewise(folded_arms),
                 provenance.clone(),
                 origin,
@@ -1268,15 +1478,17 @@ fn fold_unit_literals(
             ))
         }
         NormalFormKind::Leaf(LeafKind::Literal(literal)) => {
-            if let Some(expanded) = expand_named_measure_literal(literal.as_ref(), unit_ctx) {
+            let leaf_type = Arc::clone(interner.result_type(id));
+            if let Some(expanded) = expand_named_measure_literal(&literal, &leaf_type, unit_ctx) {
                 Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(expanded))),
+                    NormalFormKind::Leaf(LeafKind::Literal(expanded)),
                     id,
                 ))
             } else {
-                Ok(rebuild(
+                Ok(rebuild_if_changed(
                     interner,
+                    id,
                     NormalFormKind::Leaf(LeafKind::Literal(literal)),
                     provenance,
                     origin,
@@ -1286,25 +1498,27 @@ fn fold_unit_literals(
         leaf @ (NormalFormKind::Leaf(_)
         | NormalFormKind::Veto(_)
         | NormalFormKind::ResultIsVeto(_)
-        | NormalFormKind::Now) => Ok(rebuild(interner, leaf, provenance, origin)),
+        | NormalFormKind::Now) => Ok(rebuild_if_changed(interner, id, leaf, provenance, origin)),
     }
 }
 
 pub(crate) fn expand_named_measure_literal(
     literal: &LiteralValue,
+    lemma_type: &Arc<LemmaType>,
     unit_ctx: &UnitResolutionContext<'_>,
 ) -> Option<LiteralValue> {
     let UnitResolutionContext::WithIndex(unit_index) = unit_ctx else {
         return None;
     };
-    let ValueKind::Measure(magnitude, signature) = &literal.value else {
+    let ValueKind::Measure(magnitude) = &literal.value else {
         return None;
     };
+    let signature = lemma_type.measure_runtime_signature();
     if signature.len() != 1 || signature[0].1 != 1 {
         return None;
     }
     let unit_name = &signature[0].0;
-    let owners = [literal.lemma_type.as_ref()];
+    let owners = [lemma_type.as_ref()];
     let owning_type = unit_index.owning_type_for_signature_factor(unit_name, &owners)?;
     let TypeSpecification::Measure { units, .. } = &owning_type.specifications else {
         return None;
@@ -1314,12 +1528,13 @@ pub(crate) fn expand_named_measure_literal(
         return None;
     }
     let expanded = crate::computation::arithmetic::expand_signature_to_base_units(
-        signature, unit_index, &owners,
+        &signature, unit_index, &owners,
     );
+    // Expansion is encoded on the type via derived factors; magnitude stays canonical.
+    drop(expanded);
     Some(LiteralValue::measure_with_signature(
         magnitude.clone(),
-        expanded,
-        Arc::clone(&literal.lemma_type),
+        Arc::clone(lemma_type),
     ))
 }
 
@@ -1337,12 +1552,18 @@ fn to_normal_form_node(
     lower: &LowerCtx<'_>,
 ) -> NormalFormId {
     match &expr.kind {
-        ExpressionKind::Literal(lit) => intern_empty(
-            interner,
-            NormalFormKind::Leaf(LeafKind::Literal(Arc::new((**lit).clone()))),
-        ),
+        ExpressionKind::Literal(lit) => {
+            let result_type = Arc::clone(&lit.lemma_type);
+            interner.intern(
+                NormalFormKind::Leaf(LeafKind::Literal(lit.to_literal())),
+                None,
+                None,
+                None,
+                result_type,
+            )
+        }
         ExpressionKind::DataPath(p) => {
-            if let Some(rule_path) = lower.rule_target_data.get(p) {
+            if let Some(ReferenceEnd::Rule(rule_path)) = lower.reference_ends.get(p) {
                 let body = *lower.completed_rules.get(rule_path).unwrap_or_else(|| {
                     panic!(
                         "BUG: rule-target data '{}' maps to rule '{}' with no completed NormalFormId",
@@ -1351,10 +1572,9 @@ fn to_normal_form_node(
                 });
                 intern_rule_embed(interner, body, rule_path.clone())
             } else {
-                intern_empty(
-                    interner,
-                    NormalFormKind::Leaf(LeafKind::DataPath(p.clone())),
-                )
+                let kind = NormalFormKind::Leaf(LeafKind::DataPath(p.clone()));
+                let result_type = data_path_result_type(lower.data, p);
+                interner.intern(kind, None, None, None, result_type)
             }
         }
         ExpressionKind::RulePath(path) => {
@@ -1411,12 +1631,9 @@ fn to_normal_form_node(
         }
         ExpressionKind::UnitConversion(inner, target) => {
             let inner_id = to_normal_form(inner, interner, lower);
-            interner.intern(
-                NormalFormKind::UnitConversion(inner_id, target.clone()),
-                expr.source_location.clone(),
-                None,
-                None,
-            )
+            let kind = NormalFormKind::UnitConversion(inner_id, target.clone());
+            let result_type = result_type_for_kind(interner, &kind);
+            interner.intern(kind, expr.source_location.clone(), None, None, result_type)
         }
         ExpressionKind::LogicalNegation(inner, _) => {
             let inner_id = to_normal_form(inner, interner, lower);
@@ -1478,6 +1695,9 @@ fn expand_numeric_subtract_divide(
     interner: &mut NormalFormInterner,
 ) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -1596,11 +1816,14 @@ fn expand_numeric_subtract_divide(
                 origin,
             )
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn is_numeric_only(interner: &NormalFormInterner, id: NormalFormId) -> bool {
+    if interner.get(id).rule_embed.is_some() {
+        return false;
+    }
     match &interner.get(id).kind {
         NormalFormKind::Leaf(LeafKind::Literal(lit)) => {
             matches!(lit.value, crate::planning::semantics::ValueKind::Number(_))
@@ -1621,6 +1844,9 @@ fn is_numeric_only(interner: &NormalFormInterner, id: NormalFormId) -> bool {
 
 fn flatten_associative(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -1687,12 +1913,15 @@ fn flatten_associative(id: NormalFormId, interner: &mut NormalFormInterner) -> N
                 .collect();
             rebuild_nary(interner, provenance, origin, children, NormalFormKind::And)
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -1712,9 +1941,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             match kept.len() {
                 0 => fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::number(
-                        rational_zero(),
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number(rational_zero()))),
                     id,
                 ),
                 1 => {
@@ -1748,9 +1975,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             match kept.len() {
                 0 => fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::number(
-                        rational_one(),
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number(rational_one()))),
                     id,
                 ),
                 1 => {
@@ -1775,9 +2000,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             {
                 return fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::number(
-                        rational_one(),
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number(rational_one()))),
                     id,
                 );
             }
@@ -1793,9 +2016,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             if is_numeric_zero(interner, inner) {
                 return fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::number(
-                        rational_zero(),
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number(rational_zero()))),
                     id,
                 );
             }
@@ -1841,9 +2062,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             {
                 return fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
-                        false,
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(false))),
                     id,
                 );
             }
@@ -1861,9 +2080,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             match kept.len() {
                 0 => fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
-                        true,
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(true))),
                     id,
                 ),
                 1 => {
@@ -1881,18 +2098,14 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
             if is_literal_bool(interner, inner_done, true) {
                 return fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
-                        false,
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(false))),
                     id,
                 );
             }
             if is_literal_bool(interner, inner_done, false) {
                 return fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
-                        true,
-                    )))),
+                    NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(true))),
                     id,
                 );
             }
@@ -1903,7 +2116,7 @@ fn eliminate_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> 
                 origin,
             )
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
@@ -1911,42 +2124,33 @@ fn typed_product_zero(
     interner: &mut NormalFormInterner,
     children: &[NormalFormId],
 ) -> Option<NormalFormId> {
-    let mut measure_literal: Option<&LiteralValue> = None;
+    let mut measure_child: Option<NormalFormId> = None;
     for &child in children {
         let NormalFormKind::Leaf(LeafKind::Literal(literal)) = &interner.get(child).kind else {
             return None;
         };
         match &literal.value {
             ValueKind::Number(_) => {}
-            ValueKind::Measure(_, _) => {
-                if measure_literal.is_some() {
+            ValueKind::Measure(_) => {
+                if measure_child.is_some() {
                     return None;
                 }
-                measure_literal = Some(literal.as_ref());
+                measure_child = Some(child);
             }
             _ => return None,
         }
     }
-    match measure_literal {
+    match measure_child {
         None => Some(intern_empty(
             interner,
-            NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::number(
-                rational_zero(),
-            )))),
+            NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number(rational_zero()))),
         )),
-        Some(literal) => {
-            let ValueKind::Measure(_, signature) = &literal.value else {
-                unreachable!("BUG: measure literal collected above must carry a measure value");
-            };
-            Some(intern_empty(
+        Some(child) => {
+            let measure_type = Arc::clone(interner.result_type(child));
+            Some(intern_literal_leaf(
                 interner,
-                NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                    LiteralValue::measure_with_signature(
-                        rational_zero(),
-                        signature.clone(),
-                        literal.lemma_type.clone(),
-                    ),
-                ))),
+                LiteralValue::measure_with_signature(rational_zero(), Arc::clone(&measure_type)),
+                measure_type,
             ))
         }
     }
@@ -1963,6 +2167,9 @@ fn is_literal_bool(interner: &NormalFormInterner, id: NormalFormId, expected: bo
 
 fn double_negate_reciprocal(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -1995,12 +2202,15 @@ fn double_negate_reciprocal(id: NormalFormId, interner: &mut NormalFormInterner)
                 rebuild(interner, NormalFormKind::Not(inner), provenance, origin)
             }
         },
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn power_laws(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2035,7 +2245,7 @@ fn power_laws(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalForm
                 .collect();
             collect_like_base_powers(interner, children, provenance, id)
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
@@ -2050,7 +2260,7 @@ fn nested_power_merge_preserves_domain(
     let Some(outer) = as_integer_literal(interner, outer_exponent) else {
         return false;
     };
-    inner.numer().is_positive() && outer.numer().is_positive()
+    inner.numer_is_positive() && outer.numer_is_positive()
 }
 
 fn like_base_merge_preserves_domain(
@@ -2064,8 +2274,8 @@ fn like_base_merge_preserves_domain(
     let Some(right) = as_integer_literal(interner, right_exponent) else {
         return false;
     };
-    (left.numer().is_positive() && right.numer().is_positive())
-        || (left.numer().is_negative() && right.numer().is_negative())
+    (left.numer_is_positive() && right.numer_is_positive())
+        || (left.numer_is_negative() && right.numer_is_negative())
 }
 
 fn collect_like_base_powers(
@@ -2115,9 +2325,7 @@ fn collect_like_base_powers(
         match other.len() {
             0 => fold_into(
                 interner,
-                NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::number(
-                    rational_one(),
-                )))),
+                NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::number(rational_one()))),
                 destroyed_id,
             ),
             1 => {
@@ -2140,7 +2348,7 @@ fn try_multiply_nf_rational(
     let literal = literal_from_folded_rational(rational, None).ok()?;
     Some(intern_empty(
         interner,
-        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(literal))),
+        NormalFormKind::Leaf(LeafKind::Literal(literal)),
     ))
 }
 
@@ -2155,7 +2363,7 @@ fn try_add_nf_rational(
     let literal = literal_from_folded_rational(rational, None).ok()?;
     Some(intern_empty(
         interner,
-        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(literal))),
+        NormalFormKind::Leaf(LeafKind::Literal(literal)),
     ))
 }
 
@@ -2165,6 +2373,9 @@ fn constant_fold(
     source: Option<Source>,
 ) -> Result<NormalFormId, Error> {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return Ok(id);
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return Ok(id);
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2195,9 +2406,10 @@ fn constant_fold(
                 );
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(acc, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        acc,
+                        source.clone(),
+                    )?)),
                     destroyed_id,
                 ));
             }
@@ -2229,9 +2441,10 @@ fn constant_fold(
                 }
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(acc, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        acc,
+                        source.clone(),
+                    )?)),
                     id,
                 ));
             }
@@ -2255,9 +2468,10 @@ fn constant_fold(
                 {
                     return Ok(fold_into(
                         interner,
-                        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                            literal_from_folded_rational(rational, source.clone())?,
-                        ))),
+                        NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                            rational,
+                            source.clone(),
+                        )?)),
                         id,
                     ));
                 }
@@ -2279,9 +2493,10 @@ fn constant_fold(
                     })?;
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(negated, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        negated,
+                        source.clone(),
+                    )?)),
                     id,
                 ));
             }
@@ -2302,9 +2517,10 @@ fn constant_fold(
                     })?;
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(reciprocal, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        reciprocal,
+                        source.clone(),
+                    )?)),
                     id,
                 ));
             }
@@ -2329,9 +2545,10 @@ fn constant_fold(
                     })?;
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(quotient, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        quotient,
+                        source.clone(),
+                    )?)),
                     id,
                 ));
             }
@@ -2356,9 +2573,10 @@ fn constant_fold(
                         })?;
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(difference, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        difference,
+                        source.clone(),
+                    )?)),
                     id,
                 ));
             }
@@ -2383,9 +2601,10 @@ fn constant_fold(
                     })?;
                 return Ok(fold_into(
                     interner,
-                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                        literal_from_folded_rational(remainder, source.clone())?,
-                    ))),
+                    NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                        remainder,
+                        source.clone(),
+                    )?)),
                     id,
                 ));
             }
@@ -2402,9 +2621,7 @@ fn constant_fold(
                 if let ValueKind::Boolean(boolean) = &literal.value {
                     return Ok(fold_into(
                         interner,
-                        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
-                            !boolean,
-                        )))),
+                        NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(!boolean))),
                         id,
                     ));
                 }
@@ -2426,8 +2643,10 @@ fn constant_fold(
             {
                 let folded = comparison_operation(
                     left_literal,
+                    interner.result_type(left),
                     &op,
                     right_literal,
+                    interner.result_type(right),
                     UnitResolutionContext::NamedMeasureOnly,
                 );
                 if let Some(literal) = folded.value() {
@@ -2462,9 +2681,10 @@ fn constant_fold(
                 if let Some(folded) = fold_math_op(&op, &rational) {
                     return Ok(fold_into(
                         interner,
-                        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                            literal_from_folded_rational(folded, source.clone())?,
-                        ))),
+                        NormalFormKind::Leaf(LeafKind::Literal(literal_from_folded_rational(
+                            folded,
+                            source.clone(),
+                        )?)),
                         id,
                     ));
                 }
@@ -2476,7 +2696,7 @@ fn constant_fold(
                 origin,
             ))
         }
-        other => Ok(rebuild(interner, other, provenance, origin)),
+        _ => Ok(id),
     }
 }
 
@@ -2496,7 +2716,7 @@ fn fold_comparison_to_bool(
     );
     fold_into(
         interner,
-        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(held)))),
+        NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(held))),
         destroyed,
     )
 }
@@ -2511,12 +2731,14 @@ fn collapse_piecewise(id: NormalFormId, interner: &mut NormalFormInterner) -> No
     if let Some(id) = return_if_rule_embed(id, interner) {
         return id;
     }
-    let NormalFormKind::Piecewise(arms) = interner.get(id).kind.clone() else {
+    let NormalFormKind::Piecewise(arms) = &interner.get(id).kind else {
         return id;
     };
+    // Copy arm ids only (cheap); do not clone through NormalFormKind.
+    let arms: Vec<(NormalFormId, NormalFormId)> = arms.clone();
 
     let mut recorded: Vec<(NormalFormId, NormalFormId)> = Vec::with_capacity(arms.len());
-    for (condition, result) in arms {
+    for (condition, result) in arms.iter().copied() {
         let forced = force_unless_condition_static_false(condition, interner);
         recorded.push((forced, result));
     }
@@ -2543,7 +2765,12 @@ fn collapse_piecewise(id: NormalFormId, interner: &mut NormalFormInterner) -> No
 
     let dropped = kept.len() != recorded.len();
     if !dropped && kept.len() > 1 {
-        return rebuild(interner, NormalFormKind::Piecewise(kept), None, None);
+        // Nothing collapsed. If force_unless also left every condition id alone,
+        // the node is unchanged — return it without re-consing the arm vector.
+        if kept.as_slice() == arms.as_slice() {
+            return id;
+        }
+        return rebuild_if_changed(interner, id, NormalFormKind::Piecewise(kept), None, None);
     }
 
     let destroyed_id = rebuild(interner, NormalFormKind::Piecewise(recorded), None, None);
@@ -2563,7 +2790,7 @@ fn force_unless_condition_static_false(
     if unless_condition_contains_literal_false(interner, id) {
         return fold_into(
             interner,
-            NormalFormKind::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(false)))),
+            NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(false))),
             id,
         );
     }
@@ -2574,6 +2801,9 @@ fn unless_condition_contains_literal_false(
     interner: &NormalFormInterner,
     id: NormalFormId,
 ) -> bool {
+    if interner.get(id).rule_embed.is_some() {
+        return false;
+    }
     if is_literal_bool(interner, id, false) {
         return true;
     }
@@ -2607,19 +2837,21 @@ fn ordered_dispatch(
     if let Some(id) = return_if_rule_embed(id, interner) {
         return Ok(id);
     }
-    let NormalFormKind::Piecewise(arms) = interner.get(id).kind.clone() else {
+    let NormalFormKind::Piecewise(arms) = &interner.get(id).kind else {
         return Ok(id);
     };
     if arms.len() < 2 || !is_literal_bool(interner, arms[0].0, true) {
         return Ok(id);
     }
+    // Arm id pairs only — do not clone through NormalFormKind.
+    let arms: Vec<(NormalFormId, NormalFormId)> = arms.clone();
     let Some(scan) = scan_dispatch_arms(interner, &arms) else {
         return Ok(id);
     };
     let Some(scrutinee_type) = dispatch_scrutinee_type(interner, scan.scrutinee, data) else {
         return Ok(id);
     };
-    let key_literals: Vec<&LiteralValue> = scan.keys.iter().map(Arc::as_ref).collect();
+    let key_literals: Vec<&LiteralValue> = scan.keys.iter().collect();
     let Some(class) = classify_dispatch(scrutinee_type, &key_literals) else {
         return Ok(id);
     };
@@ -2653,6 +2885,7 @@ fn ordered_dispatch(
             }
         }
     }
+    // Sort a second owned list for boundaries; keep `keys` in arm order for probes.
     let boundaries = sorted_unique_boundaries(keys.clone())
         .map_err(|failure| normalization_error(source.clone(), failure, "ordered dispatch"))?;
 
@@ -2690,7 +2923,7 @@ struct DispatchArmScan {
     scrutinee: NormalFormId,
     /// One per unless arm in arm order, mirrored so the scrutinee reads on the left.
     operators: Vec<ComparisonComputation>,
-    keys: Vec<Arc<LiteralValue>>,
+    keys: Vec<LiteralValue>,
 }
 
 fn scan_dispatch_arms(
@@ -2734,13 +2967,13 @@ fn scan_dispatch_arms(
     })
 }
 
-fn literal_operand(interner: &NormalFormInterner, id: NormalFormId) -> Option<Arc<LiteralValue>> {
+fn literal_operand(interner: &NormalFormInterner, id: NormalFormId) -> Option<LiteralValue> {
     let cell = interner.get(id);
     if cell.rule_embed.is_some() {
         return None;
     }
     match &cell.kind {
-        NormalFormKind::Leaf(LeafKind::Literal(literal)) => Some(Arc::clone(literal)),
+        NormalFormKind::Leaf(LeafKind::Literal(literal)) => Some(literal.clone()),
         _ => None,
     }
 }
@@ -2761,8 +2994,8 @@ fn dispatch_scrutinee_type<'a>(
         return None;
     };
     match data.get(path)? {
-        DataDefinition::Value { value, .. } => Some(value.lemma_type.as_ref()),
-        DataDefinition::TypeDeclaration { resolved_type, .. }
+        DataDefinition::Value { resolved_type, .. }
+        | DataDefinition::TypeDeclaration { resolved_type, .. }
         | DataDefinition::Reference { resolved_type, .. } => Some(resolved_type.as_ref()),
         DataDefinition::Import { .. } => None,
     }
@@ -2788,6 +3021,9 @@ fn demorgan(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId
     if let Some(id) = return_if_rule_embed(id, interner) {
         return id;
     }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
+        return id;
+    }
     let (provenance, origin) = node_source_origin(interner, id);
     match interner.get(id).kind.clone() {
         NormalFormKind::Not(x) => match &interner.get(x).kind {
@@ -2801,7 +3037,7 @@ fn demorgan(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId
                 rebuild(interner, NormalFormKind::Not(inner), provenance, origin)
             }
         },
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
@@ -2811,6 +3047,9 @@ fn logical_flatten(id: NormalFormId, interner: &mut NormalFormInterner) -> Norma
 
 fn logical_short_circuit(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2826,9 +3065,7 @@ fn logical_short_circuit(id: NormalFormId, interner: &mut NormalFormInterner) ->
                     ) {
                         return fold_into(
                             interner,
-                            NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                                LiteralValue::from_bool(false),
-                            ))),
+                            NormalFormKind::Leaf(LeafKind::Literal(LiteralValue::from_bool(false))),
                             id,
                         );
                     }
@@ -2836,12 +3073,15 @@ fn logical_short_circuit(id: NormalFormId, interner: &mut NormalFormInterner) ->
             }
             rebuild_nary(interner, provenance, origin, children, NormalFormKind::And)
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn logical_idempotency(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2862,12 +3102,15 @@ fn logical_idempotency(id: NormalFormId, interner: &mut NormalFormInterner) -> N
                 fold_into(interner, NormalFormKind::And(unique), id)
             }
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn negated_comparisons(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2883,12 +3126,15 @@ fn negated_comparisons(id: NormalFormId, interner: &mut NormalFormInterner) -> N
                 rebuild(interner, NormalFormKind::Not(inner), provenance, origin)
             }
         },
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn math_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2945,19 +3191,22 @@ fn math_identities(id: NormalFormId, interner: &mut NormalFormInterner) -> Norma
             let base = math_identities(x, interner);
             let half = intern_empty(
                 interner,
-                NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
+                NormalFormKind::Leaf(LeafKind::Literal(
                     literal_from_folded_rational(rational_new(1, 2), None)
                         .expect("BUG: literal 1/2 must commit at normalize"),
-                ))),
+                )),
             );
             fold_into(interner, NormalFormKind::Power(base, half), id)
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
 fn canonical_order(id: NormalFormId, interner: &mut NormalFormInterner) -> NormalFormId {
     if let Some(id) = return_if_rule_embed(id, interner) {
+        return id;
+    }
+    if let Some(id) = return_if_opaque_to_algebra(id, interner) {
         return id;
     }
     let (provenance, origin) = node_source_origin(interner, id);
@@ -2995,7 +3244,7 @@ fn canonical_order(id: NormalFormId, interner: &mut NormalFormInterner) -> Norma
                 .collect();
             rebuild_nary(interner, provenance, origin, children, NormalFormKind::And)
         }
-        other => rebuild(interner, other, provenance, origin),
+        _ => id,
     }
 }
 
@@ -3050,7 +3299,7 @@ fn is_total(interner: &NormalFormInterner, id: NormalFormId) -> bool {
 
 fn as_integer_literal(interner: &NormalFormInterner, id: NormalFormId) -> Option<RationalInteger> {
     let rational = as_rational_literal(interner, id)?;
-    if rational.denom() == &crate::computation::bigint::BigInt::one() {
+    if rational.is_integer() {
         Some(rational)
     } else {
         None
@@ -3179,7 +3428,9 @@ fn explanation_display_inner(forms: &[NormalForm], id: NormalFormId) -> String {
         return path.rule.clone();
     }
     match &nf.kind {
-        NormalFormKind::Leaf(LeafKind::Literal(lit)) => lit.display_value(),
+        NormalFormKind::Leaf(LeafKind::Literal(lit)) => {
+            lit.display_value_with_type(nf.result_type.as_ref())
+        }
         NormalFormKind::Leaf(LeafKind::DataPath(p)) => p.input_key(),
         NormalFormKind::Comparison(a, op, b) => {
             let prec = normal_form_precedence(&nf.kind);
@@ -3393,11 +3644,21 @@ mod tests {
     }
 
     fn to_normal_form_empty(expr: &Expression, interner: &mut NormalFormInterner) -> NormalFormId {
+        let empty = IndexMap::new();
+        to_normal_form_with_data(expr, interner, &empty)
+    }
+
+    fn to_normal_form_with_data(
+        expr: &Expression,
+        interner: &mut NormalFormInterner,
+        data: &IndexMap<DataPath, DataDefinition>,
+    ) -> NormalFormId {
         let completed_rules = HashMap::new();
-        let rule_target_data = HashMap::new();
+        let reference_ends = IndexMap::new();
         let lower = LowerCtx {
             completed_rules: &completed_rules,
-            rule_target_data: &rule_target_data,
+            reference_ends: &reference_ends,
+            data,
         };
         to_normal_form(expr, interner, &lower)
     }
@@ -3418,7 +3679,10 @@ mod tests {
         }
         match &nf.kind {
             NormalFormKind::Leaf(LeafKind::Literal(lit)) => {
-                ExpressionKind::Literal(Box::new((**lit).clone()))
+                ExpressionKind::Literal(Box::new(TypedLiteral {
+                    value: lit.value.clone(),
+                    lemma_type: Arc::clone(&nf.result_type),
+                }))
             }
             NormalFormKind::Leaf(LeafKind::DataPath(p)) => ExpressionKind::DataPath(p.clone()),
             NormalFormKind::Sum(children) => sum_to_kind(forms, children, source),
@@ -3445,7 +3709,7 @@ mod tests {
             ),
             NormalFormKind::Negate(x) => {
                 let zero = Expression::with_source(
-                    ExpressionKind::Literal(Box::new(LiteralValue::number(rational_zero()))),
+                    ExpressionKind::Literal(Box::new(TypedLiteral::number(rational_zero()))),
                     source.clone(),
                 );
                 ExpressionKind::Arithmetic(
@@ -3456,7 +3720,7 @@ mod tests {
             }
             NormalFormKind::Reciprocal(x) => {
                 let one = Expression::with_source(
-                    ExpressionKind::Literal(Box::new(LiteralValue::number(rational_one()))),
+                    ExpressionKind::Literal(Box::new(TypedLiteral::number(rational_one()))),
                     source.clone(),
                 );
                 ExpressionKind::Arithmetic(
@@ -3533,7 +3797,7 @@ mod tests {
         source: Option<Source>,
     ) -> ExpressionKind {
         match children {
-            [] => ExpressionKind::Literal(Box::new(LiteralValue::number(rational_zero()))),
+            [] => ExpressionKind::Literal(Box::new(TypedLiteral::number(rational_zero()))),
             [one] => nf_to_kind(forms, *one, source),
             [first, rest @ ..] => {
                 let mut acc = Expression::with_source(
@@ -3561,7 +3825,7 @@ mod tests {
         source: Option<Source>,
     ) -> ExpressionKind {
         match children {
-            [] => ExpressionKind::Literal(Box::new(LiteralValue::number(rational_one()))),
+            [] => ExpressionKind::Literal(Box::new(TypedLiteral::number(rational_one()))),
             [one] => nf_to_kind(forms, *one, source),
             [first, rest @ ..] => {
                 let mut acc = Expression::with_source(
@@ -3589,7 +3853,7 @@ mod tests {
         source: Option<Source>,
     ) -> ExpressionKind {
         match children {
-            [] => ExpressionKind::Literal(Box::new(LiteralValue::from_bool(true))),
+            [] => ExpressionKind::Literal(Box::new(TypedLiteral::from_bool(true))),
             [one] => nf_to_kind(forms, *one, source),
             [first, rest @ ..] => {
                 let mut acc = Expression::with_source(
@@ -3612,14 +3876,14 @@ mod tests {
 
     fn num_expr(n: i64) -> Expression {
         Expression::with_source(
-            ExpressionKind::Literal(Box::new(LiteralValue::number(rational_new(n, 1)))),
+            ExpressionKind::Literal(Box::new(TypedLiteral::number(rational_new(n, 1)))),
             None,
         )
     }
 
     fn bool_expr(b: bool) -> Expression {
         Expression::with_source(
-            ExpressionKind::Literal(Box::new(LiteralValue::from_bool(b))),
+            ExpressionKind::Literal(Box::new(TypedLiteral::from_bool(b))),
             None,
         )
     }
@@ -3709,6 +3973,7 @@ mod tests {
                 DataDefinition::TypeDeclaration {
                     resolved_type,
                     declared_suggestion: None,
+                    declared_fill: None,
                     source: test_source(),
                 },
             )
@@ -3739,7 +4004,7 @@ mod tests {
 
         fn text_expr(text: &str) -> Expression {
             Expression::with_source(
-                ExpressionKind::Literal(Box::new(LiteralValue::text(text.to_string()))),
+                ExpressionKind::Literal(Box::new(TypedLiteral::text(text.to_string()))),
                 None,
             )
         }
@@ -3764,7 +4029,7 @@ mod tests {
         fn fold(expr: &Expression) -> (NormalFormId, NormalFormInterner) {
             let data = scope();
             let mut interner = NormalFormInterner::new();
-            let root = to_normal_form_empty(expr, &mut interner);
+            let root = to_normal_form_with_data(expr, &mut interner, &data);
             let limits = crate::limits::ResourceLimits::default();
             let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
             let ctx = NormalizeContext {
@@ -3834,8 +4099,8 @@ mod tests {
             assert_eq!(
                 boundaries,
                 vec![
-                    DispatchKey::Text("BE".to_string()),
-                    DispatchKey::Text("NL".to_string())
+                    DispatchKey::Text(std::sync::Arc::from("BE")),
+                    DispatchKey::Text(std::sync::Arc::from("NL"))
                 ]
             );
             // Every interval holds the default; only the two points carry results.
@@ -3951,7 +4216,7 @@ mod tests {
         fn dates_fold_with_ordering_operators() {
             let day = |year: i32| {
                 Expression::with_source(
-                    ExpressionKind::Literal(Box::new(LiteralValue::date(
+                    ExpressionKind::Literal(Box::new(TypedLiteral::date(
                         crate::planning::semantics::SemanticDateTime {
                             year,
                             month: 1,
@@ -3985,7 +4250,7 @@ mod tests {
         #[test]
         fn calendar_failure_literal_is_a_planning_error() {
             let invalid_day = Expression::with_source(
-                ExpressionKind::Literal(Box::new(LiteralValue::date(
+                ExpressionKind::Literal(Box::new(TypedLiteral::date(
                     crate::planning::semantics::SemanticDateTime {
                         year: 2020,
                         month: 13,
@@ -4524,11 +4789,13 @@ mod tests {
     /// `2^(1/2)` has no exact rational result: constant_fold must not substitute a decimal.
     #[test]
     fn literal_power_with_irrational_result_stays_power() {
+        let half_lit = literal_from_folded_rational(rational_new(1, 2), None)
+            .expect("BUG: literal 1/2 must commit at normalize");
         let half = Expression::with_source(
-            ExpressionKind::Literal(Box::new(
-                literal_from_folded_rational(rational_new(1, 2), None)
-                    .expect("BUG: literal 1/2 must commit at normalize"),
-            )),
+            ExpressionKind::Literal(Box::new(TypedLiteral {
+                value: half_lit.value,
+                lemma_type: primitive_number_arc().clone(),
+            })),
             None,
         );
         let expr = pow_expr(num_expr(2), half);
@@ -4736,13 +5003,14 @@ mod tests {
         let piecewise = unless_branches_to_piecewise(&branches);
         let mut interner = NormalFormInterner::new();
         let completed_rules = HashMap::new();
-        let rule_target_data = HashMap::new();
+        let reference_ends = IndexMap::new();
+        let data = IndexMap::new();
         let lower = LowerCtx {
             completed_rules: &completed_rules,
-            rule_target_data: &rule_target_data,
+            reference_ends: &reference_ends,
+            data: &data,
         };
         let root = to_normal_form(&piecewise, &mut interner, &lower);
-        let data = IndexMap::new();
         let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
         let limits = crate::limits::ResourceLimits::default();
         let ctx = NormalizeContext {

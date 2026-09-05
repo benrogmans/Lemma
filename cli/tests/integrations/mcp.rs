@@ -312,21 +312,17 @@ fn test_mcp_evaluate_includes_reasoning() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    let rate = &response["results"]["rate"];
     assert!(
-        rate["explanation"].is_object(),
-        "run always includes explanation, got: {text}"
-    );
-    let display = rate["display"].as_str().unwrap_or("");
-    assert!(
-        display.contains("10%") || display.contains("10 percent"),
+        text.contains("rate: 10%") || text.contains("rate: 10 percent"),
         "last-wins unless for quantity=25 must be 10 percent, got: {text}"
     );
-    let explanation = serde_json::to_string(&rate["explanation"]).expect("serialize");
     assert!(
-        explanation.contains("quantity >= 10") || explanation.contains("quantity"),
-        "explanation should reference quantity condition, got: {explanation}"
+        text.contains("quantity >= 10") || text.contains("quantity"),
+        "explanation should reference quantity condition, got: {text}"
+    );
+    assert!(
+        text.contains("└─") || text.contains("├─"),
+        "run must return ASCII tree, got: {text}"
     );
 }
 
@@ -380,16 +376,7 @@ fn test_mcp_evaluate_alias_matches_run() {
     let eval_text = eval_responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("evaluate text");
-    let run_json: serde_json::Value = serde_json::from_str(run_text).expect("run JSON");
-    let eval_json: serde_json::Value = serde_json::from_str(eval_text).expect("evaluate JSON");
-    assert_eq!(
-        run_json["results"]["total"]["display"],
-        eval_json["results"]["total"]["display"]
-    );
-    assert_eq!(
-        run_json["results"]["total"]["explanation"]["body"],
-        eval_json["results"]["total"]["explanation"]["body"]
-    );
+    assert_eq!(run_text, eval_text);
 }
 
 #[test]
@@ -434,35 +421,25 @@ fn test_mcp_evaluate_reports_missing_data_when_partial() {
     );
 
     assert!(responses.len() >= 3);
-    let partial: serde_json::Value = serde_json::from_str(
-        responses[1]["result"]["content"][0]["text"]
-            .as_str()
-            .expect("partial run text"),
-    )
-    .expect("partial Response JSON");
-    let missing = partial["results"]["total"]["missing_data"]
-        .as_array()
-        .expect("missing_data array");
+    let partial = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("partial run text");
     assert!(
-        missing.iter().any(|v| v == "price"),
-        "missing_data must include price, got: {missing:?}"
+        partial.contains("Missing data") && partial.contains("price"),
+        "partial run must list price under Missing data, got: {partial}"
     );
 
-    let complete: serde_json::Value = serde_json::from_str(
-        responses[2]["result"]["content"][0]["text"]
-            .as_str()
-            .expect("complete run text"),
-    )
-    .expect("complete Response JSON");
+    let complete = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("complete run text");
     assert!(
-        complete["results"]["total"]["missing_data"].is_null()
-            || complete["results"]["total"]["missing_data"]
-                .as_array()
-                .map(|a| a.is_empty())
-                .unwrap_or(false),
-        "complete run must omit missing_data, got: {complete}"
+        !complete.contains("Missing data"),
+        "complete run must omit Missing data, got: {complete}"
     );
-    assert_eq!(complete["results"]["total"]["display"], "20");
+    assert!(
+        complete.contains("total: 20"),
+        "complete run must show total: 20, got: {complete}"
+    );
 }
 
 #[test]
@@ -507,19 +484,13 @@ rule premium: (1 / denom) * loading
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    let premium = &response["results"]["premium"];
     assert!(
-        premium["vetoed"].as_bool() == Some(true) || premium.get("display").is_some(),
+        text.contains("premium:"),
         "settled run must show rule answer, got: {text}"
     );
     assert!(
-        premium["missing_data"].is_null()
-            || premium["missing_data"]
-                .as_array()
-                .map(|a| a.is_empty())
-                .unwrap_or(false),
-        "settled Computation must not list missing_data for leftover live keys, got: {text}"
+        !text.contains("Missing data"),
+        "settled Computation must not list Missing data for leftover live keys, got: {text}"
     );
 }
 
@@ -577,18 +548,12 @@ rule total: quantity * price
         "Unit price of the item."
     );
 
-    let run: serde_json::Value = serde_json::from_str(
-        responses[2]["result"]["content"][0]["text"]
-            .as_str()
-            .expect("run text"),
-    )
-    .expect("Response JSON");
-    let missing = run["results"]["total"]["missing_data"]
-        .as_array()
-        .expect("missing_data array");
+    let run_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("run text");
     assert!(
-        missing.iter().any(|v| v == "price"),
-        "missing_data keys must include price, got: {missing:?}"
+        run_text.contains("Missing data") && run_text.contains("price"),
+        "Missing data keys must include price, got: {run_text}"
     );
 }
 
@@ -1060,9 +1025,14 @@ fn test_mcp_evaluate_all_rules() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    assert_eq!(response["results"]["double"]["display"], "6");
-    assert_eq!(response["results"]["triple"]["display"], "9");
+    assert!(
+        text.contains("double: 6"),
+        "expected double: 6, got: {text}"
+    );
+    assert!(
+        text.contains("triple: 9"),
+        "expected triple: 9, got: {text}"
+    );
 }
 
 #[test]
@@ -1157,10 +1127,10 @@ fn test_mcp_evaluate_veto_result() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    let validated = &response["results"]["validated"];
-    assert_eq!(validated["vetoed"], true);
-    assert_eq!(validated["veto_reason"], "Price cannot be negative");
+    assert!(
+        text.contains("validated:") && text.contains("Price cannot be negative"),
+        "veto must appear in formatted tree, got: {text}"
+    );
 }
 
 #[test]
@@ -1195,14 +1165,9 @@ fn test_mcp_evaluate_with_effective_datetime() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    assert_eq!(response["results"]["y"]["display"], "42");
     assert!(
-        response["effective"]
-            .as_str()
-            .unwrap_or("")
-            .starts_with("2026-01-01"),
-        "Should show effective datetime, got: {text}"
+        text.contains("y: 42"),
+        "expected y: 42 for effective datetime run, got: {text}"
     );
 }
 
@@ -2339,7 +2304,7 @@ fn test_mcp_install_blocked_without_write() {
                 "tools/call",
                 json!({
                     "name": "install",
-                    "arguments": { "dependency": "@iso/countries" }
+                    "arguments": { "repository": "@iso/countries" }
                 }),
             ),
         ],
@@ -2487,8 +2452,10 @@ fn test_mcp_evaluate_with_data_overrides() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    assert_eq!(response["results"]["total"]["display"], "50");
+    assert!(
+        text.contains("total: 50"),
+        "expected total: 50, got: {text}"
+    );
 }
 
 // ── add_spec then evaluate ──────────────────────────────────────────────
@@ -2534,8 +2501,10 @@ fn test_mcp_add_spec_then_evaluate() {
     let eval_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(eval_text).expect("Response JSON");
-    assert_eq!(response["results"]["doubled"]["display"], "14");
+    assert!(
+        eval_text.contains("doubled: 14"),
+        "expected doubled: 14, got: {eval_text}"
+    );
 }
 
 #[test]
@@ -2543,16 +2512,13 @@ fn test_mcp_update_spec_with_dependents() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
         temp_dir.path(),
-        "workspace.lemma",
-        r#"
-spec dep
-data value: 10
-rule out: value
-
-spec consumer
-uses d: dep
-rule total: d.value
-"#,
+        "dep.lemma",
+        "spec dep\ndata value: 10\nrule out: value\n",
+    );
+    write_spec(
+        temp_dir.path(),
+        "consumer.lemma",
+        "spec consumer\nuses d: dep\nrule total: d.value\n",
     );
 
     let responses = mcp_session(
@@ -2566,7 +2532,6 @@ rule total: d.value
                 json!({
                     "name": "update_spec",
                     "arguments": {
-                        "spec": "dep",
                         "code": "spec dep\ndata value: 20\nrule out: value\n",
                         "attribute": "dep.lemma"
                     }
@@ -2593,8 +2558,10 @@ rule total: d.value
     let eval_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(eval_text).expect("Response JSON");
-    assert_eq!(response["results"]["total"]["display"], "20");
+    assert!(
+        eval_text.contains("total: 20"),
+        "expected total: 20 after update, got: {eval_text}"
+    );
 }
 
 #[test]
@@ -2660,7 +2627,6 @@ fn test_update_spec_persists_to_disk() {
                 json!({
                     "name": "update_spec",
                     "arguments": {
-                        "spec": "dep",
                         "code": new_code,
                         "attribute": "dep.lemma"
                     }
@@ -2684,6 +2650,149 @@ fn test_update_spec_persists_to_disk() {
     .expect("fixture must format");
     assert_eq!(on_disk, expected);
     assert!(on_disk.contains("20"));
+}
+
+#[test]
+fn test_update_spec_creates_new_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let code = "spec brand_new\ndata v: 1\nrule r: v\n";
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "update_spec",
+                    "arguments": {
+                        "code": code,
+                        "attribute": "brand_new.lemma"
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "list",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec updated successfully."
+    );
+    assert!(
+        temp_dir.path().join("brand_new.lemma").exists(),
+        "update_spec must create a missing file"
+    );
+    let list_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        list_text.contains("brand_new"),
+        "new identity must be listed: {list_text}"
+    );
+}
+
+#[test]
+fn test_update_spec_prunes_dropped_sibling_in_same_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "bundle.lemma",
+        "spec keep\ndata v: 1\nrule r: v\n\nspec drop_me\ndata v: 2\nrule r: v\n",
+    );
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "update_spec",
+                    "arguments": {
+                        "code": "spec keep\ndata v: 9\nrule r: v\n",
+                        "attribute": "bundle.lemma"
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "list",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec updated successfully."
+    );
+    let list_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(list_text.contains("keep"), "keep must remain: {list_text}");
+    assert!(
+        !list_text.contains("drop_me"),
+        "dropped sibling must be pruned: {list_text}"
+    );
+}
+
+#[test]
+fn test_update_spec_does_not_prune_other_files() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(temp_dir.path(), "a.lemma", "spec a\ndata v: 1\nrule r: v\n");
+    write_spec(temp_dir.path(), "b.lemma", "spec b\ndata v: 2\nrule r: v\n");
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "update_spec",
+                    "arguments": {
+                        "code": "spec a\ndata v: 9\nrule r: v\n",
+                        "attribute": "a.lemma"
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "list",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec updated successfully."
+    );
+    let list_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        list_text.contains("\"name\": \"a\"") || list_text.contains("spec a"),
+        "workspace spec a must remain: {list_text}"
+    );
+    assert!(
+        list_text.contains("\"name\": \"b\"") || list_text.contains("spec b"),
+        "other file must not be pruned: {list_text}"
+    );
 }
 
 #[test]
@@ -2910,10 +3019,14 @@ rule total: base
 
     let out_2025 = run_eval("2025-06-01");
     let out_2026 = run_eval("2026-06-01");
-    let r2025: serde_json::Value = serde_json::from_str(&out_2025).expect("Response JSON");
-    let r2026: serde_json::Value = serde_json::from_str(&out_2026).expect("Response JSON");
-    assert_eq!(r2025["results"]["total"]["display"], "10");
-    assert_eq!(r2026["results"]["total"]["display"], "99");
+    assert!(
+        out_2025.contains("total: 10"),
+        "2025 version must show total: 10, got: {out_2025}"
+    );
+    assert!(
+        out_2026.contains("total: 99"),
+        "2026 version must show total: 99, got: {out_2026}"
+    );
 }
 
 // ── response IDs match request IDs ──────────────────────────────────────
@@ -3011,12 +3124,9 @@ fn mcp_evaluate_veto_must_not_invent_vetoed_placeholder() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run should return text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    let rule = &response["results"]["r"];
-    assert_eq!(rule["vetoed"], true);
     assert!(
-        rule.get("veto_reason").is_none() || rule["veto_reason"].is_null(),
-        "bare veto must omit invented veto_reason, got: {text}"
+        text.contains("r:"),
+        "bare veto must still name the rule, got: {text}"
     );
     assert!(
         !text.contains("Vetoed"),
@@ -3435,11 +3545,9 @@ fn test_mcp_evaluate_renders_unit_map() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("run text");
-    let response: serde_json::Value = serde_json::from_str(text).expect("Response JSON");
-    let measure = &response["results"]["total"]["measure"];
     assert!(
-        measure.get("eur").is_some() && measure.get("cent").is_some(),
-        "run must expose every declared unit in measure map, got: {text}"
+        text.contains("total: 84 eur") || text.contains("84 eur"),
+        "run must show measure result in formatted tree, got: {text}"
     );
 }
 

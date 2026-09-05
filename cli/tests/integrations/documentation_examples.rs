@@ -2,10 +2,11 @@
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
-use lemma::{DateGranularity, DateTimeValue, Engine, LiteralValue, ValueKind};
+use lemma::{DateGranularity, DateTimeValue, Engine, LemmaType, LiteralValue, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 fn decimal_lit(s: &str) -> Decimal {
     Decimal::from_str(s).expect("BUG: test decimal literal must parse")
@@ -16,7 +17,7 @@ fn get_rule_value(
     spec_name: &str,
     rule_name: &str,
     data: HashMap<String, String>,
-) -> lemma::LiteralValue {
+) -> (lemma::LiteralValue, Arc<LemmaType>) {
     let now = DateTimeValue::now();
     let response = engine
         .run(
@@ -28,17 +29,38 @@ fn get_rule_value(
             true,
         )
         .unwrap();
-    response
+    let rule_result = response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, spec_name))
+        .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, spec_name));
+    let value = rule_result
         .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value")
-        .clone()
+        .clone();
+    (value, Arc::clone(&rule_result.rule.rule_type))
+}
+
+fn assert_measure(value: &LiteralValue, lemma_type: &LemmaType, magnitude: &str, unit: &str) {
+    match &value.value {
+        ValueKind::Measure(n) => {
+            assert_eq!(
+                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
+                decimal_lit(magnitude)
+            );
+            assert_eq!(
+                lemma_type
+                    .measure_runtime_signature()
+                    .first()
+                    .map(|(name, _)| name.as_str()),
+                Some(unit)
+            );
+        }
+        other => panic!("expected Measure, got {other:?}"),
+    }
 }
 
 fn load_specs_folder_examples() -> Engine {
@@ -88,26 +110,14 @@ fn test_01_coffee_order() {
     data.insert("has_loyalty_card".to_string(), "true".to_string());
     data.insert("age".to_string(), "70".to_string());
 
-    let total = get_rule_value(&engine, "coffee_order", "total", data);
+    let (total, total_type) = get_rule_value(&engine, "coffee_order", "total", data);
 
     // latte base_price (3.50 eur) * large size_multiplier (120%) = 4.20 eur per cup
     // 4.20 eur * 2 cups = 8.40 eur subtotal
     // loyalty_discount 10% + age_discount 10% = combined_discount 20%
     // discount_amount = 8.40 * 20% = 1.68 eur
     // total = 8.40 - 1.68 = 6.72 eur
-    match &total.value {
-        ValueKind::Measure(n, signature) => {
-            assert_eq!(
-                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
-                decimal_lit("6.72")
-            );
-            assert_eq!(
-                signature.first().map(|(name, _)| name.as_str()),
-                Some("eur")
-            );
-        }
-        other => panic!("expected Measure total, got {other:?}"),
-    }
+    assert_measure(&total, &total_type, "6.72", "eur");
 }
 
 #[test]
@@ -120,22 +130,11 @@ fn test_02_library_fees() {
     data.insert("book_type".to_string(), "regular".to_string());
     data.insert("is_first_offense".to_string(), "false".to_string());
 
-    let final_fee = get_rule_value(&engine, "library_fees", "final_fee", data.clone());
-    match &final_fee.value {
-        ValueKind::Measure(n, signature) => {
-            assert_eq!(
-                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
-                decimal_lit("1.25")
-            );
-            assert_eq!(
-                signature.first().map(|(name, _)| name.as_str()),
-                Some("eur")
-            );
-        }
-        other => panic!("expected Measure final_fee, got {other:?}"),
-    }
+    let (final_fee, final_fee_type) =
+        get_rule_value(&engine, "library_fees", "final_fee", data.clone());
+    assert_measure(&final_fee, &final_fee_type, "1.25", "eur");
 
-    let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", data);
+    let (can_checkout, _) = get_rule_value(&engine, "library_fees", "can_checkout", data);
     assert_eq!(can_checkout.value, lemma::ValueKind::Boolean(true));
 }
 
@@ -148,41 +147,20 @@ fn test_03_recipe_scaling() {
     data.insert("desired_servings".to_string(), "8".to_string());
     data.insert("recipe_name".to_string(), "chocolate_cake".to_string());
 
-    let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", data.clone());
+    let (scaling_factor, _) =
+        get_rule_value(&engine, "recipe_scaling", "scaling_factor", data.clone());
     assert_eq!(
         scaling_factor.value,
         LiteralValue::number_from_decimal(decimal_lit("2")).value
     );
 
-    let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", data.clone());
-    match &baking_time.value {
-        ValueKind::Measure(n, signature) => {
-            assert_eq!(
-                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
-                decimal_lit("2400")
-            );
-            assert_eq!(
-                signature.first().map(|(name, _)| name.as_str()),
-                Some("minute")
-            );
-        }
-        other => panic!("expected Measure baking_time, got {other:?}"),
-    }
+    let (baking_time, baking_type) =
+        get_rule_value(&engine, "recipe_scaling", "baking_time", data.clone());
+    assert_measure(&baking_time, &baking_type, "2400", "minute");
 
-    let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", data);
-    match &oven_temp.value {
-        ValueKind::Measure(n, signature) => {
-            assert_eq!(
-                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
-                decimal_lit("175")
-            );
-            assert_eq!(
-                signature.first().map(|(name, _)| name.as_str()),
-                Some("celsius")
-            );
-        }
-        other => panic!("expected Measure oven_temperature, got {other:?}"),
-    }
+    let (oven_temp, oven_type) =
+        get_rule_value(&engine, "recipe_scaling", "oven_temperature", data);
+    assert_measure(&oven_temp, &oven_type, "175", "celsius");
 }
 
 #[test]
@@ -190,7 +168,7 @@ fn test_04_membership_benefits() {
     let engine = load_specs_folder_examples();
 
     // Test premium_membership spec (has rules, no data needed)
-    let discount_rate = get_rule_value(
+    let (discount_rate, _) = get_rule_value(
         &engine,
         "premium_membership",
         "discount_rate",
@@ -198,13 +176,13 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         discount_rate.value,
-        LiteralValue::ratio_from_decimal(decimal_lit("0.10"), Some("percent".to_string())).value
+        LiteralValue::ratio_from_decimal(decimal_lit("0.10")).value
     );
 
     // Test membership_benefits spec (references premium_membership)
     let mut benefits_data = HashMap::new();
     benefits_data.insert("monthly_spend".to_string(), "150".to_string());
-    let discount = get_rule_value(
+    let (discount, _) = get_rule_value(
         &engine,
         "membership_benefits",
         "discount",
@@ -215,7 +193,7 @@ fn test_04_membership_benefits() {
         LiteralValue::number_from_decimal(decimal_lit("15")).value
     );
 
-    let shipping_cost = get_rule_value(
+    let (shipping_cost, _) = get_rule_value(
         &engine,
         "membership_benefits",
         "shipping_cost",
@@ -226,7 +204,7 @@ fn test_04_membership_benefits() {
         LiteralValue::number_from_decimal(decimal_lit("0")).value
     );
 
-    let total_points = get_rule_value(
+    let (total_points, _) = get_rule_value(
         &engine,
         "membership_benefits",
         "total_points",
@@ -247,15 +225,12 @@ fn test_05_weather_clothing() {
     data.insert("is_raining".to_string(), "false".to_string());
     data.insert("wind_speed".to_string(), "10".to_string());
 
-    let clothing_layer =
+    let (clothing_layer, _) =
         get_rule_value(&engine, "weather_clothing", "clothing_layer", data.clone());
-    assert_eq!(
-        clothing_layer.value,
-        lemma::ValueKind::Text("light".to_string())
-    );
+    assert_eq!(clothing_layer.value, ValueKind::Text("light".to_string()));
 
-    let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", data);
-    assert_eq!(needs_jacket.value, lemma::ValueKind::Boolean(false));
+    let (needs_jacket, _) = get_rule_value(&engine, "weather_clothing", "needs_jacket", data);
+    assert_eq!(needs_jacket.value, ValueKind::Boolean(false));
 }
 
 #[test]
@@ -271,7 +246,6 @@ fn test_nl_tax_net_salary() {
         second: 0,
         microsecond: 0,
         timezone: None,
-
         granularity: DateGranularity::DateTime,
     };
 

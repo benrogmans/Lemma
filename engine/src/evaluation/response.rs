@@ -3,60 +3,54 @@ use crate::evaluation::explanations::Explanation;
 
 use crate::parsing::ast::DateTimeValue;
 use crate::planning::semantics::{LemmaType, LiteralValue, RulePath, Source};
+use crate::planning::unit_family::FamilyUnitCatalog;
 use crate::result_value::{
     rule_result_value_failure_message, rule_result_value_from_literal, RuleResultValue,
     RuleResultValueFailure,
 };
 use indexmap::IndexMap;
-use serde::Serialize;
+use std::sync::Arc;
 
 /// Rule info with resolved expressions for use in evaluation response.
 /// Evaluation uses only semantics types; no parsing types.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct EvaluatedRule {
     pub name: String,
     pub path: RulePath,
     pub source_location: Source,
-    pub rule_type: LemmaType,
+    pub rule_type: Arc<LemmaType>,
 }
 
 /// Response from evaluating a Lemma spec
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Response {
-    #[serde(rename = "spec")]
     pub spec_name: String,
     pub effective: String,
     /// Declared temporal window `[spec_effective_from, spec_effective_to)` of the
     /// resolved spec version. Set by [`crate::Engine::run`] after evaluation;
     /// `None` here (evaluation-internal construction) until that assignment.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_effective_from: Option<DateTimeValue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_effective_to: Option<DateTimeValue>,
     pub results: IndexMap<String, RuleResult>,
 }
 
 /// Result of evaluating a single rule. Struct fields match the API JSON shape.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct RuleResult {
-    #[serde(skip)]
     pub rule: EvaluatedRule,
-    #[serde(skip)]
     pub veto_detail: Option<VetoType>,
 
     pub vetoed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub veto_reason: Option<String>,
     pub rule_type: String,
 
     /// Flattened value fields, including `display` when the rule is not vetoed.
-    #[serde(flatten)]
     pub value: Option<RuleResultValue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<Explanation>,
     /// Unbound caller data paths still live for this rule under the current run data
-    /// (`DataPath::input_key` strings, same keys as `Show.data`).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// (`DataPath::input_key` strings; subset of `Show.data` keys with non-empty
+    /// `needed_by_rules`). Ordered by evaluation / decision-tree preorder (first key =
+    /// next fact the live tree needs); `Show.data` stays declaration order.
     missing_data: Vec<String>,
 }
 
@@ -81,7 +75,8 @@ impl RuleResult {
         )
     }
 
-    /// Unbound caller data paths still live for this rule (`DataPath::input_key`).
+    /// Unbound caller data paths still live for this rule (`DataPath::input_key`),
+    /// in evaluation / decision-tree order (contrast `Show.data` declaration order).
     #[must_use]
     pub fn missing_data(&self) -> &[String] {
         &self.missing_data
@@ -89,11 +84,12 @@ impl RuleResult {
 
     /// Build a [`RuleResult`] for API output from a rule evaluation result.
     ///
-    /// Measure and ratio payloads expand into every unit declared on `rule_type`.
-    pub fn from_operation_result(
+    /// Measure and ratio payloads expand into every unit in the result type's family.
+    pub(crate) fn from_operation_result(
         rule: EvaluatedRule,
         operation_result: &OperationResult,
         rule_type: &LemmaType,
+        family_units: &FamilyUnitCatalog,
         explanation: Option<Explanation>,
         missing_data: Vec<String>,
     ) -> Self {
@@ -128,7 +124,7 @@ impl RuleResult {
                 missing_data,
             },
             OperationResult::Value(literal) => {
-                match rule_result_value_from_literal(literal, rule_type) {
+                match rule_result_value_from_literal(literal, rule_type, family_units) {
                     Ok(value) => Self {
                         rule,
                         veto_detail: None,
@@ -142,6 +138,7 @@ impl RuleResult {
                     Err(failure) => vetoed_rule_result_for_rule_result_value_failure(
                         rule,
                         rule_type,
+                        family_units,
                         explanation,
                         failure,
                         missing_data,
@@ -171,6 +168,7 @@ impl RuleResult {
 fn vetoed_rule_result_for_rule_result_value_failure(
     rule: EvaluatedRule,
     rule_type: &LemmaType,
+    family_units: &FamilyUnitCatalog,
     explanation: Option<Explanation>,
     failure: RuleResultValueFailure,
     missing_data: Vec<String>,
@@ -181,6 +179,7 @@ fn vetoed_rule_result_for_rule_result_value_failure(
             rule_result_value_failure_message(failure).to_string(),
         )),
         rule_type,
+        family_units,
         explanation,
         missing_data,
     )
@@ -210,8 +209,56 @@ mod tests {
         primitive_number_arc, BaseMeasureVector, DataPath, LemmaType, LiteralValue, MeasureUnit,
         MeasureUnits, RatioUnit, RatioUnits, RulePath, TypeExtends, TypeSpecification, ValueKind,
     };
+    use crate::planning::unit_family::FamilyUnitCatalog;
+    use crate::planning::unit_index::UnitIndex;
     use rust_decimal::Decimal;
     use std::sync::Arc;
+
+    fn empty_family_catalog() -> FamilyUnitCatalog {
+        FamilyUnitCatalog::default()
+    }
+
+    fn family_catalog_for_index(index: &UnitIndex) -> FamilyUnitCatalog {
+        FamilyUnitCatalog::build(index)
+    }
+
+    fn family_catalog_for_money(money: &LemmaType) -> FamilyUnitCatalog {
+        family_catalog_for_index(&unit_index_for_money(money))
+    }
+
+    fn family_catalog_for_ratio(ratio_type: &LemmaType) -> FamilyUnitCatalog {
+        family_catalog_for_index(&unit_index_for_ratio(ratio_type))
+    }
+
+    fn unit_index_for_money(money: &LemmaType) -> UnitIndex {
+        let mut index = UnitIndex::new();
+        let arc = Arc::new(money.clone());
+        for unit_name in money.measure_unit_names().into_iter().flatten() {
+            index
+                .merge_measure_unit(unit_name.to_string(), &arc, "money", None, "money")
+                .expect("test money unit index");
+        }
+        index
+    }
+
+    fn unit_index_for_ratio(ratio_type: &LemmaType) -> UnitIndex {
+        use crate::planning::semantics::primitive_ratio_arc;
+        let mut index = UnitIndex::new();
+        let arc = Arc::new(ratio_type.clone());
+        let type_name = ratio_type.name();
+        for unit_name in ratio_type.ratio_unit_names().into_iter().flatten() {
+            index
+                .merge_ratio_unit(
+                    unit_name.to_string(),
+                    &arc,
+                    &type_name,
+                    None,
+                    primitive_ratio_arc(),
+                )
+                .expect("test ratio unit index");
+        }
+        index
+    }
 
     fn dummy_source() -> Source {
         Source::new(
@@ -230,7 +277,7 @@ mod tests {
             name: name.to_string(),
             path: RulePath::new(vec![], name.to_string()),
             source_location: dummy_source(),
-            rule_type: rule_type.clone(),
+            rule_type: Arc::new(rule_type.clone()),
         }
     }
 
@@ -245,6 +292,7 @@ mod tests {
                     42,
                 ))),
                 primitive_number_arc().as_ref(),
+                &empty_family_catalog(),
                 None,
                 Vec::new(),
             ),
@@ -257,7 +305,7 @@ mod tests {
             results,
         };
 
-        let json = serde_json::to_string(&response).unwrap();
+        let json = serde_json::to_string(&crate::api::Response::from(&response)).unwrap();
         assert!(json.contains("test_spec"));
         assert!(json.contains("test_rule"));
         assert!(json.contains("\"number\":\"42\""));
@@ -279,6 +327,7 @@ mod tests {
                     rational.try_to_decimal().unwrap(),
                 )),
                 primitive_number_arc().as_ref(),
+                &empty_family_catalog(),
                 None,
                 Vec::new(),
             ),
@@ -300,8 +349,10 @@ mod tests {
             results,
         };
 
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string(&crate::api::Response::from(&response)).unwrap(),
+        )
+        .unwrap();
         let number = json["results"]["third"]["number"]
             .as_str()
             .expect("number must be a JSON string");
@@ -320,6 +371,7 @@ mod tests {
                 None,
             )),
             &LemmaType::veto_type(),
+            &empty_family_catalog(),
             None,
             vec!["data1".to_string()],
         );
@@ -332,6 +384,7 @@ mod tests {
                 message: Some("Vetoed".to_string()),
             }),
             &LemmaType::veto_type(),
+            &empty_family_catalog(),
             None,
             Vec::new(),
         );
@@ -349,6 +402,7 @@ mod tests {
                 None,
             )),
             &LemmaType::veto_type(),
+            &empty_family_catalog(),
             None,
             Vec::new(),
         );
@@ -364,6 +418,7 @@ mod tests {
                 None,
             )),
             &LemmaType::veto_type(),
+            &empty_family_catalog(),
             None,
             vec!["other".to_string()],
         );
@@ -378,6 +433,7 @@ mod tests {
                 message: Some("Vetoed".to_string()),
             }),
             &LemmaType::veto_type(),
+            &empty_family_catalog(),
             None,
             vec!["leftover".to_string()],
         );
@@ -388,6 +444,7 @@ mod tests {
         let result = vetoed_rule_result_for_rule_result_value_failure(
             dummy_evaluated_rule("rule", primitive_number_arc().as_ref()),
             primitive_number_arc().as_ref(),
+            &empty_family_catalog(),
             None,
             RuleResultValueFailure::OutOfMemory,
             Vec::new(),
@@ -404,6 +461,7 @@ mod tests {
         let result = vetoed_rule_result_for_rule_result_value_failure(
             dummy_evaluated_rule("rule", primitive_number_arc().as_ref()),
             primitive_number_arc().as_ref(),
+            &empty_family_catalog(),
             None,
             RuleResultValueFailure::DecimalLimit,
             Vec::new(),
@@ -455,6 +513,7 @@ mod tests {
     #[test]
     fn measure_rule_result_value_uses_rule_type_when_expression_index_empty() {
         let money = test_money_type();
+        let family_units = family_catalog_for_money(&money);
         let ten_usd = LiteralValue {
             value: ValueKind::Measure(
                 crate::computation::rational::checked_mul(
@@ -464,14 +523,13 @@ mod tests {
                         .expect("usd factor"),
                 )
                 .expect("canonical usd"),
-                vec![("usd".to_string(), 1)],
             ),
-            lemma_type: Arc::new(money.clone()),
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("total", &money),
             &OperationResult::from_literal(ten_usd),
             &money,
+            &family_units,
             None,
             Vec::new(),
         );
@@ -489,17 +547,17 @@ mod tests {
     #[test]
     fn test_measure_rule_result_value_multi_unit() {
         let money = test_money_type();
+        let family_units = family_catalog_for_money(&money);
         let ten_eur = LiteralValue {
             value: ValueKind::Measure(
                 crate::computation::rational::decimal_to_rational(Decimal::from(10)).expect("ten"),
-                vec![("eur".to_string(), 1)],
             ),
-            lemma_type: Arc::new(money.clone()),
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("total", &money),
             &OperationResult::from_literal(ten_eur),
             &money,
+            &family_units,
             None,
             Vec::new(),
         );
@@ -551,18 +609,18 @@ mod tests {
             },
             TypeExtends::Primitive,
         );
+        let family_units = family_catalog_for_money(&money);
         let three_twelve_eur = LiteralValue {
             value: ValueKind::Measure(
                 crate::computation::rational::decimal_to_rational(Decimal::new(312, 2))
                     .expect("3.12 eur canonical"),
-                vec![("eur".to_string(), 1)],
             ),
-            lemma_type: Arc::new(money.clone()),
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("delivery_cost", &money),
             &OperationResult::from_literal(three_twelve_eur),
             &money,
+            &family_units,
             None,
             Vec::new(),
         );
@@ -611,15 +669,16 @@ mod tests {
             },
             TypeExtends::Primitive,
         );
+        let family_units = family_catalog_for_ratio(&ratio_type);
         let half = crate::computation::rational::rational_new(1, 2);
         let lit = LiteralValue {
-            value: ValueKind::Ratio(half, Some("percent".to_string())),
-            lemma_type: Arc::new(ratio_type.clone()),
+            value: ValueKind::Ratio(half),
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("rate_out", &ratio_type),
             &OperationResult::from_literal(lit),
             &ratio_type,
+            &family_units,
             None,
             Vec::new(),
         );
@@ -710,6 +769,7 @@ data money: measure
             dummy_evaluated_rule("answer", primitive_number_arc().as_ref()),
             &OperationResult::from_literal(literal.clone()),
             primitive_number_arc().as_ref(),
+            &empty_family_catalog(),
             None,
             Vec::new(),
         );
@@ -719,15 +779,16 @@ data money: measure
     #[test]
     fn to_literal_roundtrips_measure() {
         let money = test_money_type();
+        let family_units = family_catalog_for_money(&money);
         let literal = LiteralValue::measure_with_type(
             crate::computation::rational::rational_new(60, 1),
-            "eur".into(),
             Arc::new(money.clone()),
         );
         let rule_result = RuleResult::from_operation_result(
             dummy_evaluated_rule("pay", &money),
             &OperationResult::from_literal(literal.clone()),
             &money,
+            &family_units,
             None,
             Vec::new(),
         );

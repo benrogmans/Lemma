@@ -51,8 +51,8 @@ fn show_includes_prefilled_value_in_live_unless() {
         show.data.keys().collect::<Vec<_>>()
     );
     assert!(
-        show.data["is_member"].prefilled.is_some(),
-        "is_member must carry prefilled from spec literal"
+        show.data["is_member"].fill.is_some(),
+        "is_member must carry fill from spec literal"
     );
 }
 
@@ -86,13 +86,15 @@ rule total: quantity
         .get("base_price")
         .expect("base_price entry must exist");
     assert!(
-        entry.prefilled.is_some(),
-        "base_price must show spec prefilled literal"
+        entry.fill.is_some(),
+        "base_price must show spec fill literal"
     );
 }
 
 #[test]
 fn show_and_run_omit_flag_when_unless_and_is_statically_false() {
+    // Catalog keeps declared data; statically dead unless arms leave needed_by_rules
+    // empty and omit the name from missing_data (see show_only_rule_used_data).
     let code = r#"
 spec t
 data flag: boolean
@@ -110,10 +112,14 @@ rule total: 1
         .show(None, "t", Some(&now))
         .expect("show must succeed");
 
+    let flag = show
+        .data
+        .get("flag")
+        .expect("flag must remain in show catalog when declared");
     assert!(
-        !show.data.contains_key("flag"),
-        "flag must not appear in show when unless condition is statically false; keys: {:?}",
-        show.data.keys().collect::<Vec<_>>()
+        flag.needed_by_rules.is_empty(),
+        "statically false unless must leave flag with empty needed_by_rules: {:?}",
+        flag.needed_by_rules
     );
 
     let response = engine
@@ -151,8 +157,8 @@ fn prefilled_is_member_bound_not_in_missing_data() {
         "is_member must stay in show when unless arm may still apply"
     );
     assert!(
-        show.data["is_member"].prefilled.is_some(),
-        "is_member must carry prefilled in show"
+        show.data["is_member"].fill.is_some(),
+        "is_member must carry fill in show"
     );
 
     let response = engine
@@ -169,7 +175,7 @@ fn prefilled_is_member_bound_not_in_missing_data() {
     let names = missing_data_union(&response);
     assert!(
         !names.contains(&"is_member".to_string()),
-        "prefilled is_member is bound and must not appear in missing_data: {names:?}"
+        "filled is_member is bound and must not appear in missing_data: {names:?}"
     );
     assert!(
         !names.contains(&"quantity".to_string()),

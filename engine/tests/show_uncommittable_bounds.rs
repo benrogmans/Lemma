@@ -97,7 +97,7 @@ fn committable_minimum_at_10_pow_28_loads() {
         Some(decimal_lit(COMMITTABLE_BOUND))
     );
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     assert_eq!(
         json["minimum"]["value"].as_str(),
         Some(COMMITTABLE_BOUND),
@@ -141,7 +141,7 @@ fn minimum_with_milli_unit_loads_and_show_converts() {
         "milli minimum must convert to decimal for show"
     );
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     let units = json["units"].as_array().expect("units array");
     let milli_json = units
         .iter()
@@ -167,7 +167,7 @@ fn maximum_with_milli_unit_loads_and_show_converts() {
     let milli = quantity_unit(&entry.lemma_type.specifications, "milli");
     assert!(milli.maximum_decimal().is_some());
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     let units = json["units"].as_array().expect("units array");
     let milli_json = units
         .iter()
@@ -190,7 +190,7 @@ fn suggest_with_milli_unit_loads_and_show_converts() {
     let milli = quantity_unit(&entry.lemma_type.specifications, "milli");
     assert!(milli.suggestion_magnitude_decimal().is_some());
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     let units = json["units"].as_array().expect("units array");
     let milli_json = units
         .iter()
@@ -215,7 +215,7 @@ fn committable_maximum_at_10_pow_28_loads() {
         Some(decimal_lit(COMMITTABLE_BOUND))
     );
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     assert_eq!(
         json["maximum"]["value"].as_str(),
         Some(COMMITTABLE_BOUND),
@@ -256,7 +256,7 @@ fn committable_suggest_at_10_pow_28_loads() {
         Some(decimal_lit(COMMITTABLE_BOUND))
     );
 
-    let json = serde_json::to_value(&entry.lemma_type).expect("serde");
+    let json = serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("serde");
     let units = json["units"].as_array().expect("units array");
     let eur_json = units.iter().find(|u| u["name"] == "eur").expect("eur row");
     assert_eq!(eur_json["suggestion"].as_str(), Some(COMMITTABLE_BOUND));

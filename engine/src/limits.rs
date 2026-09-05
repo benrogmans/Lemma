@@ -34,7 +34,7 @@ pub fn check_max_length(
 ///
 /// These limits protect against malicious inputs while being generous enough
 /// for all legitimate use cases.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResourceLimits {
     /// Maximum size of one loaded source text in bytes.
     /// Real usage: ~5KB, Limit: 5MB (1000x)
@@ -60,8 +60,9 @@ pub struct ResourceLimits {
     pub max_sources: usize,
 
     /// Maximum unique normal-form cells reachable from one rule root in the
-    /// shared graph after normalize. Bounds planning work and shipped table size.
-    /// Default: 30,000.
+    /// shared graph after normalize. Rule embeds count as one cell: embeds are
+    /// evaluation boundaries, so this bounds only intra-rule IR size. Bounds
+    /// planning work and shipped table size. Default: 30,000.
     pub max_normalized_expression_nodes: usize,
 
     /// Maximum depth of the spec dependency chain (`uses` imports) from the
@@ -73,10 +74,12 @@ pub struct ResourceLimits {
     /// transitive dependencies). Bounds per-plan memory and planning work.
     pub max_dag_specs: usize,
 
-    /// Maximum nesting depth of a rule's normalized NormalForm DAG (leaves =
-    /// depth 1). The evaluator walks recursively, so planning must guarantee
-    /// no rule root can overflow the stack at run time. Lemma's runtime does
-    /// not return errors — this limit is the guarantee.
+    /// Maximum nesting depth of a rule's normalized NormalForm DAG. Leaves and
+    /// rule embeds count as depth 1: embeds are evaluation boundaries, so this
+    /// bounds only intra-rule Kind nesting. The evaluator walks recursively
+    /// within one rule; planning must guarantee no rule root overflows the
+    /// stack. Lemma's runtime does not return errors — this limit is the
+    /// guarantee.
     pub max_normal_form_depth: usize,
 }
 
@@ -92,7 +95,7 @@ impl Default for ResourceLimits {
             max_normalized_expression_nodes: 30_000,
             max_spec_dependency_depth: 32,
             max_dag_specs: 4096,
-            // Bounds recursive eval stack depth on the shared NormalForm DAG.
+            // Bounds recursive eval stack depth within one rule (embeds = leaves).
             max_normal_form_depth: 4096,
         }
     }

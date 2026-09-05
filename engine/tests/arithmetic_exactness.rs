@@ -1,33 +1,13 @@
 //! Arithmetic and division behavior (planning errors vs runtime Veto vs Decimal results).
 
-use lemma::{Engine, LiteralValue, ValueKind};
+use lemma::{Engine, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 fn source() -> lemma::SourceType {
     lemma::SourceType::Path(Arc::new(PathBuf::from("arithmetic_exactness.lemma")))
-}
-
-fn eval_measure_rule(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
-    let mut engine = Engine::new();
-    engine
-        .load([(source(), code.to_string())])
-        .expect("spec must load");
-    let response = engine
-        .run(None, spec_name, None, HashMap::new(), None, true)
-        .expect("spec must evaluate");
-    response
-        .results
-        .get(rule_name)
-        .unwrap_or_else(|| panic!("rule '{}' missing", rule_name))
-        .explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("rule '{}' must return a value", rule_name))
-        .clone()
 }
 
 #[test]
@@ -191,15 +171,27 @@ data hourly_rate: 50 eur_per_hour
 data period_start: 2026-01-01
 data period_end: 2026-01-02
 rule pay: (hourly_rate * (period_start...period_end as hour))"#;
-    let value = eval_measure_rule(code, "wage", "pay");
-    let ValueKind::Measure(amount, signature) = value.value else {
-        panic!("expected measure result, got {:?}", value.value);
-    };
-    assert_eq!(signature, vec![("eur".to_string(), 1)]);
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("spec must load");
+    let response = engine
+        .run(None, "wage", None, HashMap::new(), None, true)
+        .expect("spec must evaluate");
+    let rr = response.results.get("pay").expect("pay");
+    let measure = rr
+        .value
+        .as_ref()
+        .and_then(|v| v.measure.as_ref())
+        .expect("measure map");
+    assert!(
+        measure.contains_key("eur"),
+        "pay must expose eur, got keys {:?}",
+        measure.keys().collect::<Vec<_>>()
+    );
+    let amount = measure.get("eur").expect("eur");
     assert_eq!(
-        lemma::ValueKind::Measure(amount, signature.clone())
-            .as_decimal_magnitude()
-            .unwrap(),
+        rust_decimal::Decimal::from_str(amount).expect("decimal"),
         rust_decimal::Decimal::from(1200)
     );
 }

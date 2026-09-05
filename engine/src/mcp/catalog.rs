@@ -57,12 +57,12 @@ pub fn list_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "run",
-            description: "Evaluate rules (Engine Response JSON, same as SDK run / lemma run --json -x). Always includes explanation trees. Pass `rules` to target one or more rules; omit for all. For human intake: call guide (default = evaluate guide; not topic full), then list, show once, run. missing_data is unbound input keys only — look up type/help/suggest on the Show already fetched. Primary loop: after each user turn, bind every field that utterance decides (entailments), re-run; ask at most one open topic-question when something remains. Never ask the user what the policy means. Never dispose interpretation as truth; use “should” when a judgment call cannot be answered. When the rule answers, present details+answer in domain language for user verify (no tooling jargon to the user) before treating as done. No questionnaire dumps. No re-call show between asks. Do not dump every show data field into run.",
+            description: "Evaluate rules; returns ASCII explanation trees (always on) plus a Missing data block when inputs are unbound. Pass `rules` to target one or more rules; omit for all. For human intake: call guide (default = evaluate guide; not topic full), then list, show once, run. Missing data lists unbound input keys only — look up type/help/suggest on the Show already fetched. Primary loop: after each user turn, bind every field that utterance decides (entailments), re-run; ask at most one open topic-question when something remains. Never ask the user what the policy means. Never dispose interpretation as truth; use “should” when a judgment call cannot be answered. When the rule answers, present details+answer in domain language for user verify (no tooling jargon to the user) before treating as done. No questionnaire dumps. No re-call show between asks. Do not dump every show data field into run.",
             input_schema: run_input_schema(),
         },
         ToolDefinition {
             name: "evaluate",
-            description: "Deprecated alias of `run`. Same arguments and Response JSON. Prefer `run`.",
+            description: "Deprecated alias of `run`. Same arguments and formatted trees. Prefer `run`.",
             input_schema: run_input_schema(),
         },
         ToolDefinition {
@@ -75,7 +75,7 @@ pub fn list_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "show",
-            description: "Return JSON Show for a spec: data catalog (types, constraints, suggestions, units, help) and rule output types. Call once after list. Static interface — not a required-input list, not a questionnaire, not something to re-call between run/ask turns. Human intake: call guide (default = evaluate guide).",
+            description: "Return JSON Show for a spec: declared data catalog (types, constraints, suggestions, units, help; empty needed_by_rules = reuse-only) and rule output types. Call once after list. Static catalog — not a required-input list, not a questionnaire, not something to re-call between run/ask turns. Human intake: call guide (default = evaluate guide); bind only missing_data keys, not reuse-only slots.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {

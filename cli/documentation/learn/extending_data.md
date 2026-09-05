@@ -31,7 +31,7 @@ data weight: 75 kilogram
 
 ## Reuse across Specs
 
-Import a Spec with Uses and reference its Data declarations as parent types via qualified paths (`alias.field`):
+Import a Spec with Uses and reference its Data declarations as parent types. Use a qualified path (`alias.field`) or a bare name when it is unambiguous across all imports:
 
 ```lemma
 spec base_types

@@ -2,7 +2,7 @@
 //!
 //! - Rule / data references (`with bag.x: local_rule`): omitted from `missing_data`
 //!   (not promptable). Show still documents reachable typed slots.
-//! - Literal `with` (`with i.v: 42`): show may list as `prefilled`; never promptable
+//! - Literal `with` (`with i.v: 42`): show may list as `fill`; never promptable
 //!   required input. Run resolves without overlay.
 
 use lemma::DateTimeValue;
@@ -127,11 +127,11 @@ rule total_price: bag.total_price
     assert_eq!(
         data_names,
         vec![
-            "type_of_nut".to_string(),
             "bag.weight".to_string(),
+            "type_of_nut".to_string(),
             "bag.chocolatizing".to_string()
         ],
-        "scoped data must list local then nested inputs in definition order"
+        "scoped data must list inputs in evaluation order"
     );
 }
 
@@ -159,8 +159,8 @@ rule r: i.v
         .expect("literal with still surfaces in show for documentation");
 
     assert!(
-        entry.prefilled.is_some(),
-        "literal with is prefilled; CLI skips, not a free input"
+        entry.fill.is_some(),
+        "literal with is fill; CLI skips, not a free input"
     );
 }
 
@@ -262,11 +262,11 @@ fn run_returns_all_data_on_fresh_plan() {
         names,
         vec![
             "mode".to_string(),
-            "simple_input".to_string(),
             "complex_input_a".to_string(),
-            "complex_input_b".to_string()
+            "complex_input_b".to_string(),
+            "simple_input".to_string()
         ],
-        "fresh run should expose all data in source order"
+        "fresh run should expose all data in evaluation order"
     );
 }
 

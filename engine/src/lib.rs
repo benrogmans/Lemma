@@ -7,6 +7,7 @@
 #[cfg(test)]
 mod tests;
 
+pub mod api;
 pub(crate) mod computation;
 pub mod documentation;
 pub(crate) mod engine;
@@ -20,6 +21,7 @@ pub(crate) mod planning;
 pub mod quality;
 pub(crate) mod registry;
 pub mod result_value;
+pub(crate) mod snapshot;
 pub(crate) mod spec_set_id;
 pub(crate) mod stdlib;
 pub(crate) mod string_distance;
@@ -37,7 +39,10 @@ pub use computation::{OperationResult, VetoType};
 pub use engine::{
     resolve_effective, Engine, Errors, ListedSpec, ResolvedRepository, EMBEDDED_STDLIB_REPOSITORY,
 };
-pub use error::{EngineError, EngineErrorSource, Error, ErrorDetails, ErrorKind, RequestErrorKind};
+pub use error::{
+    EngineError, EngineErrorSource, Error, ErrorDetails, ErrorKind, RegistryErrorKind,
+    RequestErrorKind,
+};
 pub use evaluation::explanations::{format_explanation, Cause, Explanation, ExplanationNode};
 pub use evaluation::response::{Response, RuleResult};
 pub use evaluation::run_data::{
@@ -65,12 +70,88 @@ pub mod __test_support {
         checked_div, checked_mul, decimal_to_rational, rational_new,
     };
     pub use crate::literals::TimeValue;
-    pub use crate::planning::semantics::{SemanticDateTime, SemanticTime, SemanticTimezone};
+    pub use crate::planning::semantics::{
+        SemanticDateTime, SemanticTime, SemanticTimezone, TypedLiteral,
+    };
 
     /// Serializes an [`Error`](crate::Error) as [`EngineError`](crate::EngineError).
     pub fn current_binding_error_json(error: &crate::Error) -> serde_json::Value {
         serde_json::to_value(crate::EngineError::from(error))
             .expect("BUG: EngineError must serialize")
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use fixture_transport::FixtureTransport;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    mod fixture_transport {
+        use crate::registry::{Fetch, Header, HttpResponse, HttpTransport, TransportFailure};
+        use std::collections::HashMap;
+        use std::path::{Path, PathBuf};
+
+        /// Offline [`HttpTransport`] over bundled (or custom) LemmaBase fixture files.
+        ///
+        /// Panics if asked for a URL that is not a LemmaBase source URL.
+        pub struct FixtureTransport {
+            fixtures: HashMap<String, String>,
+        }
+
+        impl FixtureTransport {
+            pub fn new(dir: impl AsRef<Path>) -> Self {
+                let dir = dir.as_ref();
+                let mut fixtures = HashMap::new();
+                collect_fixture_files(dir, dir, &mut fixtures);
+                Self { fixtures }
+            }
+
+            pub fn bundled() -> Self {
+                Self::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/registry_fixtures"))
+            }
+        }
+
+        impl HttpTransport for FixtureTransport {
+            fn get(&self, fetch: &Fetch) -> Result<HttpResponse, TransportFailure> {
+                match self.fixtures.get(&fetch.repository) {
+                    Some(body) => Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::<Header>::new(),
+                        body: body.clone(),
+                    }),
+                    None => Ok(HttpResponse {
+                        status: 404,
+                        headers: Vec::new(),
+                        body: String::new(),
+                    }),
+                }
+            }
+        }
+
+        fn collect_fixture_files(dir: &Path, base: &Path, fixtures: &mut HashMap<String, String>) {
+            let entries = std::fs::read_dir(dir)
+                .unwrap_or_else(|e| panic!("BUG: read fixture dir {}: {e}", dir.display()));
+            for entry in entries {
+                let entry = entry
+                    .unwrap_or_else(|e| panic!("BUG: fixture dir entry in {}: {e}", dir.display()));
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_fixture_files(&path, base, fixtures);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "lemma") {
+                    continue;
+                }
+                let relative = path.strip_prefix(base).unwrap_or_else(|_| {
+                    panic!("BUG: fixture path not under base: {}", path.display())
+                });
+                let identifier = relative
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let content = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("BUG: read fixture {}: {e}", path.display()));
+                fixtures.insert(identifier, content);
+            }
+        }
     }
 }
 
@@ -83,15 +164,12 @@ pub use parsing::source::Source;
 pub use parsing::{parse, ParseResult};
 pub use quality::Recommendation;
 
-// Tier 2 — registry network (feature-gated)
-#[cfg(feature = "registry")]
+// Tier 2 — registry resolution (sans-IO; hosts supply HttpTransport)
 pub use engine::Context;
-#[cfg(feature = "registry")]
-pub use parsing::ast::{LemmaRepository, LemmaSpec};
-#[cfg(feature = "registry")]
+pub use parsing::ast::{LemmaRepository, LemmaSpec, RepositoryQualifier};
 pub use planning::LemmaSpecSet;
-#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
-pub use registry::resolve_registry_references;
-pub use registry::RegistryErrorKind;
-#[cfg(feature = "registry")]
-pub use registry::{LemmaBase, Registry, RegistryBundle, RegistryError};
+pub use registry::{
+    Fetch, Header, HttpResponse, HttpTransport, Install, InstallStep, LemmaBase, Registries,
+    Registry, RegistryBundle, RegistryError, RepositoryInstallResult, Resolve, ResolveStep,
+    TransportFailure,
+};

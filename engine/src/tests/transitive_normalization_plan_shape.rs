@@ -26,7 +26,16 @@ fn plan_from_code(code: &str) -> ExecutionPlan {
             .expect("insert spec");
     }
 
-    let result = plan(&ctx, &ResourceLimits::default());
+    let changed: Vec<(Arc<crate::LemmaRepository>, String)> = specs
+        .iter()
+        .map(|spec| (Arc::clone(&repository), spec.name.clone()))
+        .collect();
+    let result = plan(
+        &ctx,
+        &ResourceLimits::default(),
+        &crate::planning::ReplanScope::from_changed_sets(&ctx, changed),
+        &crate::planning::PlanStore::new(),
+    );
     assert!(
         result.errors.is_empty(),
         "planning errors: {:?}",
@@ -305,4 +314,69 @@ rule r: exp_one + 0
         .as_ref()
         .expect("identity-elim must copy rule_embed onto survivor");
     assert_eq!(embed.rule, "exp_one");
+}
+
+#[test]
+fn normal_form_cells_carry_stamped_result_type() {
+    use crate::planning::semantics::{primitive_boolean_arc, primitive_number_arc};
+
+    let code = r#"
+spec test
+data n: number
+rule sum: n + 1
+rule flag: n > 0
+  unless n is 0 then false
+"#;
+    let plan = plan_from_code(code);
+    let sum_id = plan.get_rule("sum").expect("sum").normal_form;
+    let flag_id = plan.get_rule("flag").expect("flag").normal_form;
+    assert_eq!(
+        plan.result_type(sum_id).as_ref(),
+        primitive_number_arc().as_ref(),
+        "arithmetic root must stamp number"
+    );
+    assert_eq!(
+        plan.result_type(flag_id).as_ref(),
+        primitive_boolean_arc().as_ref(),
+        "piecewise boolean root must stamp boolean"
+    );
+}
+
+#[test]
+fn linear_chain_normal_form_depth_treats_embeds_as_leaves() {
+    use crate::planning::normalize::normal_form_depth;
+
+    let mut code = String::from("spec chain\ndata x0: number\nrule r1: x0 + 1\n");
+    for i in 2..=50 {
+        code.push_str(&format!("rule r{i}: r{} + 1\n", i - 1));
+    }
+    let plan = plan_from_code(&code);
+    let depth_r2 = normal_form_depth(
+        &plan.normal_forms,
+        plan.get_rule("r2").expect("r2").normal_form,
+    );
+    let depth_r50 = normal_form_depth(
+        &plan.normal_forms,
+        plan.get_rule("r50").expect("r50").normal_form,
+    );
+    assert_eq!(
+        depth_r2, depth_r50,
+        "tip of a 50-rule chain must have the same NF depth as r2 (embeds are leaves); r2={depth_r2} r50={depth_r50}"
+    );
+}
+
+#[test]
+fn linear_chain_node_budget_treats_embeds_as_leaves() {
+    use crate::planning::normalize::normal_form_exceeds_node_budget;
+
+    let mut code = String::from("spec chain\ndata x0: number\nrule r1: x0 + 1\n");
+    for i in 2..=50 {
+        code.push_str(&format!("rule r{i}: r{} + 1\n", i - 1));
+    }
+    let plan = plan_from_code(&code);
+    let r50 = plan.get_rule("r50").expect("r50").normal_form;
+    assert!(
+        !normal_form_exceeds_node_budget(&plan.normal_forms, r50, 3),
+        "tip of a 50-rule chain must fit in budget 3 (Sum(embed, 1) = 3 cells; embeds are leaves)"
+    );
 }

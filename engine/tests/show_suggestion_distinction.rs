@@ -88,8 +88,8 @@ fn show_shows_suggestion_not_prefilled_without_overlay() {
         .clone();
 
     assert!(
-        entry.prefilled.is_none(),
-        "suggestion is not prefilled until caller supplies"
+        entry.fill.is_none(),
+        "suggestion is not fill until caller supplies"
     );
     let suggestion = entry.suggestion.expect("show must expose suggestion");
     assert_eq!(
@@ -129,26 +129,23 @@ rule r: a.r
         base_x.suggestion.is_some(),
         "base spec exposes suggestion on x"
     );
-    assert!(base_x.prefilled.is_none(), "base spec has no prefilled x");
+    assert!(base_x.fill.is_none(), "base spec has no fill x");
 
     let template = engine
         .show(None, "a/template", Some(&now))
         .expect("template show");
     let template_x = template.data.get("a.x").expect("a.x in template show");
     assert!(
-        template_x.prefilled.is_some(),
-        "literal with must surface as prefilled"
+        template_x.fill.is_some(),
+        "literal with must surface as fill"
     );
     assert_eq!(
-        template_x
-            .prefilled
-            .as_ref()
-            .and_then(|v| v.number.as_deref()),
+        template_x.fill.as_ref().and_then(|v| v.number.as_deref()),
         Some("2"),
-        "literal with prefills magnitude 2"
+        "literal with fills magnitude 2"
     );
     assert!(
         template_x.suggestion.is_none(),
-        "template must not inherit typedef suggestion once slot is prefilled"
+        "template must not inherit typedef suggestion once slot is filled"
     );
 }

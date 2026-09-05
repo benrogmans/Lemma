@@ -1,10 +1,11 @@
-//! Shared registry install for CLI `install` and MCP `install`.
+//! Shared LemmaBase install for CLI `install` and MCP `install`.
 //!
-//! Install = fetch + persist.
+//! Install = download + persist into `lemma_deps/`.
 
 use crate::deps::{lemma_deps_dir, relative_dependency_cache_path};
 use crate::workspace::{self, WorkspaceDiskError};
 use lemma::Engine;
+use lemma::{Fetch, Header, HttpResponse, HttpTransport, Install, Registries, TransportFailure};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
@@ -19,6 +20,79 @@ fn registry_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
+/// Drive an async future on the process-wide install runtime.
+pub fn block_on_registry<F: std::future::Future>(future: F) -> F::Output {
+    registry_runtime().block_on(future)
+}
+
+// ---------------------------------------------------------------------------
+// ReqwestTransport — host-owned HTTP for LemmaBase
+// ---------------------------------------------------------------------------
+
+pub struct ReqwestTransport {
+    http: reqwest::Client,
+}
+
+impl ReqwestTransport {
+    pub fn new() -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("BUG: reqwest client builder must succeed with default TLS");
+        Self { http }
+    }
+}
+
+impl Default for ReqwestTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpTransport for ReqwestTransport {
+    fn get(&self, fetch: &Fetch) -> Result<HttpResponse, TransportFailure> {
+        block_on_registry(async {
+            let mut request = self.http.get(&fetch.url);
+            for header in &fetch.headers {
+                request = request.header(&header.name, &header.value);
+            }
+            let response = request.send().await.map_err(|e| TransportFailure {
+                message: e.to_string(),
+            })?;
+            let status = response.status().as_u16();
+            let mut headers = Vec::new();
+            for (name, value) in response.headers() {
+                match value.to_str() {
+                    Ok(value) => headers.push(Header {
+                        name: name.as_str().to_string(),
+                        value: value.to_string(),
+                    }),
+                    Err(_) => {
+                        return Err(TransportFailure {
+                            message: format!(
+                                "response header '{}' is not valid UTF-8",
+                                name.as_str()
+                            ),
+                        });
+                    }
+                }
+            }
+            let body = response.text().await.map_err(|e| TransportFailure {
+                message: e.to_string(),
+            })?;
+            Ok(HttpResponse {
+                status,
+                headers,
+                body,
+            })
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InstallOutcome / InstallError
+// ---------------------------------------------------------------------------
+
 /// Result of a successful single-id registry install.
 #[derive(Debug)]
 pub enum InstallOutcome {
@@ -32,9 +106,9 @@ pub enum InstallOutcome {
     },
 }
 
-/// Failure installing a registry dependency.
+/// Failure installing a LemmaBase repository.
 pub enum InstallError {
-    Registry(lemma::RegistryError),
+    Registry(lemma::Error),
     UnparseableRegistry(lemma::Error),
     Conflict {
         spec_names: Vec<String>,
@@ -54,14 +128,14 @@ impl std::fmt::Debug for InstallError {
 impl std::fmt::Display for InstallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Registry(error) => write!(f, "Registry error: {}", error.message),
+            Self::Registry(error) => write!(f, "LemmaBase error: {error}"),
             Self::UnparseableRegistry(error) => {
-                write!(f, "Registry returned unparseable dependency: {error}")
+                write!(f, "LemmaBase returned unparseable repository: {error}")
             }
             Self::Conflict { spec_names, path } => write!(
                 f,
-                "Dependency containing spec(s) {} already exists in {}.\n\
-                 Content has changed on the registry. Re-run with --force to overwrite.",
+                "Repository containing spec(s) {} already exists in {}.\n\
+                 Content has changed on LemmaBase. Re-run with --force to overwrite.",
                 spec_names.join(", "),
                 path.display()
             ),
@@ -69,7 +143,7 @@ impl std::fmt::Display for InstallError {
             Self::Workspace(error) => write!(f, "{error}"),
             Self::Plan(errors) => write!(
                 f,
-                "Planning installed dependency failed ({} error(s))",
+                "Planning installed repository failed ({} error(s))",
                 errors.errors.len()
             ),
         }
@@ -91,52 +165,30 @@ impl From<WorkspaceDiskError> for InstallError {
     }
 }
 
-/// Drive an async registry future on the process-wide install runtime.
-pub fn block_on_registry<F: std::future::Future>(future: F) -> F::Output {
-    registry_runtime().block_on(future)
-}
-
-/// Fetch, conflict-scan, plan-probe, and persist one registry dependency.
-///
-/// Install = [`fetch_dependency`] + [`persist_registry_dependency`].
-/// Canonical destination bytes match → already up to date; any spec-name conflict
-/// → error unless `force` (then conflict files are removed after a successful plan probe).
-pub fn install_registry_dependency(
+/// Download, conflict-scan, plan-probe, and persist one LemmaBase repository.
+pub fn install_registry_dependency<T: HttpTransport>(
     workdir: &Path,
     id: &str,
     force: bool,
-    registry: &dyn lemma::Registry,
+    registries: &Registries,
+    transport: &T,
 ) -> Result<InstallOutcome, InstallError> {
-    let bundle = block_on_registry(fetch_dependency(registry, id))?;
-    persist_registry_dependency(workdir, id, &bundle.source, force)
+    let result = Install::run(registries, id, transport, lemma::ResourceLimits::default())
+        .map_err(|error| {
+            if error.kind() == lemma::ErrorKind::Parsing {
+                InstallError::UnparseableRegistry(error)
+            } else {
+                InstallError::Registry(error)
+            }
+        })?;
+    persist_registry_dependency(workdir, &result.id, &result.source, force)
 }
 
-/// Fetch a registry dependency body. Registry owns id reachability.
-pub async fn fetch_dependency(
-    registry: &dyn lemma::Registry,
-    dependency: &str,
-) -> Result<lemma::RegistryBundle, InstallError> {
-    let bundle = registry
-        .get(dependency)
-        .await
-        .map_err(InstallError::Registry)?;
-
-    let limits = lemma::ResourceLimits::default();
-    lemma::parse(
-        &bundle.source,
-        lemma::SourceType::Dependency(dependency.to_string()),
-        &limits,
-    )
-    .map_err(InstallError::UnparseableRegistry)?;
-
-    Ok(bundle)
-}
-
-fn spec_names_from_source(dependency: &str, source: &str) -> Result<HashSet<String>, InstallError> {
+fn spec_names_from_source(repository: &str, source: &str) -> Result<HashSet<String>, InstallError> {
     let limits = lemma::ResourceLimits::default();
     let specs = lemma::parse(
         source,
-        lemma::SourceType::Dependency(dependency.to_string()),
+        lemma::SourceType::Dependency(repository.to_string()),
         &limits,
     )
     .map_err(InstallError::UnparseableRegistry)?
@@ -144,10 +196,10 @@ fn spec_names_from_source(dependency: &str, source: &str) -> Result<HashSet<Stri
     Ok(specs.into_iter().map(|spec| spec.name).collect())
 }
 
-/// Conflict-scan, plan-probe, and persist one registry dependency source.
+/// Conflict-scan, plan-probe, and persist one LemmaBase repository source.
 ///
-/// Used by single-id install after fetch, and by `install --all` after
-/// `resolve_registry_references` (no second fetch).
+/// Used by single-id install after download, and by `install --all` after
+/// `Resolve::run` (no second download).
 ///
 /// Order: write tmp → plan probe → on fail remove tmp; on ok remove
 /// `conflict_paths` (when force) then rename tmp → `destination_absolute`.
@@ -239,7 +291,7 @@ pub fn persist_registry_dependency(
     })
 }
 
-/// Result of walking `lemma_deps/` against a candidate dependency source.
+/// Result of walking `lemma_deps/` against a candidate repository source.
 pub struct LemmaDepsScan {
     pub destination_absolute: PathBuf,
     pub destination_relative: PathBuf,
@@ -251,11 +303,11 @@ pub struct LemmaDepsScan {
 /// Unparseable or unreadable `.lemma` files are errors.
 pub fn scan_lemma_deps(
     workdir: &Path,
-    dependency: &str,
+    repository: &str,
     new_spec_names: &HashSet<String>,
 ) -> Result<LemmaDepsScan, InstallError> {
     let deps_dir = lemma_deps_dir(workdir);
-    let destination_relative = relative_dependency_cache_path(dependency);
+    let destination_relative = relative_dependency_cache_path(repository);
     let destination_absolute = deps_dir.join(&destination_relative);
     let limits = lemma::ResourceLimits::default();
 
@@ -352,6 +404,13 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    fn test_transport() -> (Registries, lemma::__test_support::FixtureTransport) {
+        (
+            Registries::default(),
+            lemma::__test_support::FixtureTransport::bundled(),
+        )
+    }
+
     #[test]
     fn write_tmp_then_rename_tmp_round_trip() {
         let dir = tempfile::tempdir().unwrap();
@@ -396,9 +455,15 @@ mod tests {
     #[test]
     fn install_writes_fixture_dependency() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = lemma::LemmaBase::test();
-        let outcome =
-            install_registry_dependency(dir.path(), "@iso/countries", false, &registry).unwrap();
+        let (registries, transport) = test_transport();
+        let outcome = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            false,
+            &registries,
+            &transport,
+        )
+        .unwrap();
         match outcome {
             InstallOutcome::Written { relative_path, .. } => {
                 assert_eq!(relative_path, PathBuf::from("@iso").join("countries.lemma"));
@@ -424,10 +489,17 @@ mod tests {
     #[test]
     fn install_destination_match_is_up_to_date() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = lemma::LemmaBase::test();
-        install_registry_dependency(dir.path(), "@iso/countries", false, &registry).unwrap();
-        let second =
-            install_registry_dependency(dir.path(), "@iso/countries", false, &registry).unwrap();
+        let (registries, transport) = test_transport();
+        install_registry_dependency(dir.path(), "@iso/countries", false, &registries, &transport)
+            .unwrap();
+        let second = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            false,
+            &registries,
+            &transport,
+        )
+        .unwrap();
         assert!(
             matches!(second, InstallOutcome::AlreadyUpToDate { .. }),
             "canonical destination match must be up to date"
@@ -437,8 +509,9 @@ mod tests {
     #[test]
     fn install_identical_content_elsewhere_conflicts_without_force() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = lemma::LemmaBase::test();
-        install_registry_dependency(dir.path(), "@iso/countries", false, &registry).unwrap();
+        let (registries, transport) = test_transport();
+        install_registry_dependency(dir.path(), "@iso/countries", false, &registries, &transport)
+            .unwrap();
         let other = dir
             .path()
             .join("lemma_deps")
@@ -452,8 +525,14 @@ mod tests {
             .join("countries.lemma");
         fs::rename(&dest, &other).unwrap();
 
-        let err = install_registry_dependency(dir.path(), "@iso/countries", false, &registry)
-            .expect_err("foreign copy with overlapping specs must conflict");
+        let err = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            false,
+            &registries,
+            &transport,
+        )
+        .expect_err("foreign copy with overlapping specs must conflict");
         assert!(
             matches!(err, InstallError::Conflict { .. }),
             "expected Conflict, got: {err}"
@@ -465,9 +544,15 @@ mod tests {
     #[test]
     fn install_identical_content_elsewhere_force_writes_canonical() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = lemma::LemmaBase::test();
-        let first =
-            install_registry_dependency(dir.path(), "@iso/countries", false, &registry).unwrap();
+        let (registries, transport) = test_transport();
+        let first = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            false,
+            &registries,
+            &transport,
+        )
+        .unwrap();
         let source = match first {
             InstallOutcome::Written { source, .. } => source,
             InstallOutcome::AlreadyUpToDate { source, .. } => source,
@@ -485,8 +570,14 @@ mod tests {
             .join("countries.lemma");
         fs::rename(&dest, &other).unwrap();
 
-        let second =
-            install_registry_dependency(dir.path(), "@iso/countries", true, &registry).unwrap();
+        let second = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            true,
+            &registries,
+            &transport,
+        )
+        .unwrap();
         match second {
             InstallOutcome::Written { relative_path, .. } => {
                 assert_eq!(relative_path, PathBuf::from("@iso").join("countries.lemma"));
@@ -519,9 +610,15 @@ mod tests {
             "repo @iso/countries\nspec alpha2\ndata code: text\n",
         )
         .unwrap();
-        let registry = lemma::LemmaBase::test();
-        let err = install_registry_dependency(dir.path(), "@iso/countries", false, &registry)
-            .expect_err("workspace name collision must fail plan probe");
+        let (registries, transport) = test_transport();
+        let err = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            false,
+            &registries,
+            &transport,
+        )
+        .expect_err("workspace name collision must fail plan probe");
         assert!(
             matches!(err, InstallError::Plan(_)),
             "expected Plan, got: {err}"
@@ -547,9 +644,15 @@ mod tests {
     #[test]
     fn install_force_plan_failure_leaves_conflict_paths_and_destination() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = lemma::LemmaBase::test();
-        let first =
-            install_registry_dependency(dir.path(), "@iso/countries", false, &registry).unwrap();
+        let (registries, transport) = test_transport();
+        let first = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            false,
+            &registries,
+            &transport,
+        )
+        .unwrap();
         let source = match first {
             InstallOutcome::Written { source, .. } => source,
             InstallOutcome::AlreadyUpToDate { source, .. } => source,
@@ -573,8 +676,14 @@ mod tests {
         )
         .unwrap();
 
-        let err = install_registry_dependency(dir.path(), "@iso/countries", true, &registry)
-            .expect_err("workspace collision must fail even with force");
+        let err = install_registry_dependency(
+            dir.path(),
+            "@iso/countries",
+            true,
+            &registries,
+            &transport,
+        )
+        .expect_err("workspace collision must fail even with force");
         assert!(
             matches!(err, InstallError::Plan(_)),
             "expected Plan, got: {err}"
@@ -598,9 +707,15 @@ mod tests {
     #[test]
     fn install_non_at_id_reaches_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = lemma::LemmaBase::test();
-        let err = install_registry_dependency(dir.path(), "not-a-registry-id", false, &registry)
-            .expect_err("missing id must fail via registry");
+        let (registries, transport) = test_transport();
+        let err = install_registry_dependency(
+            dir.path(),
+            "not-a-registry-id",
+            false,
+            &registries,
+            &transport,
+        )
+        .expect_err("non-@ id must fail via registry");
         assert!(
             matches!(err, InstallError::Registry(_)),
             "error must be Registry, got: {err}"

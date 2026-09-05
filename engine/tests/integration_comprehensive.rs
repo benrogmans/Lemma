@@ -193,14 +193,15 @@ rule effective_rate: (tax_amount / income) * 100%
         .value()
         .expect("value");
     match &lit.value {
-        lemma::ValueKind::Ratio(n, u) => {
+        lemma::ValueKind::Ratio(n) => {
             assert_eq!(
                 lemma::ValueKind::Number(n.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 decimal_lit("0.2")
             );
-            assert_eq!(u.as_deref(), Some("percent"));
+            assert!(matches!(lit.value, lemma::ValueKind::Ratio(_)));
+            // primary unit lives on rule/data type, not LiteralValue
         }
         other => panic!("Expected Ratio for tax_rate, got {:?}", other),
     }

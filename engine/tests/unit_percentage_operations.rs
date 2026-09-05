@@ -171,14 +171,10 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .result
         .value()
         .expect("value");
-    if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
+    if let lemma::ValueKind::Ratio(_r) = &lit.value {
         assert_eq!(
             lit.value,
-            lemma::LiteralValue::ratio_from_decimal(
-                decimal_lit("0.15"),
-                Some("percent".to_string())
-            )
-            .value
+            lemma::LiteralValue::ratio_from_decimal(decimal_lit("0.15")).value
         );
     } else {
         panic!(
@@ -201,14 +197,10 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .result
         .value()
         .expect("value");
-    if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
+    if let lemma::ValueKind::Ratio(_r) = &lit.value {
         assert_eq!(
             lit.value,
-            lemma::LiteralValue::ratio_from_decimal(
-                decimal_lit("0.10"),
-                Some("percent".to_string())
-            )
-            .value
+            lemma::LiteralValue::ratio_from_decimal(decimal_lit("0.10")).value
         );
     } else {
         panic!(
@@ -231,14 +223,10 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .result
         .value()
         .expect("value");
-    if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
+    if let lemma::ValueKind::Ratio(_r) = &lit.value {
         assert_eq!(
             lit.value,
-            lemma::LiteralValue::ratio_from_decimal(
-                decimal_lit("0.04"),
-                Some("percent".to_string())
-            )
-            .value
+            lemma::LiteralValue::ratio_from_decimal(decimal_lit("0.04")).value
         );
     } else {
         panic!(
@@ -262,14 +250,14 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .value()
         .expect("value");
     match &lit.value {
-        lemma::ValueKind::Ratio(rational_val, unit) => {
+        lemma::ValueKind::Ratio(rational_val) => {
             assert_eq!(
                 lemma::ValueKind::Number(rational_val.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 decimal_lit("4")
             );
-            assert_eq!(unit.as_deref(), Some("percent"));
+            // Binding unit is on the rule type after migration, not LiteralValue.
         }
         _ => panic!(
             "Expected ratio for 20% / 5% (ratio / ratio = ratio), got {:?}",

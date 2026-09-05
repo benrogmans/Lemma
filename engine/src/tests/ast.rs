@@ -2,8 +2,8 @@ use crate::computation::rational::rational_new;
 use crate::literals::DateGranularity;
 use crate::parsing::ast::*;
 use crate::planning::semantics::{
-    date_time_to_semantic, time_to_semantic, BaseMeasureVector, LemmaType, LiteralValue,
-    MeasureTrait, MeasureUnit, MeasureUnits, TypeExtends, TypeSpecification,
+    date_time_to_semantic, time_to_semantic, BaseMeasureVector, LemmaType, MeasureTrait,
+    MeasureUnit, MeasureUnits, TypeExtends, TypeSpecification, TypedLiteral,
 };
 use rust_decimal::Decimal;
 
@@ -11,13 +11,13 @@ use rust_decimal::Decimal;
 fn test_literal_value_to_primitive_type() {
     let one = rational_new(1, 1);
 
-    assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
+    assert_eq!(TypedLiteral::text("".to_string()).lemma_type.name(), "text");
     assert_eq!(
-        LiteralValue::number(one.clone()).lemma_type.name(),
+        TypedLiteral::number(one.clone()).lemma_type.name(),
         "number"
     );
     assert_eq!(
-        LiteralValue::from_bool(bool::from(BooleanValue::True))
+        TypedLiteral::from_bool(bool::from(BooleanValue::True))
             .lemma_type
             .name(),
         "boolean"
@@ -36,15 +36,13 @@ fn test_literal_value_to_primitive_type() {
         granularity: DateGranularity::Full,
     };
     assert_eq!(
-        LiteralValue::date(date_time_to_semantic(&dt))
+        TypedLiteral::date(date_time_to_semantic(&dt))
             .lemma_type
             .name(),
         "date"
     );
     assert_eq!(
-        LiteralValue::ratio(rational_new(1, 2), None)
-            .lemma_type
-            .name(),
+        TypedLiteral::ratio(rational_new(1, 2)).lemma_type.name(),
         "ratio"
     );
     let dur_type = LemmaType::new(
@@ -69,13 +67,9 @@ fn test_literal_value_to_primitive_type() {
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::measure_with_type(
-            one.clone(),
-            "second".to_string(),
-            std::sync::Arc::new(dur_type)
-        )
-        .lemma_type
-        .name(),
+        TypedLiteral::measure_with_type(one.clone(), std::sync::Arc::new(dur_type))
+            .lemma_type
+            .name(),
         "duration"
     );
 }
@@ -195,9 +189,10 @@ fn test_type_equality() {
 fn test_type_serialization() {
     let specs = TypeSpecification::number();
     let lemma_type = LemmaType::new("dice".to_string(), specs, TypeExtends::Primitive);
-    let serialized = serde_json::to_string(&lemma_type).unwrap();
-    let deserialized: LemmaType = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(lemma_type, deserialized);
+    let api = crate::api::LemmaType::from(&lemma_type);
+    let serialized = serde_json::to_string(&api).unwrap();
+    let deserialized: crate::api::LemmaType = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(api, deserialized);
 }
 
 #[test]
@@ -206,15 +201,15 @@ fn test_literal_value_display_value() {
     let ten_hours_canonical = rational_new(36_000, 1);
 
     assert_eq!(
-        LiteralValue::text("hello".to_string()).display_value(),
+        TypedLiteral::text("hello".to_string()).display_value(),
         "hello"
     );
-    assert_eq!(LiteralValue::number(ten).display_value(), "10");
-    assert_eq!(LiteralValue::from_bool(true).display_value(), "true");
-    assert_eq!(LiteralValue::from_bool(false).display_value(), "false");
+    assert_eq!(TypedLiteral::number(ten).display_value(), "10");
+    assert_eq!(TypedLiteral::from_bool(true).display_value(), "true");
+    assert_eq!(TypedLiteral::from_bool(false).display_value(), "false");
 
-    let ten_percent_ratio = LiteralValue::ratio(rational_new(1, 10), None);
-    assert_eq!(ten_percent_ratio.display_value(), "0.1");
+    let ten_percent_ratio = TypedLiteral::ratio(rational_new(1, 10));
+    assert_eq!(ten_percent_ratio.display_value(), "10%");
 
     let date = DateTimeValue {
         year: 2024,
@@ -229,7 +224,7 @@ fn test_literal_value_display_value() {
         granularity: DateGranularity::Full,
     };
     assert_eq!(
-        LiteralValue::date(date_time_to_semantic(&date)).display_value(),
+        TypedLiteral::date(date_time_to_semantic(&date)).display_value(),
         "2024-06-15"
     );
 
@@ -249,7 +244,7 @@ fn test_literal_value_display_value() {
         granularity: DateGranularity::DateTime,
     };
     assert_eq!(
-        LiteralValue::date(date_time_to_semantic(&datetime)).display_value(),
+        TypedLiteral::date(date_time_to_semantic(&datetime)).display_value(),
         "2024-12-25T14:30:45+01:00"
     );
 
@@ -261,7 +256,7 @@ fn test_literal_value_display_value() {
         timezone: None,
     };
     assert_eq!(
-        LiteralValue::time(time_to_semantic(&time)).display_value(),
+        TypedLiteral::time(time_to_semantic(&time)).display_value(),
         "14:30:00"
     );
 
@@ -288,12 +283,8 @@ fn test_literal_value_display_value() {
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::measure_with_type(
-            ten_hours_canonical,
-            "hour".to_string(),
-            std::sync::Arc::new(dur_type),
-        )
-        .display_value(),
+        TypedLiteral::measure_with_type(ten_hours_canonical, std::sync::Arc::new(dur_type),)
+            .display_value(),
         "10 hour"
     );
 }
@@ -308,7 +299,7 @@ fn test_literal_value_time_type() {
         timezone: None,
     };
     assert_eq!(
-        LiteralValue::time(time_to_semantic(&time))
+        TypedLiteral::time(time_to_semantic(&time))
             .lemma_type
             .name(),
         "time"

@@ -140,31 +140,22 @@ rule price_eur: amount as eur
         .result
         .value()
         .expect("value");
-    let (value, lemma_type) = (&lit.value, &lit.lemma_type);
-
     assert!(
-        lemma_type.is_measure(),
-        "Expected measure type, got: {lemma_type:?}"
+        matches!(lit.value, ValueKind::Measure(_)),
+        "Expected measure value, got: {:?}",
+        lit.value
     );
-
-    let (amount, unit) = match value {
-        ValueKind::Measure(amount, sig) => (
-            amount,
-            sig.first()
-                .map(|(n, _)| n.as_str())
-                .unwrap_or("")
-                .to_string(),
-        ),
-        other => panic!("Expected a measure value, got: {other:?}"),
-    };
-
+    let measure = rule_result
+        .value
+        .as_ref()
+        .and_then(|v| v.measure.as_ref())
+        .expect("measure map");
+    let amount = measure.get("eur").expect("eur in measure map");
     assert_eq!(
-        lemma::ValueKind::Number(amount.clone())
-            .as_decimal_magnitude()
-            .unwrap(),
+        Decimal::from_str(amount).expect("decimal"),
         Decimal::from(84)
     );
-    assert_eq!(unit.as_str(), "eur");
+    assert!(measure.contains_key("eur"));
 }
 
 #[test]
@@ -328,7 +319,7 @@ rule total: base_fee + surcharge
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Measure(d, _) => {
+        ValueKind::Measure(d) => {
             assert_eq!(
                 lemma::ValueKind::Number(d.clone())
                     .as_decimal_magnitude()
@@ -1054,20 +1045,23 @@ fn eval_rule_measure_magnitude(
         rule.veto_reason
     );
     if let Some(measure) = rule.value.as_ref().and_then(|v| v.measure.as_ref()) {
-        let lit = rule
-            .explanation
-            .as_ref()
-            .expect("explanation")
-            .result
-            .value()
-            .expect("value");
-        let unit = match &lit.value {
-            ValueKind::Measure(_, sig) => sig
-                .first()
-                .map(|(n, _)| n.clone())
-                .unwrap_or_else(|| panic!("measure result missing signature unit")),
-            other => panic!("expected Measure from '{rule_name}', got {other:?}"),
-        };
+        let unit = rule
+            .rule
+            .rule_type
+            .measure_binding_unit
+            .clone()
+            .filter(|u| measure.contains_key(u))
+            .or_else(|| {
+                rule.display().and_then(|display| {
+                    let lower = display.to_lowercase();
+                    measure
+                        .keys()
+                        .find(|u| lower.contains(&u.to_lowercase()))
+                        .cloned()
+                })
+            })
+            .or_else(|| measure.keys().next().cloned())
+            .unwrap_or_else(|| panic!("measure map empty for '{rule_name}'"));
         let amount = measure
             .get(&unit)
             .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"));
@@ -1084,11 +1078,11 @@ fn eval_rule_measure_magnitude(
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Measure(amount, sig) => (
+        ValueKind::Measure(amount) => (
             lemma::ValueKind::Number(amount.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
-            sig.first().map(|(n, _)| n.clone()).unwrap_or_default(),
+            String::new(),
         ),
         other => panic!("expected Measure from '{rule_name}', got {other:?}"),
     }
@@ -1510,22 +1504,23 @@ rule out: 5 eur as kg
     let response = engine
         .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
-    let lit = response
-        .results
-        .get("out")
-        .unwrap()
+    let out = response.results.get("out").unwrap();
+    let lit = out
         .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
-    let (magnitude, sig) = match &lit.value {
-        ValueKind::Measure(m, s) => (
+    let (magnitude, unit) = match &lit.value {
+        ValueKind::Measure(m) => (
             lemma::ValueKind::Number(m.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
-            s,
+            out.value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().cloned()),
         ),
         other => panic!("expected Measure, got {other:?}"),
     };
@@ -1534,12 +1529,14 @@ rule out: 5 eur as kg
         Decimal::from(5),
         "5 eur as kg must carry magnitude 5 unchanged"
     );
-    assert_eq!(
-        sig.first().map(|(n, _)| n.as_str()),
-        Some("kg"),
-        "target unit must be kg"
+    assert_eq!(unit.as_deref(), Some("kg"), "target unit must be kg");
+    assert!(
+        out.value
+            .as_ref()
+            .and_then(|v| v.measure.as_ref())
+            .is_some(),
+        "result must be a measure type"
     );
-    assert!(lit.lemma_type.is_measure(), "result must be a measure type");
 }
 
 #[test]
@@ -1560,32 +1557,29 @@ rule out: amount as eur as kg
     let response = engine
         .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
-    let lit = response
-        .results
-        .get("out")
-        .unwrap()
+    let out = response.results.get("out").unwrap();
+    let lit = out
         .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
-    let (magnitude, sig) = match &lit.value {
-        ValueKind::Measure(m, s) => (
+    let (magnitude, unit) = match &lit.value {
+        ValueKind::Measure(m) => (
             lemma::ValueKind::Number(m.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
-            s,
+            out.value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().cloned()),
         ),
         other => panic!("expected Measure, got {other:?}"),
     };
     // 100 usd × 0.91 = 91 eur (money family factor), then relabel to kg with the same magnitude.
     assert_eq!(magnitude, Decimal::new(91, 0), "100 usd → 91 eur → 91 kg");
-    assert_eq!(
-        sig.first().map(|(n, _)| n.as_str()),
-        Some("kg"),
-        "target unit must be kg"
-    );
+    assert_eq!(unit.as_deref(), Some("kg"), "target unit must be kg");
 }
 
 #[test]
@@ -1606,22 +1600,23 @@ rule out: amount as eur as number as kg
     let response = engine
         .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
-    let lit = response
-        .results
-        .get("out")
-        .unwrap()
+    let out = response.results.get("out").unwrap();
+    let lit = out
         .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
-    let (magnitude, sig) = match &lit.value {
-        ValueKind::Measure(m, s) => (
+    let (magnitude, unit) = match &lit.value {
+        ValueKind::Measure(m) => (
             lemma::ValueKind::Number(m.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
-            s,
+            out.value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .and_then(|m| m.keys().next().cloned()),
         ),
         other => panic!("expected Measure, got {other:?}"),
     };
@@ -1630,7 +1625,7 @@ rule out: amount as eur as number as kg
         Decimal::new(91, 0),
         "91 eur → 91 (number) → 91 kg"
     );
-    assert_eq!(sig.first().map(|(n, _)| n.as_str()), Some("kg"));
+    assert_eq!(unit.as_deref(), Some("kg"));
 }
 
 // ═══════════════════════════════════════════════════════════════════

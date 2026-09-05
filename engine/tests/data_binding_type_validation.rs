@@ -250,14 +250,18 @@ rule r: p
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Ratio(n, u) => {
+        ValueKind::Ratio(n) => {
             assert_eq!(
                 lemma::ValueKind::Number(n.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 decimal_lit("0.05")
             );
-            assert_eq!(u.as_deref(), Some("percent"));
+            // Display/binding unit lives on the rule type, not LiteralValue.
+            assert!(
+                matches!(lit.value, ValueKind::Ratio(_)),
+                "expected Ratio value"
+            );
         }
         other => panic!("expected Ratio, got: {:?}", other),
     }

@@ -5,38 +5,35 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
-/** User/planning error from Lemma. Carries WASM-shaped {@link EngineError} entries. */
+/** User/planning error from Lemma. Carries {@link EngineError} entries. */
 public final class LemmaException extends RuntimeException {
   /** Serialization version. */
   private static final long serialVersionUID = 1L;
 
-  /** Raw JSON array of {@link EngineError} objects from the engine. */
-  private final String errorsJson;
-  /** Lazily parsed copy of {@link #errorsJson}. */
-  private volatile ArrayList<EngineError> parsedErrors;
+  /** Structured engine errors. */
+  private final ArrayList<EngineError> errors;
 
   /**
-   * Creates an exception with structured errors.
+   * Creates an exception with typed errors.
+   *
+   * @param message summary message
+   * @param errors structured engine errors
+   */
+  public LemmaException(String message, List<EngineError> errors) {
+    super(message);
+    this.errors = new ArrayList<>(Objects.requireNonNull(errors, "errors"));
+  }
+
+  /**
+   * JNI / LemmaBase wire path: parse errors JSON once into typed entries.
    *
    * @param message summary message
    * @param errorsJson JSON array of engine errors
    */
   public LemmaException(String message, String errorsJson) {
-    super(message);
-    this.errorsJson = errorsJson;
-  }
-
-  /** Parses and memoizes {@link #errorsJson}. */
-  private ArrayList<EngineError> parse() {
-    if (parsedErrors == null) {
-      synchronized (this) {
-        if (parsedErrors == null) {
-          parsedErrors = new ArrayList<>(JsonSupport.parseEngineErrors(errorsJson));
-        }
-      }
-    }
-    return parsedErrors;
+    this(message, JsonSupport.parseEngineErrors(errorsJson));
   }
 
   /**
@@ -45,7 +42,7 @@ public final class LemmaException extends RuntimeException {
    * @return unmodifiable error list
    */
   public List<EngineError> errors() {
-    return Collections.unmodifiableList(parse());
+    return Collections.unmodifiableList(errors);
   }
 
   /**
@@ -56,7 +53,7 @@ public final class LemmaException extends RuntimeException {
    */
   public Map<String, List<EngineError>> errorsByData() {
     Map<String, List<EngineError>> byData = new LinkedHashMap<>();
-    for (EngineError error : parse()) {
+    for (EngineError error : errors) {
       String key = error.relatedData();
       if (key == null) {
         continue;

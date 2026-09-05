@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn explanation_json(response: &lemma::Response, rule: &str) -> Value {
-    serde_json::to_value(response).unwrap()["results"][rule]["explanation"].clone()
+    serde_json::to_value(lemma::api::Response::from(response)).unwrap()["results"][rule]
+        ["explanation"]
+        .clone()
 }
 
 fn compose_nodes_matching<'a>(value: &'a Value, needle: &str) -> Vec<&'a Value> {
@@ -334,7 +336,7 @@ rule out: x + 1
             true,
         )
         .unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
+    let json: Value = serde_json::to_value(lemma::api::Response::from(&response)).unwrap();
     assert!(json["results"]["out"]["explanation"].is_object());
 }
 

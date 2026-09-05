@@ -2,11 +2,13 @@
 //! Qualify with Type.unit or alias.Type.unit (not alias.unit).
 
 use crate::planning::semantics::{LemmaType, TypeSpecification};
-use std::collections::{BTreeSet, HashMap};
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// One measure/ratio type that declares a given bare unit name.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnitOwner {
     pub owning_type: Arc<LemmaType>,
     /// Local typedef name or imported typedef name.
@@ -35,9 +37,9 @@ pub enum UnitMergeConflict {
 }
 
 /// Expression-scope unit names → owning measure/ratio types.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnitIndex {
-    by_bare: HashMap<String, Vec<UnitOwner>>,
+    by_bare: IndexMap<String, Vec<UnitOwner>>,
 }
 
 impl UnitIndex {
@@ -402,7 +404,7 @@ impl UnitIndex {
     #[must_use]
     pub fn resolve_via_named_measure_type(
         unit_ref: &str,
-        resolved: &HashMap<String, Arc<LemmaType>>,
+        resolved: &IndexMap<String, Arc<LemmaType>>,
     ) -> Option<(String, Arc<LemmaType>)> {
         let segments: Vec<String> = unit_ref
             .split('.')
@@ -429,7 +431,7 @@ impl UnitIndex {
     pub fn resolve_with_named_types(
         &self,
         unit_ref: &str,
-        resolved: &HashMap<String, Arc<LemmaType>>,
+        resolved: &IndexMap<String, Arc<LemmaType>>,
     ) -> Result<(String, Arc<LemmaType>), String> {
         match self.resolve(unit_ref) {
             Ok(hit) => Ok(hit),

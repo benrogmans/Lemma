@@ -121,7 +121,7 @@ Show how each Rule was evaluated (human reasoning table; with `--json`, per-rule
 lemma show shipping
 ```
 
-Show the static interface (data types, constraints, and rules reachable after normalize). Run-data-aware needs for a concrete `run` come from each rule's `missing_data`; static types and suggestions are on `lemma show` only.
+Show the static catalog (declared data types, constraints, and rules). Empty `needed_by_rules` on a data slot means offered for reuse. Run-data-aware needs for a concrete `run` come from each rule's `missing_data`; types and suggestions are on `lemma show` only.
 
 See [CLI reference](../reference/cli.md) for all commands and flags.
 

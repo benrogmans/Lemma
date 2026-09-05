@@ -2,6 +2,9 @@ package com.lemmabase.lemma;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.lemmabase.lemma.schema.ExplanationNode;
+import com.lemmabase.lemma.schema.LemmaType;
+import com.lemmabase.lemma.schema.LiteralValue;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -29,17 +32,17 @@ public record Show(
     @Nullable SourceType sourceType,
     Map<String, ShowData> data,
     Map<String, LemmaType> rules,
-    Map<String, MetaValue> meta) {
+    Map<String, LiteralValue> meta) {
   /**
-   * ShowData.
+   * One declared data slot.
    * @param type type
-   * @param prefilled prefilled
+   * @param fill spec literal or literal `with` binding
    * @param suggestion suggestion
-   * @param neededByRules neededByRules
+   * @param neededByRules local rules that need this slot; empty = reuse-only
    */
   public record ShowData(
       LemmaType type,
-      @Nullable RuleResultValue prefilled,
+      @Nullable RuleResultValue fill,
       @Nullable RuleResultValue suggestion,
       List<String> neededByRules) {
     /**
@@ -52,7 +55,7 @@ public record Show(
     static ShowData read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ShowData");
       LemmaType type = null;
-      RuleResultValue prefilled = null;
+      RuleResultValue fill = null;
       RuleResultValue suggestion = null;
       List<String> neededByRules = null;
       while (p.nextToken() != JsonToken.END_OBJECT) {
@@ -60,7 +63,7 @@ public record Show(
         p.nextToken();
         switch (field) {
           case "type" -> type = LemmaType.read(p);
-          case "prefilled" -> prefilled = RuleResultValue.read(p);
+          case "fill" -> fill = RuleResultValue.read(p);
           case "suggestion" -> suggestion = RuleResultValue.read(p);
           case "needed_by_rules" -> neededByRules = JsonReading.readList(p, JsonReading::readString);
           default -> JsonReading.unknownField(field, "ShowData");
@@ -72,7 +75,7 @@ public record Show(
       if (neededByRules == null) {
         JsonReading.missingRequired("needed_by_rules", "ShowData");
       }
-      return new ShowData(type, prefilled, suggestion, neededByRules);
+      return new ShowData(type, fill, suggestion, neededByRules);
     }
   }
   /**
@@ -112,7 +115,7 @@ public record Show(
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  public static Show read(JsonParser p) throws IOException {
+  static Show read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "Show");
     String spec = null;
     String commentary = null;
@@ -123,7 +126,7 @@ public record Show(
     SourceType sourceType = null;
     Map<String, ShowData> data = null;
     Map<String, LemmaType> rules = null;
-    Map<String, MetaValue> meta = null;
+    Map<String, LiteralValue> meta = null;
     while (p.nextToken() != JsonToken.END_OBJECT) {
       String field = p.currentName();
       p.nextToken();
@@ -137,7 +140,7 @@ public record Show(
         case "source_type" -> sourceType = SourceType.read(p);
         case "data" -> data = JsonReading.readMap(p, ShowData::read);
         case "rules" -> rules = JsonReading.readMap(p, LemmaType::read);
-        case "meta" -> meta = JsonReading.readMap(p, MetaValue::read);
+        case "meta" -> meta = JsonReading.readMap(p, LiteralValue::read);
         default -> JsonReading.unknownField(field, "Show");
       }
     }

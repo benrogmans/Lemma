@@ -4,8 +4,8 @@ defmodule Lemma.Show do
   resolved temporal window.
 
   `rules` values and each `data` entry's `type` are raw `LemmaType` JSON maps (a Rust
-  discriminated union tagged by `"kind"`), and `meta` values are raw `MetaValue` JSON
-  maps (tagged by `"literal"`/`"unquoted"`). Pattern-match on those tags directly
+  discriminated union tagged by `"kind"`), and `meta` values are raw `LiteralValue` JSON
+  maps (tagged by `"number"`, `"text"`, etc.). Pattern-match on those tags directly
   rather than through a parallel Elixir struct hierarchy — see `Lemma.ShowData`.
 
   `Lemma.show/4` itself still returns the plain decoded JSON map for backward

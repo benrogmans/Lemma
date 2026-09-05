@@ -3,8 +3,8 @@ export { Engine, initSync } from './lemma.bindings.js';
 export declare function init(): Promise<void>;
 export declare function Lemma(): Promise<Engine>;
 
-/** Resolved shape of {@link Engine.fetch}. */
-export interface RegistryFetchResult {
+/** Resolved shape of {@link Engine.install}. */
+export interface RepositoryInstallResult {
   source: string;
   id: string;
 }
@@ -13,6 +13,8 @@ declare module './lemma.bindings.js' {
   namespace Engine {
     /** Create engine with named limit overrides. Unknown keys throw. */
     function withLimits(limits: Record<string, number>): Engine;
+    /** Restore an engine from {@link Engine.snapshot} bytes. */
+    function fromSnapshot(bytes: Uint8Array): Engine;
   }
 
   interface Engine {
@@ -26,10 +28,11 @@ declare module './lemma.bindings.js' {
     load(sources: Record<string, string> | Array<[string, string]>): void;
 
     /**
-     * Download Lemma source from the registry for `name` (e.g. `@org/pkg`). Resolves with
-     * `{ source, id }`; does not load the engine. Rejects with `EngineError[]` like `load`.
+     * Download Lemma source from LemmaBase for `name` (e.g. `@org/pkg`). Resolves with
+     * `{ source, id }`; does not load the engine and does not write `lemma_deps/`.
+     * Rejects with `EngineError[]` like `load`.
      */
-    fetch(name: string): Promise<RegistryFetchResult>;
+    install(name: string): Promise<RepositoryInstallResult>;
 
     /**
      * JSON serialization of `Vec<ResolvedRepository>` from [`Engine::list`]:
@@ -66,19 +69,23 @@ declare module './lemma.bindings.js' {
     ): void;
 
     /**
-     * Replace a temporal spec slice with new source (atomic remove + load).
+     * Replace identities in `code` (atomic upsert; Path/Dependency prune siblings).
      * `attribute` is the source label (path or `@owner/repo`); omit for volatile.
      */
     update(
       repository: string | null | undefined,
-      spec: string,
-      effective: string | null | undefined,
       code: string,
       attribute?: string | null,
     ): void;
 
     /** Resource limits configured for this engine. */
     limits(): ResourceLimits;
+
+    /**
+     * Persist parsed specs + plans + limits as opaque bytes.
+     * Restore with {@link Engine.fromSnapshot}.
+     */
+    snapshot(): Uint8Array;
 
     /**
      * Canonical formatting of Lemma source. Throws `EngineError` on parse error.
@@ -127,8 +134,8 @@ export interface EngineErrorSource {
 
 /**
  * Structured error thrown by {@link Engine.run}, {@link Engine.show},
- * {@link Engine.load}, and {@link Engine.fetch}
- * (as an array), and rejected from {@link Engine.fetch} (as an array).
+ * {@link Engine.load}, and {@link Engine.install}
+ * (as an array), and rejected from {@link Engine.install} (as an array).
  *
  * - `kind` classifies the failure ("parsing" for syntax, "validation" for
  *   semantic/planning including bad data values, "missing_repository" when a
@@ -179,7 +186,7 @@ export interface EngineError {
 
 /**
  * API value fields shared by `RuleResult` (flattened into its top-level fields),
- * `ShowData.prefilled`, `ShowData.suggestion`, and range endpoints.
+ * `ShowData.fill`, `ShowData.suggestion`, and range endpoints.
  * A `None` field is absent (not `null`) per Rust `skip_serializing_if`.
  * When present: always `display`, plus exactly one typed field.
  */
@@ -200,7 +207,7 @@ export interface RuleResultValueEndpoint {
 
 /**
  * API value shared by `RuleResult` (flattened into its top-level fields),
- * `ShowData.prefilled`, and `ShowData.suggestion`. When present: always `display`,
+ * `ShowData.fill`, and `ShowData.suggestion`. When present: always `display`,
  * plus exactly one typed field for a non-range value; `range` is set instead for a
  * range value. A range endpoint (`range.from`/`range.to`) never itself carries a
  * `range` field.
@@ -339,10 +346,10 @@ export type LemmaType =
 export interface ShowData {
   type: LemmaType;
   /** Spec literal or literal `with` binding; UIs may skip review. */
-  prefilled?: RuleResultValue;
+  fill?: RuleResultValue;
   /** `-> suggest ...` suggestion; prompt with prefill in interactive UIs. */
   suggestion?: RuleResultValue;
-  /** Local rule names that transitively need this data (planning time). */
+  /** Local rule names that transitively need this data after normalize. Empty = reuse catalog only. */
   needed_by_rules: string[];
 }
 
@@ -365,7 +372,7 @@ export type RuleResult = RuleResultValue & {
   vetoed: boolean;
   veto_reason?: string;
   rule_type: string;
-  /** Input keys still unbound for this rule (run-data-aware; same keys as Show.data). */
+  /** Input keys still unbound for this rule (run-data-aware; subset of Show.data with non-empty needed_by_rules). */
   missing_data?: string[];
   /** Present when `run(..., explain: true)`. Shape: engine/schemas/api.v1.json (`RuleResult.explanation`). */
   explanation?: Explanation;
@@ -438,7 +445,7 @@ export interface ShowVersion {
  *  is the bare string `"volatile"`. */
 export type SourceType = "volatile" | { path: string } | { dependency: string };
 
-/** Parsed literal value (meta field value). Externally tagged. */
+/** Parsed literal value. Externally tagged. */
 export type LiteralValue =
   | { number: string }
   | { number_with_unit: [string, string] }
@@ -447,9 +454,6 @@ export type LiteralValue =
   | { time: string }
   | { boolean: "true" | "false" | "yes" | "no" }
   | { range: [LiteralValue, LiteralValue] };
-
-/** Spec `meta` field value. Externally tagged. */
-export type MetaValue = { literal: LiteralValue } | { unquoted: string };
 
 /** Return shape of {@link Engine.show}. */
 export interface Show {
@@ -463,7 +467,7 @@ export interface Show {
   data: Record<string, ShowData>;
   /** Rule result types; measure and ratio entries expose `units[]` like their data counterparts. */
   rules: Record<string, LemmaType>;
-  meta: Record<string, MetaValue>;
+  meta: Record<string, LiteralValue>;
 }
 
 /** Slim listed spec row (engine `list`). */

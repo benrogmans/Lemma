@@ -99,9 +99,9 @@ let response = engine.run(
 
 ## Show vs run discovery
 
-`Engine::show` returns the static planning interface: data used by the spec's rules, plus local rule result types.
+`Engine::show` returns the static planning catalog: every declared promptable data slot, plus local rule result types. Empty `needed_by_rules` means offered for reuse (`data x: alias.slot`), not needed by this spec's remaining rules.
 
-For requirements on a partial run, call `run` and inspect each rule's `missing_data` (`string[]` input keys). Types, prefilled literals, and `-> suggest` hints are on `Engine::show` (`Show.data` values are `ShowData`) only. Bound inputs (caller run bindings or spec prefilled) are omitted from `missing_data`; suggestions do not bind until supplied in `run`'s data. Non-veto rule results flatten `RuleResultValue` onto each result (`display()` / typed fields). Pass `explain: true` as the last `run` argument to attach per-rule explanation trees ([api.v1.json](../../../engine/schemas/api.v1.json)).
+For requirements on a partial run, call `run` and inspect each rule's `missing_data` (`string[]` input keys in evaluation / decision-tree order; first key is the next fact the live tree needs). Types, filled literals, and `-> suggest` hints are on `Engine::show` (`Show.data` values are `ShowData`) only. Bound inputs (caller run bindings or spec-filled values) are omitted from `missing_data`; suggestions do not bind until supplied in `run`'s data. Non-veto rule results flatten `RuleResultValue` onto each result (`display()` / typed fields). Pass `explain: true` as the last `run` argument to attach per-rule explanation trees ([api.v1.json](../../../engine/schemas/api.v1.json)).
 
 ```rust
 let response = engine.run(
@@ -121,6 +121,63 @@ for key in &response.results["rate"].missing_data {
 ## Embedded units stdlib
 
 `Engine::new()` loads `repo lemma` / `spec units` at compile time (import with `uses lemma units`). It always appears in `Engine::list`. Formatted source: `engine.source(Some("lemma"), None, None)?`.
+
+## Binary snapshot
+
+After `load` / `update`, the engine holds parsed specs and compiled execution plans. `snapshot` writes that state to bytes so a later process can `from_snapshot` and call `run` / `show` / `list` without re-parsing or re-planning. The restored engine also accepts further `update` / `remove`.
+
+Bytes carry a version header (`CARGO_PKG_VERSION`) and a CRC32. A snapshot from another engine version, or corrupt bytes, returns `Error`. Same sources loaded into two engines produce identical snapshot bytes.
+
+### Write to disk and restore
+
+```rust
+use lemma::{DateTimeValue, Engine, SourceType};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+fn build_and_save(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut engine = Engine::new();
+    engine.load([(
+        SourceType::Volatile,
+        r#"
+        spec shipping
+        uses lemma units
+        data weight: number
+        rule rate: 10
+          unless weight > 10 then 15
+        "#
+        .to_string(),
+    )])?;
+
+    fs::write(path, engine.snapshot()?)?;
+    Ok(())
+}
+
+fn load_and_run(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = fs::read(path)?;
+    let engine = Engine::from_snapshot(&bytes)?;
+
+    let mut values = HashMap::new();
+    values.insert("weight".to_string(), "12".to_string());
+    let now = DateTimeValue::now();
+    let response = engine.run(None, "shipping", Some(&now), values, None, false)?;
+
+    println!("{}", response.results["rate"].display().unwrap_or(""));
+    Ok(())
+}
+```
+
+In-process only (no filesystem):
+
+```rust
+let bytes = engine.snapshot()?;
+let restored = Engine::from_snapshot(&bytes)?;
+```
+
+JSON documents for `show` / `run` / bindings use `lemma::api` (`api::Show`, `api::Response`, …). Domain types keep exact serde for the snapshot path.
+
+Same opaque bytes on the language SDKs: [JavaScript](javascript.md), [Java](java.md), [Elixir](elixir.md).
 
 ## API docs
 

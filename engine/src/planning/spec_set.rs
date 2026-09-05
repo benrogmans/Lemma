@@ -8,26 +8,11 @@ use std::sync::Arc;
 ///
 /// The owning [`LemmaRepository`] is held by `Arc` so the set carries repository identity as
 /// a real memory reference instead of relying on string parsing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LemmaSpecSet {
     pub repository: Arc<LemmaRepository>,
     pub name: String,
     specs: BTreeMap<EffectiveDate, LemmaSpec>,
-}
-
-impl serde::Serialize for LemmaSpecSet {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("LemmaSpecSet", 3)?;
-        state.serialize_field("repository", &self.repository)?;
-        state.serialize_field("name", &self.name)?;
-        let specs: Vec<_> = self.iter_specs().collect();
-        state.serialize_field("specs", &specs)?;
-        state.end()
-    }
 }
 
 impl LemmaSpecSet {

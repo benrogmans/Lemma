@@ -407,13 +407,7 @@ fn performance_test_10k_rules() {
 /// Scaling test: deep rule dependency chains (linear + binary tree).
 #[test]
 fn bench_deep_chains() {
-    const STACK_SIZE: usize = 32 * 1024 * 1024;
-
-    let handle = std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
-        .spawn(bench_deep_chains_body)
-        .expect("spawn bench thread");
-    handle.join().expect("bench thread panicked");
+    bench_deep_chains_body();
 }
 
 fn bench_deep_chains_body() {
@@ -529,4 +523,55 @@ fn bench_deep_chains_body() {
             resp.results[0].display()
         );
     }
+}
+
+/// Long linear rule chain stays under `max_normal_form_depth` because embeds are leaves.
+#[test]
+fn linear_chain_loads_under_tight_normal_form_depth() {
+    let mut code = String::from("spec chain\ndata x0: number\nrule r1: x0 + 1\n");
+    for i in 2..=100 {
+        code.push_str(&format!("rule r{i}: r{} + 1\n", i - 1));
+    }
+    let limits = ResourceLimits {
+        max_normal_form_depth: 3,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
+    engine
+        .load([(lemma::SourceType::Volatile, code)])
+        .expect("100-rule chain must load when embeds count as depth 1");
+}
+
+/// Long linear rule chain stays under `max_normalized_expression_nodes` because embeds are one cell.
+#[test]
+fn linear_chain_loads_under_tight_normalized_node_budget() {
+    let mut code = String::from("spec chain\ndata x0: number\nrule r1: x0 + 1\n");
+    for i in 2..=100 {
+        code.push_str(&format!("rule r{i}: r{} + 1\n", i - 1));
+    }
+    let limits = ResourceLimits {
+        max_normalized_expression_nodes: 3,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
+    engine
+        .load([(lemma::SourceType::Volatile, code)])
+        .expect("100-rule chain must load when embeds count as one cell");
+}
+
+/// Nested math ops in one rule body still hit `max_normal_form_depth`.
+#[test]
+fn nested_math_exceeding_normal_form_depth_is_rejected() {
+    let limits = ResourceLimits {
+        max_normal_form_depth: 3,
+        max_expression_depth: 20,
+        ..ResourceLimits::default()
+    };
+    let code = "spec deep\ndata x: number\nrule r: sqrt (sqrt (sqrt (sqrt x)))";
+    let mut engine = Engine::with_limits(limits);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
+    let load_err = result.expect_err("four nested sqrt must exceed depth 3");
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for normal form depth");
+    assert_eq!(limit_err, "max_normal_form_depth");
 }

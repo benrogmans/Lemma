@@ -3,49 +3,59 @@ nav_title: LemmaBase
 nav_order: 30
 ---
 
-# LemmaBase Registry
+# LemmaBase
 
-A registry is where Lemma looks up the specs you import from outside your own workspace. When a spec refers to something with an @ prefix, like @iso/countries, that reference has to be turned into actual Lemma source before the engine can use it. Resolving those references is the registry's job. By default Lemma uses LemmaBase.com, but you can run entirely without a registry if you want complete isolation, or you can plug in your own private one. There is no authentication or authorization in the Registry API yet.
+`@org/repo` is part of the Lemma language. The engine parses it, plans against it, and reports `Error::Registry` for it. That means the engine must know which registry a qualifier names. Registries live in the engine (`engine/src/registry.rs`). Hosts never invent URLs, status mappings, or error text.
 
-## The engine never fetches
+Today every `@org/repo` names **LemmaBase**, bound to `https://lemmabase.com`. That binding is not configurable: no argument, no environment variable, no debug/release split. A future registry is a new identifier form in the language plus a new engine-side `Registry` implementation; never a retargeted LemmaBase.
 
-The engine itself never touches the network. It does not know about any registry, and it never downloads anything. Every external reference has to be resolved into source text first, and only then is that source handed to the engine.
+The engine performs **no I/O**. It emits `Fetch` requests and consumes `HttpResponse` values. The socket is always the host's HTTP stack, so JVM trust stores and proxy properties, Erlang application configuration, browser settings, Node CA / dispatcher config, and CLI system proxies all apply.
 
-How you resolve references depends on how you run Lemma. From the command line you run `lemma install --all` (or `lemma install @owner/repo` for one dependency), which follows the @ references and saves the downloaded specs into a lemma_deps folder inside your workspace. Every other command, such as run, server, show, list, mcp, and format, then reads your local .lemma files together with whatever is cached in lemma_deps. There is no lock file, so you should commit lemma_deps to version control.
+You can run entirely offline if every `@` repository is already available as source (for example under `lemma_deps/`).
 
-If you are calling Lemma as a Rust crate, you resolve references yourself by calling resolve_registry_references, and then you load the resulting source into the engine. The example further down shows exactly how. If you are using the JavaScript package from npm (`@lemmabase/lemma-engine`), call `fetch` to download the source and then `load` (using the returned id as the source label) before loading your own specs.
+## Resolve first, then load
 
-Whatever the path, the rule is the same: resolve first, load second. If you load a spec while some of its @ references are still unresolved, planning will simply report those references as missing specs.
+`Engine` never auto-fetches on `load` or `run`. Every external `@` reference must be resolved into source text first, then loaded.
 
-## The Registry trait
+Sans-IO protocol (engine):
 
-If you want to supply specs from your own source instead of LemmaBase, you implement the Registry trait. Every method receives the repository name exactly as it appears in the source, including the `@` prefix, so a reference to `@iso/countries` arrives as the string `"@iso/countries"`. The trait is asynchronous and must be safe to share across threads (Send + Sync), except on WebAssembly where that requirement is relaxed.
+- `Registries::default()` — catalogue; today LemmaBase only
+- `registry_for(qualifier)` — which registry owns an `@…` name
+- `Install` — one repository download (`start` / `respond` / `run`)
+- `Resolve` — transitive missing `@` references (`start` / `respond` / `run`)
+- `HttpTransport` — sync driver for Rust hosts (`get(&Fetch)`)
 
-There are two methods. The main one, get, takes a repository name and downloads all of its temporal versions, returning either the source bundle or an error. The optional one, url_for_id, returns a URL that editors can use to navigate to a spec.
+Hosts loop: receive `Fetch` (URL + request headers), perform GET, hand back `HttpResponse` (status + response headers + body) or `TransportFailure`.
 
-A successful download comes back as a bundle holding two things: the raw Lemma source, which is one or more top-level spec declarations, and an attribute string used to label the source in diagnostics. The bundle requirements below explain what that source has to look like.
+How you resolve depends on how you run Lemma:
 
-A failure comes back as an error carrying a human-readable message and a kind that says what went wrong: the spec was not found, access was denied, the network failed, the server failed, or something else.
+- **CLI**: `lemma install --all` (or `lemma install @owner/repo`) downloads from LemmaBase and writes `lemma_deps/`. Other commands read workspace `.lemma` files plus that cache. Commit `lemma_deps`; there is no lock file.
+- **Rust embedders**: implement `HttpTransport`, then `Install::run` / `Resolve::run` with `Registries::default()`, or drive the step machines yourself. Load returned source with `SourceType::Dependency`.
+- **npm / Hex / Maven**: call `install` (download only; no load, no `lemma_deps/` write), then `load` with the returned id as the source label before loading workspace specs.
 
-## Resolving dependencies
+If you load a spec while some `@` references are still unresolved, planning reports those as missing.
 
-To resolve references from Rust, call resolve_registry_references with a context, a map of your source files, and your registry implementation:
+## Resolving repositories from Rust
 
 ```rust
-use lemma::{resolve_registry_references, Context, Engine, ResourceLimits, SourceType};
+use lemma::{Engine, HttpTransport, Registries, Resolve, ResourceLimits, SourceType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-let mut context = Context::new(); // includes embedded stdlib (`repo lemma`, `spec units`); import with `uses lemma units`
-// List: context.repositories / Engine::list() always includes `lemma`. Source: engine.source(Some("lemma"), None, None)?.
+let registries = Registries::default();
+let transport = /* your HttpTransport */;
+let mut context = lemma::Context::new();
 let mut sources = HashMap::new();
-// ... insert local workspace specs into `context`, mirror their text in `sources` ...
+// ... insert local workspace specs into `context`, mirror text in `sources` ...
 
-let registry = my_registry_impl;
-resolve_registry_references(&mut context, &mut sources, &registry, &ResourceLimits::default())
-    .await?;
+Resolve::run(
+    &registries,
+    &mut context,
+    &mut sources,
+    &ResourceLimits::default(),
+    &transport,
+)?;
 
-// Typical pattern: rebuild or extend an `Engine` from the merged `sources` map.
 let mut engine = Engine::new();
 let batch: Vec<(SourceType, String)> = sources
     .into_iter()
@@ -54,16 +64,53 @@ let batch: Vec<(SourceType, String)> = sources
 engine.load(batch)?;
 ```
 
+Single repository:
+
+```rust
+use lemma::{Install, Registries};
+
+let registries = Registries::default();
+let result = Install::run(&registries, "@iso/countries", &transport)?;
+// result.source, result.id
+```
+
+## Per-host transports
+
+| Host | Socket | Corporate configuration |
+|------|--------|-------------------------|
+| CLI / Rust `ReqwestTransport` | reqwest (`rustls` + `system-proxy`) | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`, OS trust store |
+| npm | host `fetch` (wasm binding) | browser settings; Node `NODE_EXTRA_CA_CERTS`, undici dispatchers |
+| Maven | `java.net.http.HttpClient` (default or injected) | `javax.net.ssl.trustStore`, `http.proxyHost`, `java.net.useSystemProxies`, custom `SSLContext` |
+| Hex | `Lemma.Transport.get/2` (Req) or injected fun | application Req / Finch / cert config |
+| LSP | no fetch; hover uses `navigation_url` | n/a |
+
+Hosts forward `Fetch.headers` on the request and return response headers. LemmaBase sends no headers today.
+
+## Private host source
+
+You can still load source you obtained yourself with `@owner/name` labels:
+
+```rust
+engine.load([(
+    SourceType::Dependency("@myorg/rules".to_string()),
+    my_source_text,
+)])?;
+```
+
+There is no authentication in the public LemmaBase API yet; request headers exist so a future private registry can send `Authorization`.
+
 ## Bundle requirements
 
-A bundle is just ordinary Lemma source. A published registry bundle opens with a `repo` line whose name matches the registry id, for example `repo @iso/countries` for the `@iso/countries` dependency. That `@` name is assigned when the bundle is published, not chosen freely in a local workspace. Once everything is loaded, the engine keeps dependencies isolated from each other: a repository loaded as a dependency will never merge with your workspace or with another dependency, and every spec in a repository must come from the same place.
+A bundle is ordinary Lemma source. A published LemmaBase bundle opens with a `repo` line whose name matches the repository id, for example `repo @iso/countries`. That `@` name is assigned when published. Installed repositories stay isolated: a LemmaBase repository never merges with your workspace or another installed repository, and every spec in a repository must come from the same place.
 
-Within a bundle, spec names are just normal identifiers. You write `spec billing` or `spec rates` exactly as you would in a local file. When one bundle needs something from another registry repository, you qualify the import with `@`, as in `uses rates: @acme/finance rates` or `uses iso: @iso/countries alpha2`. An unqualified import like `uses x: rates` only looks inside the same repository as the spec doing the importing. In your own workspace files, declare local repos without `@` (`repo finance`).
+Within a bundle, spec names are normal identifiers (`spec billing`). Cross-repository imports use `@`, as in `uses rates: @acme/finance rates`. Unqualified `uses x: rates` only looks inside the same repository. In workspace files, declare local repos without `@` (`repo finance`).
 
-You do not have to bundle a whole dependency tree into one response. The resolver keeps fetching unresolved references until everything is satisfied, so a single .lemma response per identifier is enough. A registry is free to serve friendlier or edited forms on its own side, as long as what the engine finally parses follows these rules.
+The resolver keeps fetching unresolved references until everything is satisfied. One `.lemma` response per identifier is enough.
 
-## LemmaBase (default registry)
+## Adding a registry later
 
-When the registry feature is enabled, LemmaBase is the registry Lemma uses out of the box. It looks up an identifier by fetching it directly from lemmabase.com, so @iso/countries becomes a request for the corresponding .lemma file. Editors use the navigation URL to jump from a repository reference to its page on LemmaBase, while the individual spec name links to the copy fetched into your local lemma_deps folder.
+1. New identifier form in the language / `RepositoryQualifier`.
+2. New `impl Registry` in the engine (`fetch_for`, `bundle_from`, `navigation_url`).
+3. New arm in `Registries::registry_for` (and optionally host-constructed config on `Registries`).
 
-For tests there is an offline mode. LemmaBase::test() serves fixtures bundled under engine/tests/registry_fixtures/ instead of hitting the network, which is how the documentation examples that use @ references are checked.
+Hosts keep answering `Fetch` with GET. A non-HTTP protocol adds a new exhaustive `InstallStep` / `ResolveStep` variant; every host must handle the new tag (Rust fails to compile; Java/Elixir raise).

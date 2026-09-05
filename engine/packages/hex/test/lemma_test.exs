@@ -73,6 +73,44 @@ defmodule LemmaTest do
     end
   end
 
+  describe "snapshot/1 and from_snapshot/1" do
+    test "round-trips list and run; corrupt bytes error" do
+      assert {:ok, source} = Lemma.new()
+
+      :ok =
+        Lemma.load(source, """
+        spec snap_demo
+        data x: number
+        rule y: x + 1
+        """)
+
+      assert {:ok, bytes} = Lemma.snapshot(source)
+      assert is_binary(bytes)
+      assert byte_size(bytes) > 0
+
+      assert {:ok, restored} = Lemma.from_snapshot(bytes)
+      assert {:ok, list_source} = Lemma.list(source)
+      assert {:ok, list_restored} = Lemma.list(restored)
+      assert list_restored == list_source
+
+      assert {:ok, run_source} = Lemma.run(source, %{spec: "snap_demo"}, %{data: %{"x" => 41}})
+
+      assert {:ok, run_restored} =
+               Lemma.run(restored, %{spec: "snap_demo"}, %{data: %{"x" => 41}})
+
+      assert comparable_rule_result(run_restored["results"]["y"]) ==
+               comparable_rule_result(run_source["results"]["y"])
+
+      corrupt =
+        case bytes do
+          <<_::8, rest::binary>> -> <<0x58, rest::binary>>
+        end
+
+      assert {:error, err} = Lemma.from_snapshot(corrupt)
+      assert is_map(err)
+    end
+  end
+
   describe "quality/1" do
     test "clean spec has no recommendations" do
       {:ok, engine} = Lemma.new()
@@ -120,7 +158,7 @@ defmodule LemmaTest do
     end
   end
 
-  describe "update/6" do
+  describe "update/3" do
     test "replaces a temporal spec slice" do
       {:ok, engine} = Lemma.new()
 
@@ -132,7 +170,7 @@ defmodule LemmaTest do
         """)
 
       :ok =
-        Lemma.update(engine, nil, "pricing", nil, """
+        Lemma.update(engine, nil, """
         spec pricing
         data quantity: 1
         rule total: quantity * 20
@@ -648,9 +686,7 @@ defmodule LemmaTest do
                  "data" => %{"quantity" => 3}
                })
 
-      response = Jason.decode!(text)
-      assert response["results"]["total"]["display"] == "30"
-      assert is_map(response["results"]["total"]["explanation"])
+      assert text =~ "total: 30"
 
       assert {:ok, alias_text} =
                Lemma.Mcp.evaluate(engine, %{
@@ -659,13 +695,7 @@ defmodule LemmaTest do
                  "data" => %{"quantity" => 3}
                })
 
-      alias_response = Jason.decode!(alias_text)
-
-      assert alias_response["results"]["total"]["display"] ==
-               response["results"]["total"]["display"]
-
-      assert alias_response["results"]["total"]["explanation"]["body"] ==
-               response["results"]["total"]["explanation"]["body"]
+      assert alias_text == text
 
       assert {:ok, list} = Lemma.Mcp.list(engine, %{})
       assert list =~ "pricing"
@@ -692,6 +722,61 @@ defmodule LemmaTest do
       assert {:ok, text} = Lemma.Mcp.guide(%{})
       assert text =~ "Talk like a consultant"
       assert text =~ "`run`"
+    end
+  end
+
+  test "install rejects empty LemmaBase id" do
+    {:ok, engine} = Lemma.new()
+    assert {:error, errors} = Lemma.install(engine, "   ")
+
+    assert Enum.any?(errors, fn err ->
+             (err["kind"] || err[:kind]) == "registry"
+           end)
+  end
+
+  describe "install with injected transport" do
+    defp fixtures_dir do
+      Path.expand("../../../tests/registry_fixtures", __DIR__)
+    end
+
+    defp fixture_transport(expected_url, status, body) do
+      fn url, _headers ->
+        assert url == expected_url
+        {:ok, status, [], body}
+      end
+    end
+
+    test "successful fetch returns source and id" do
+      body = File.read!(Path.join(fixtures_dir(), "@iso/countries.lemma"))
+      transport = fixture_transport("https://lemmabase.com/@iso/countries.lemma", 200, body)
+      {:ok, engine} = Lemma.new()
+
+      assert {:ok, result} = Lemma.install(engine, "@iso/countries", transport)
+      assert result["id"] == "@iso/countries"
+      assert is_binary(result["source"])
+      assert result["source"] =~ "spec alpha2"
+    end
+
+    test "404 returns registry error" do
+      transport =
+        fixture_transport("https://lemmabase.com/@iso/missing.lemma", 404, "not found")
+
+      {:ok, engine} = Lemma.new()
+      assert {:error, errors} = Lemma.install(engine, "@iso/missing", transport)
+      assert is_list(errors)
+      assert Enum.any?(errors, fn err -> err[:kind] == "registry" end)
+    end
+
+    test "transport error returns registry network error" do
+      transport = fn url, _headers ->
+        assert url == "https://lemmabase.com/@iso/countries.lemma"
+        {:error, "connection refused"}
+      end
+
+      {:ok, engine} = Lemma.new()
+      assert {:error, errors} = Lemma.install(engine, "@iso/countries", transport)
+      assert is_list(errors)
+      assert Enum.any?(errors, fn err -> err[:registry_kind] == "network_error" end)
     end
   end
 end

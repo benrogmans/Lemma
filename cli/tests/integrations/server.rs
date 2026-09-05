@@ -807,3 +807,69 @@ rule main: a + b
         "smoke: missing_data must list unbound inputs: {body}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn sigterm_exits_zero() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let lemma_file = temp_dir.path().join("single.lemma");
+    std::fs::write(
+        &lemma_file,
+        r#"spec single_spec
+data x: number
+rule result: x
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 13;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let pid = child.id().to_string();
+    let kill_status = std::process::Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .expect("kill -TERM");
+    assert!(
+        kill_status.success(),
+        "kill -TERM must succeed, got {kill_status}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                assert!(status.success(), "SIGTERM must exit 0, got {status}");
+                return;
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("server did not exit within deadline after SIGTERM");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("try_wait failed: {err}");
+            }
+        }
+    }
+}

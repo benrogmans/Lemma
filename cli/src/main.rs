@@ -98,6 +98,9 @@ enum Commands {
     },
     /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
     ///
+    /// SIGINT/SIGTERM stop accepting new connections, drain in-flight requests
+    /// up to `--eval-timeout`, then exit 0.
+    ///
     /// Routes:
     ///   GET  /{spec}              — show spec interface (data, rules, versions)
     ///   POST /{spec}              — evaluate all rules (data as JSON or form body)
@@ -149,17 +152,17 @@ enum Commands {
         #[arg(long, default_value = "10", value_name = "SECONDS")]
         request_timeout: u64,
     },
-    /// Install dependencies from the registry into lemma_deps/
+    /// Install repositories from LemmaBase into lemma_deps/
     Install {
-        /// Dependency to install (e.g. `@user/repo`)
-        dependency: Option<String>,
+        /// Repository to install (e.g. `@user/repo`)
+        repository: Option<String>,
         /// Workspace directory or `.lemma` file (default: current directory)
         #[arg(long, value_name = "PATH")]
         prefix: Option<PathBuf>,
         /// Install all @... references in the workspace
         #[arg(short = 'a', long)]
         all: bool,
-        /// Overwrite existing registry dependencies when content has changed
+        /// Overwrite existing LemmaBase repositories when content has changed
         #[arg(short = 'f', long)]
         force: bool,
     },
@@ -322,15 +325,15 @@ fn main() {
             request_timeout,
         } => mcp_command(workspace_dir(prefix.as_ref()), *write, *request_timeout),
         Commands::Install {
-            dependency,
+            repository,
             prefix,
             all,
             force,
         } => {
-            if dependency.is_some() && *all {
-                anyhow::bail!("Cannot specify both a dependency and --all");
+            if repository.is_some() && *all {
+                anyhow::bail!("Cannot specify both a repository and --all");
             }
-            if dependency.is_none() && !*all {
+            if repository.is_none() && !*all {
                 let mut cmd = Cli::command();
                 cmd.build();
                 let install_cmd = cmd
@@ -341,7 +344,7 @@ fn main() {
             }
             install_command(
                 workspace_dir(prefix.as_ref()),
-                dependency.as_deref(),
+                repository.as_deref(),
                 *force,
             )
         }
@@ -501,7 +504,8 @@ fn run_command(options: RunOptions<'_>) -> Result<()> {
 
     if options.json {
         let json_document = if options.explain {
-            serde_json::to_string_pretty(&response).expect("BUG: failed to serialize response JSON")
+            serde_json::to_string_pretty(&lemma::api::Response::from(&response))
+                .expect("BUG: failed to serialize response JSON")
         } else {
             formatter.serialize_response_json(&response, false)
         };
@@ -578,8 +582,8 @@ fn show_command(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if json {
-        let json_document =
-            serde_json::to_string_pretty(&show).expect("BUG: failed to serialize show JSON");
+        let json_document = serde_json::to_string_pretty(&lemma::api::Show::from(&show))
+            .expect("BUG: failed to serialize show JSON");
         println!("{}", json_document);
     } else {
         print!("{show}");
@@ -708,21 +712,23 @@ fn mcp_command(workdir: &Path, write: bool, request_timeout_secs: u64) -> Result
 }
 
 fn install_command(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
-    let registry = lemma::LemmaBase::new();
+    let registries = lemma::Registries::default();
+    let transport = install::ReqwestTransport::new();
 
     match spec_name {
-        Some(id) => install_repo(source, id, &registry, force),
-        None => install::block_on_registry(install_workspace_deps(source, &registry, force)),
+        Some(id) => install_repo(source, id, &registries, &transport, force),
+        None => install_workspace_deps(source, &registries, &transport, force),
     }
 }
 
 fn install_repo(
     workdir: &Path,
     raw_id: &str,
-    registry: &dyn lemma::Registry,
+    registries: &lemma::Registries,
+    transport: &install::ReqwestTransport,
     force: bool,
 ) -> Result<()> {
-    match install::install_registry_dependency(workdir, raw_id, force, registry) {
+    match install::install_registry_dependency(workdir, raw_id, force, registries, transport) {
         Ok(install::InstallOutcome::AlreadyUpToDate { .. }) => {
             eprintln!("Already up to date: {}.", raw_id);
             Ok(())
@@ -741,9 +747,10 @@ fn install_repo(
     }
 }
 
-async fn install_workspace_deps(
+fn install_workspace_deps(
     workdir: &Path,
-    registry: &dyn lemma::Registry,
+    registries: &lemma::Registries,
+    transport: &install::ReqwestTransport,
     force: bool,
 ) -> Result<()> {
     let mut ctx = lemma::Context::new();
@@ -755,7 +762,8 @@ async fn install_workspace_deps(
 
     for path in &discovered.workspace_paths {
         let code = fs::read_to_string(path)?;
-        let source_type = lemma::SourceType::Path(Arc::new(path.clone()));
+        let source_type =
+            lemma::SourceType::Path(lemma_cli::workspace::workspace_path_label(workdir, path));
         match lemma::parse(&code, source_type.clone(), &limits) {
             Ok(result) => {
                 for (parsed_repo, specs) in &result.repositories {
@@ -787,9 +795,7 @@ async fn install_workspace_deps(
     let local_workspace_sources: std::collections::HashSet<lemma::SourceType> =
         sources.keys().cloned().collect();
 
-    if let Err(errs) =
-        lemma::resolve_registry_references(&mut ctx, &mut sources, registry, &limits).await
-    {
+    if let Err(errs) = lemma::Resolve::run(registries, &mut ctx, &mut sources, &limits, transport) {
         for e in &errs {
             eprintln!("{}", error_formatter::format_error(e, &sources));
         }
@@ -807,7 +813,7 @@ async fn install_workspace_deps(
         let id = match attribute {
             lemma::SourceType::Dependency(id) => id.as_str(),
             other => {
-                panic!("BUG: resolve_registry_references inserted non-Dependency source: {other}")
+                panic!("BUG: Resolve inserted non-Dependency source: {other}")
             }
         };
 
@@ -830,15 +836,15 @@ async fn install_workspace_deps(
     }
 
     let plural = if installed_count == 1 {
-        "dependency"
+        "repository"
     } else {
-        "dependencies"
+        "repositories"
     };
 
     if installed_count == 0 && skipped_count == 0 {
-        eprintln!("No dependencies found.");
+        eprintln!("No repositories found.");
     } else if installed_count == 0 {
-        eprintln!("All dependencies are up to date. Use --force to overwrite.");
+        eprintln!("All repositories are up to date. Use --force to overwrite.");
     } else if skipped_count > 0 {
         eprintln!(
             "Installed {} {} ({} already up to date).",

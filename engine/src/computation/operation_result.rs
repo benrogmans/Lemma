@@ -1,7 +1,6 @@
 //! Result envelope for computation operations: a produced value or a domain veto.
 
 use std::fmt;
-use std::sync::Arc;
 
 use crate::planning::semantics::{
     DataPath, LemmaType, LiteralValue, SemanticDateTime, SemanticTime, TypeSpecification,
@@ -66,23 +65,18 @@ impl Serialize for VetoType {
     }
 }
 
-/// Result of an operation (evaluating a rule or expression)
-/// TODO: Rename. This can also represent a data value.
+/// Result of evaluating a rule, expression, or data leaf.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationResult {
     /// Operation produced a value
-    Value(Arc<LiteralValue>),
+    Value(LiteralValue),
     /// Operation was vetoed (valid result, no value)
     Veto(VetoType),
 }
 
 impl OperationResult {
     pub fn from_literal(value: LiteralValue) -> Self {
-        Self::Value(Arc::new(value))
-    }
-
-    pub fn from_literal_arc(value: Arc<LiteralValue>) -> Self {
         Self::Value(value)
     }
 
@@ -98,14 +92,6 @@ impl OperationResult {
 
     #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
-        match self {
-            OperationResult::Value(value) => Some(value.as_ref()),
-            OperationResult::Veto(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub fn value_arc(&self) -> Option<&Arc<LiteralValue>> {
         match self {
             OperationResult::Value(value) => Some(value),
             OperationResult::Veto(_) => None,
@@ -143,7 +129,7 @@ impl OperationResult {
         };
         let canonical = checked_mul(&rational, &factor)
             .expect("BUG: measure canonicalization overflow in OperationResult::measure");
-        Self::from_literal(LiteralValue::measure_with_type(
+        Self::from_literal(LiteralValue::measure_with_bound_unit(
             canonical, unit_name, lemma_type,
         ))
     }
@@ -165,7 +151,7 @@ impl OperationResult {
     }
 
     pub fn ratio(rational: rust_decimal::Decimal) -> Self {
-        Self::from_literal(LiteralValue::ratio_from_decimal(rational, None))
+        Self::from_literal(LiteralValue::ratio_from_decimal(rational))
     }
 
     pub fn veto(veto: impl Into<String>) -> Self {

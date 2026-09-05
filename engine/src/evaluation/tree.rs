@@ -3,6 +3,7 @@
 //! When explanation is requested, the same walk builds Compose/Data nodes
 //! from Kind. Values always come from Kind.
 
+use crate::computation::arithmetic::expand_signature_to_base_units;
 use crate::computation::{
     arithmetic_operation, comparison_operation, convert_unit_operand, OperationResult,
     UnitResolutionContext, VetoType,
@@ -18,23 +19,83 @@ use crate::planning::ordered_dispatch::{
     dispatch_probe_of, region_count, region_for_value, DispatchKey, DispatchProbeOutcome,
 };
 use crate::planning::semantics::{
-    negated_comparison, ArithmeticComputation, DataPath, LiteralValue, RulePath, ValueKind,
+    negated_comparison, ArithmeticComputation, DataPath, LemmaType, LiteralValue, RulePath,
+    ValueKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 fn borrow_value<'a>(result: &'a OperationResult, operand: &str) -> &'a LiteralValue {
     match result {
-        OperationResult::Value(arc) => arc.as_ref(),
+        OperationResult::Value(v) => v,
         OperationResult::Veto(_) => panic!("BUG: {operand} passed veto check but has no value"),
     }
 }
 
+/// Promote anonymous / compound measure types via the plan signature index, or
+/// via a unique named type in the plan unit index that shares the decomposition.
+fn resolve_measure_type_for_magnitude_math(
+    plan: &ExecutionPlan,
+    operand_type: &Arc<LemmaType>,
+) -> Arc<LemmaType> {
+    if !operand_type.is_measure() {
+        return Arc::clone(operand_type);
+    }
+    let signature = operand_type.measure_runtime_signature();
+    if let Some((unit_name, named)) = plan.signature_index.get(&signature) {
+        return Arc::new(
+            named
+                .as_ref()
+                .clone()
+                .with_measure_binding_unit(unit_name.clone()),
+        );
+    }
+    let owners = [operand_type.as_ref()];
+    let expanded =
+        expand_signature_to_base_units(&signature, plan.expression_unit_index(), &owners);
+    if let Some((unit_name, named)) = plan.signature_index.get(&expanded) {
+        return Arc::new(
+            named
+                .as_ref()
+                .clone()
+                .with_measure_binding_unit(unit_name.clone()),
+        );
+    }
+    if operand_type.is_anonymous_measure() {
+        if let Some(decomp) = operand_type.measure_type_decomposition() {
+            if !decomp.is_empty() {
+                let mut unique: Option<Arc<LemmaType>> = None;
+                for candidate in plan.resolved_types.unit_index.values() {
+                    if !matches!(
+                        candidate.specifications,
+                        crate::planning::semantics::TypeSpecification::Measure { .. }
+                    ) {
+                        continue;
+                    }
+                    if candidate.measure_type_decomposition() != Some(decomp) {
+                        continue;
+                    }
+                    match &unique {
+                        None => unique = Some(Arc::clone(candidate)),
+                        Some(existing) if existing.name() == candidate.name() => {}
+                        Some(_) => {
+                            unique = None;
+                            break;
+                        }
+                    }
+                }
+                if let Some(named) = unique {
+                    return named;
+                }
+            }
+        }
+    }
+    Arc::clone(operand_type)
+}
+
 fn own_literal(result: OperationResult, operand: &str) -> LiteralValue {
     match result {
-        OperationResult::Value(arc) => {
-            Arc::try_unwrap(arc).unwrap_or_else(|shared| shared.as_ref().clone())
-        }
+        OperationResult::Value(v) => v,
         OperationResult::Veto(_) => panic!("BUG: {operand} passed veto check but is vetoed"),
     }
 }
@@ -69,27 +130,49 @@ impl Explained {
 }
 
 /// Evaluate one rule by walking its root [`NormalFormId`] (values only).
+///
+/// Stores the result in [`EvaluationContext::rule_values`] at this rule's
+/// plan index so later embeds read it instead of re-entering the body.
 pub(crate) fn evaluate_rule(
     rule: &ExecutableRule,
     plan: &ExecutionPlan,
     ctx: &mut EvaluationContext,
 ) -> OperationResult {
-    evaluate_id(rule.normal_form, plan, ctx)
+    let result = evaluate_id(rule.normal_form, plan, ctx);
+    let index = plan.rules.get_index_of(&rule.path).unwrap_or_else(|| {
+        panic!(
+            "BUG: rule '{}' missing from execution plan after evaluate_rule",
+            rule.path.rule
+        )
+    });
+    ctx.rule_values[index] = Some(result.clone());
+    result
 }
 
 /// Evaluate one rule while building its explanation (single walk).
+///
+/// Dependency values and explanations must already be in
+/// [`EvaluationContext::rule_values`] / `rule_explanations`. Asserts that the
+/// explain walk agrees with the stored value result.
 pub(crate) fn evaluate_rule_explained(
     rule: &ExecutableRule,
     plan: &ExecutionPlan,
     ctx: &mut EvaluationContext,
 ) -> (OperationResult, Explanation) {
+    let stored = ctx.rule_value(plan, &rule.path).clone();
     let explained = evaluate_explained(rule.normal_form, plan, ctx);
+    assert_eq!(
+        &explained.result, &stored,
+        "BUG: explain walk for '{}' disagreed with stored rule value",
+        rule.path.rule
+    );
     let result = explained.result.clone();
     let children = explained.children;
+    let result_type = ctx.rule_result_type(plan, rule);
 
     let node = ExplanationNode::Rule {
         name: rule.path.clone(),
-        result: Some(format_operation_result(&result)),
+        result: Some(format_operation_result(&result, result_type.as_ref())),
         body: explained.body.clone(),
         causes: explained.causes.clone(),
         children: children.clone(),
@@ -101,6 +184,7 @@ pub(crate) fn evaluate_rule_explained(
         Explanation {
             name: rule.path.clone(),
             result,
+            result_type,
             body: explained.body,
             causes: explained.causes,
             children,
@@ -108,76 +192,15 @@ pub(crate) fn evaluate_rule_explained(
     )
 }
 
-/// Direct rule-embed paths in `root`'s Kind DAG.
-///
-/// Cells with `rule_embed` are recorded; their Kind children are not walked
-/// (the referenced rule's body is ensured separately via that path).
-fn collect_direct_rule_embed_paths(
-    plan: &ExecutionPlan,
-    root: NormalFormId,
-    out: &mut Vec<RulePath>,
-) {
-    let mut visited = HashSet::new();
-    let mut worklist = vec![root];
-    while let Some(id) = worklist.pop() {
-        if !visited.insert(id) {
-            continue;
-        }
-        let cell = plan.normal_form(id);
-        if let Some(path) = &cell.rule_embed {
-            out.push(path.clone());
-            continue;
-        }
-        match &cell.kind {
-            NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => {}
-            NormalFormKind::Sum(children)
-            | NormalFormKind::Product(children)
-            | NormalFormKind::And(children) => {
-                worklist.extend(children.iter().copied());
-            }
-            NormalFormKind::Subtract(a, b)
-            | NormalFormKind::Divide(a, b)
-            | NormalFormKind::Power(a, b)
-            | NormalFormKind::Modulo(a, b)
-            | NormalFormKind::Comparison(a, _, b)
-            | NormalFormKind::RangeLiteral(a, b)
-            | NormalFormKind::RangeContainment(a, b) => {
-                worklist.push(*a);
-                worklist.push(*b);
-            }
-            NormalFormKind::Negate(x)
-            | NormalFormKind::Reciprocal(x)
-            | NormalFormKind::Not(x)
-            | NormalFormKind::MathOp(_, x)
-            | NormalFormKind::UnitConversion(x, _)
-            | NormalFormKind::DateRelative(_, x)
-            | NormalFormKind::DateCalendar(_, _, x)
-            | NormalFormKind::PastFutureRange(_, x)
-            | NormalFormKind::ResultIsVeto(x) => {
-                worklist.push(*x);
-            }
-            NormalFormKind::Piecewise(arms) => {
-                for (c, r) in arms {
-                    worklist.push(*c);
-                    worklist.push(*r);
-                }
-            }
-            NormalFormKind::OrderedDispatch {
-                scrutinee, regions, ..
-            } => {
-                worklist.push(*scrutinee);
-                worklist.extend(regions.iter().copied());
-            }
-        }
-    }
-}
-
-/// Ensure `rule_path` (and its rule-embed deps) are in `rule_explanations`.
+/// Ensure `rule_path` (and its plan dependencies) are in `rule_explanations`.
 ///
 /// Uses an explicit heap stack so a long rule chain does not grow the Rust
-/// call stack. Only calls [`evaluate_rule_explained`] when every direct
-/// rule-embed dep is already cached (body walk then hits cache embeds).
-fn ensure_rule_explained(rule_path: &RulePath, plan: &ExecutionPlan, ctx: &mut EvaluationContext) {
+/// call stack. Pending deps come from [`ExecutableRule::depends_on_rules`].
+pub(crate) fn ensure_rule_explained(
+    rule_path: &RulePath,
+    plan: &ExecutionPlan,
+    ctx: &mut EvaluationContext,
+) {
     if ctx.rule_explanations.contains_key(rule_path) {
         return;
     }
@@ -196,13 +219,10 @@ fn ensure_rule_explained(rule_path: &RulePath, plan: &ExecutionPlan, ctx: &mut E
             )
         });
 
-        let mut deps = Vec::new();
-        collect_direct_rule_embed_paths(plan, rule.normal_form, &mut deps);
-
         let mut pending = None;
-        for dep in deps {
-            if !ctx.rule_explanations.contains_key(&dep) {
-                pending = Some(dep);
+        for dep in &rule.depends_on_rules {
+            if !ctx.rule_explanations.contains_key(dep) {
+                pending = Some(dep.clone());
                 break;
             }
         }
@@ -218,51 +238,31 @@ fn ensure_rule_explained(rule_path: &RulePath, plan: &ExecutionPlan, ctx: &mut E
             continue;
         }
 
-        let (result, explanation) = {
-            let previous = ctx.record_control_decisions;
-            ctx.record_control_decisions = false;
-            let out = evaluate_rule_explained(rule, plan, ctx);
-            ctx.record_control_decisions = previous;
-            out
-        };
+        let explanation = evaluate_rule_explained(rule, plan, ctx).1;
         if explanation.name != current {
             panic!(
                 "BUG: on-demand explain for '{}' stored explanation for '{}'",
                 current.rule, explanation.name.rule
             );
         }
-        // Prefer use-site value already cached for releases; keep explanation node.
-        ctx.rule_results.entry(current).or_insert(result);
         stack.pop();
     }
 }
 
-/// Explain-mode Rule embed: value+releases at the use-site, narration without re-release.
+/// Explain-mode Rule embed: stored rule value, narration from cached Rule node.
 fn embed_rule_explained(
     rule_path: &RulePath,
-    use_site_id: NormalFormId,
     plan: &ExecutionPlan,
     ctx: &mut EvaluationContext,
 ) -> Explained {
-    if !ctx.rule_results.contains_key(rule_path) {
-        let explained = eval_use_site_algebra(use_site_id, plan, ctx, false);
-        ctx.rule_results
-            .insert(rule_path.clone(), explained.result.clone());
-    }
-    ensure_rule_explained(rule_path, plan, ctx);
-    let result = ctx.rule_results.get(rule_path).cloned().unwrap_or_else(|| {
-        panic!(
-            "BUG: Rule embed '{}' missing rule_results after on-demand explain",
-            rule_path.rule
-        )
-    });
+    let result = ctx.rule_value(plan, rule_path).clone();
     let node = ctx
         .rule_explanations
         .get(rule_path)
         .cloned()
         .unwrap_or_else(|| {
             panic!(
-                "BUG: Rule embed '{}' missing rule_explanations after on-demand explain",
+                "BUG: dependency '{}' not explained before its use-site",
                 rule_path.rule
             )
         });
@@ -299,14 +299,24 @@ fn eval(
     explain: bool,
 ) -> Explained {
     if !explain {
-        if let Some(cached) = ctx.value_memo.get(&id) {
+        if let Some(cached) = ctx.values[id.index()].as_ref() {
             return Explained::value_only(cached.clone());
         }
     }
-
     let explained = eval_uncached(id, plan, ctx, explain);
     if !explain {
-        ctx.value_memo.insert(id, explained.result.clone());
+        // Unbound data leaves must stay None so missing_data walks still see
+        // them as unbound. MissingData from a DataPath leaf is not a binding.
+        let store = !matches!(
+            (&plan.normal_form(id).kind, &explained.result),
+            (
+                NormalFormKind::Leaf(LeafKind::DataPath(_)),
+                OperationResult::Veto(VetoType::MissingData { .. }),
+            )
+        );
+        if store {
+            ctx.values[id.index()] = Some(explained.result.clone());
+        }
     }
     explained
 }
@@ -338,10 +348,7 @@ fn eval_uncached(
                 }
                 _ => {
                     let value = eval(id, plan, ctx, false);
-                    let previous = ctx.record_control_decisions;
-                    ctx.record_control_decisions = false;
                     let mut explained = eval(origin, plan, ctx, true);
-                    ctx.record_control_decisions = previous;
                     explained.result = value.result;
                     return explained;
                 }
@@ -351,30 +358,22 @@ fn eval_uncached(
 
     if let Some(path) = plan.normal_form(id).rule_embed.clone() {
         if explain {
-            return embed_rule_explained(&path, id, plan, ctx);
+            return embed_rule_explained(&path, plan, ctx);
         }
-        if let Some(cached) = ctx.rule_results.get(&path) {
-            return Explained::value_only(cached.clone());
-        }
-        // Evaluate this use-site cell (same Kind as bare body). Dead control edges
-        // accumulated so far carry over: use-site NormalFormIds are the same shared
-        // nodes that dead-edge recording uses.
-        let explained = eval_use_site_algebra(id, plan, ctx, false);
-        ctx.rule_results.insert(path, explained.result.clone());
-        return explained;
+        return Explained::value_only(ctx.rule_value(plan, &path).clone());
     }
 
-    eval_use_site_algebra(id, plan, ctx, explain)
+    eval_cell(id, plan, ctx, explain)
 }
 
-fn eval_use_site_algebra(
+fn eval_cell(
     id: NormalFormId,
     plan: &ExecutionPlan,
     ctx: &mut EvaluationContext,
     explain: bool,
 ) -> Explained {
     if let NormalFormKind::Piecewise(arms) = &plan.normal_form(id).kind {
-        return evaluate_piecewise(id, arms, plan, ctx, explain);
+        return evaluate_piecewise(arms, plan, ctx, explain);
     }
     eval_kind(id, plan, ctx, explain)
 }
@@ -391,15 +390,12 @@ fn explain_with_piecewise_origin(
         panic!("BUG: explain_with_piecewise_origin requires Piecewise origin");
     };
     let recorded = recorded.clone();
-    let previous = ctx.record_control_decisions;
-    ctx.record_control_decisions = false;
     let causes = piecewise_causes_from_record(&recorded, plan, ctx);
 
     let mut body = match &plan.normal_form(current_id).kind {
-        NormalFormKind::Piecewise(kept) => evaluate_piecewise(current_id, kept, plan, ctx, true),
+        NormalFormKind::Piecewise(kept) => evaluate_piecewise(kept, plan, ctx, true),
         _ => eval_kind(current_id, plan, ctx, true),
     };
-    ctx.record_control_decisions = previous;
     body.result = value.result;
     body.causes = causes;
     body
@@ -538,13 +534,16 @@ fn bound_data_from_context(
     plan: &ExecutionPlan,
     ctx: &EvaluationContext,
 ) -> Option<ExplanationNode> {
-    if ctx.get_veto(path).is_none() && ctx.get_data_value(path).is_none() {
-        return None;
-    }
+    ctx.data_slot(plan, path)?;
     let result = resolve_data_path_value(path, plan, ctx);
+    let data_type = plan
+        .data
+        .get(path)
+        .and_then(|def| def.schema_type())
+        .expect("BUG: bound data path missing schema type");
     let display = match &result {
-        OperationResult::Value(v) => v.display_value(),
-        OperationResult::Veto(_) => format_operation_result(&result),
+        OperationResult::Value(v) => v.display_value_with_type(data_type),
+        OperationResult::Veto(_) => format_operation_result(&result, data_type),
     };
     Some(ExplanationNode::Data {
         name: path.clone(),
@@ -671,7 +670,6 @@ fn record_condition_outcome(
 }
 
 fn evaluate_piecewise(
-    id: NormalFormId,
     arms: &[(NormalFormId, NormalFormId)],
     plan: &ExecutionPlan,
     ctx: &mut EvaluationContext,
@@ -690,7 +688,10 @@ fn evaluate_piecewise(
                     return Explained::value_only(result);
                 }
                 let node = ExplanationNode::Veto {
-                    message: Some(format_operation_result(&result)),
+                    message: Some(format_operation_result(
+                        &result,
+                        plan.result_type(condition).as_ref(),
+                    )),
                 };
                 return Explained {
                     result,
@@ -701,20 +702,6 @@ fn evaluate_piecewise(
                 };
             }
             BranchOutcome::Taken => {
-                // Arm i taken: default body + all other arm bodies + lower conditions are dead.
-                if ctx.record_control_decisions {
-                    let mut dead: Vec<NormalFormId> = Vec::with_capacity(arms.len() * 2);
-                    dead.push(arms[0].1); // default body always dead
-                    for (k, (k_cond, k_body)) in arms.iter().enumerate().skip(1) {
-                        if k != i {
-                            dead.push(*k_body);
-                        }
-                        if k < i {
-                            dead.push(*k_cond);
-                        }
-                    }
-                    ctx.record_dead_control_edges(id, dead);
-                }
                 let body_e = eval(body, plan, ctx, explain);
                 if !explain {
                     return Explained::value_only(body_e.result);
@@ -730,8 +717,6 @@ fn evaluate_piecewise(
                 return finish_piecewise(body_e, causes, true);
             }
             BranchOutcome::NotTaken => {
-                // Arm i not taken: condition was false → arm body dead.
-                ctx.record_dead_control_edges(id, [arms[i].1]);
                 if explain {
                     not_taken.push((
                         i,
@@ -742,8 +727,6 @@ fn evaluate_piecewise(
         }
     }
 
-    // Default wins: all arm bodies were already recorded as dead (one NotTaken entry per
-    // arm in the loop above). No additional dead_control_edges entry needed here.
     let body_e = eval(arms[0].1, plan, ctx, explain);
     if !explain {
         return Explained::value_only(body_e.result);
@@ -777,10 +760,7 @@ fn explain_ordered_dispatch(
             "BUG: OrderedDispatch region disagrees with Piecewise origin"
         );
     }
-    let previous = ctx.record_control_decisions;
-    ctx.record_control_decisions = false;
     let mut explained = eval(origin, plan, ctx, true);
-    ctx.record_control_decisions = previous;
     explained.result = value.result;
     explained
 }
@@ -843,7 +823,6 @@ fn piecewise_winner_body(
 ///
 /// Value mode only. Explanation routes through [`explain_ordered_dispatch`].
 fn evaluate_ordered_dispatch(
-    id: NormalFormId,
     scrutinee: NormalFormId,
     boundaries: &[DispatchKey],
     regions: &[NormalFormId],
@@ -886,15 +865,6 @@ fn evaluate_ordered_dispatch(
     };
 
     let selected = regions[region];
-    // A result id can occupy several regions; it is dead only when the selected
-    // region does not hold it. Build the dead list only when recording is on —
-    // otherwise every eval would allocate a Vec the recorder immediately ignores.
-    if ctx.record_control_decisions {
-        ctx.record_dead_control_edges(
-            id,
-            regions.iter().copied().filter(|region| *region != selected),
-        );
-    }
     Explained::value_only(eval(selected, plan, ctx, false).result)
 }
 
@@ -1030,11 +1000,11 @@ fn eval_kind(
 ) -> Explained {
     match &plan.normal_form(id).kind {
         NormalFormKind::Leaf(LeafKind::Literal(literal)) => {
-            let result = OperationResult::from_literal_arc(Arc::clone(literal));
+            let result = OperationResult::from_literal(literal.clone());
             if !explain {
                 return Explained::value_only(result);
             }
-            let expression = literal.display_value();
+            let expression = literal.display_value_with_type(plan.result_type(id).as_ref());
             // Empty-operand compose so parents (e.g. `sqrt(4)`) have a
             // non-empty operand list and survive `significant_children`.
             // Bare literal composes are still dropped at product/rule level.
@@ -1056,8 +1026,14 @@ fn eval_kind(
                 return Explained::value_only(result);
             }
             let display = match &result {
-                OperationResult::Value(v) => v.display_value(),
-                OperationResult::Veto(_) => format_operation_result(&result),
+                OperationResult::Value(v) => {
+                    let data_type = ctx.data_display_type(plan, path);
+                    v.display_value_with_type(data_type.as_ref())
+                }
+                OperationResult::Veto(_) => {
+                    let data_type = ctx.data_display_type(plan, path);
+                    format_operation_result(&result, data_type.as_ref())
+                }
             };
             let node = ExplanationNode::Data {
                 name: path.clone(),
@@ -1072,7 +1048,7 @@ fn eval_kind(
             }
         }
         NormalFormKind::Now => {
-            let result = OperationResult::from_literal_arc(Arc::clone(&ctx.now));
+            let result = OperationResult::from_literal(ctx.now().clone());
             Explained::value_only(result)
         }
         NormalFormKind::Veto(veto) => {
@@ -1145,9 +1121,12 @@ fn eval_kind(
                 crate::computation::rational::rational_zero(),
             ));
             let value = eval(*inner, plan, ctx, explain);
+            let number_ty = crate::planning::semantics::primitive_number_arc();
             let result = binary_arithmetic_result(
                 &zero,
+                number_ty,
                 value.result.clone(),
+                plan.result_type(*inner),
                 ArithmeticComputation::Subtract,
                 plan,
             );
@@ -1158,9 +1137,12 @@ fn eval_kind(
                 crate::computation::rational::rational_one(),
             ));
             let value = eval(*inner, plan, ctx, explain);
+            let number_ty = crate::planning::semantics::primitive_number_arc();
             let result = binary_arithmetic_result(
                 &one,
+                number_ty,
                 value.result.clone(),
+                plan.result_type(*inner),
                 ArithmeticComputation::Divide,
                 plan,
             );
@@ -1178,8 +1160,10 @@ fn eval_kind(
                 |left_result, right_result| {
                     comparison_operation(
                         borrow_value(left_result, "left operand"),
+                        plan.result_type(*left),
                         op,
                         borrow_value(&right_result, "right operand"),
+                        plan.result_type(*right),
                         unit_ctx,
                     )
                 },
@@ -1193,10 +1177,13 @@ fn eval_kind(
             }
             let false_lit = OperationResult::from_literal(LiteralValue::from_bool(false));
             let unit_ctx = UnitResolutionContext::WithIndex(&plan.resolved_types.unit_index);
+            let bool_ty = crate::planning::semantics::primitive_boolean_arc();
             let result = comparison_operation(
                 borrow_value(&inner_e.result, "not operand"),
+                plan.result_type(*inner),
                 &crate::planning::semantics::ComparisonComputation::Is,
                 borrow_value(&false_lit, "not operand"),
+                bool_ty,
                 unit_ctx,
             );
             compose_unary(id, result, inner_e, explain, plan)
@@ -1206,8 +1193,19 @@ fn eval_kind(
             if inner_e.result.vetoed() {
                 return inner_e;
             }
-            let result =
-                evaluate_mathematical_operator(op, borrow_value(&inner_e.result, "operand"));
+            let math_type = plan
+                .rules
+                .values()
+                .find(|rule| rule.normal_form == id)
+                .map(|rule| Arc::clone(&rule.rule_type))
+                .unwrap_or_else(|| {
+                    resolve_measure_type_for_magnitude_math(plan, plan.result_type(*inner))
+                });
+            let result = evaluate_mathematical_operator(
+                op,
+                borrow_value(&inner_e.result, "operand"),
+                &math_type,
+            );
             compose_unary(id, result, inner_e, explain, plan)
         }
         NormalFormKind::UnitConversion(inner, target) => {
@@ -1217,23 +1215,27 @@ fn eval_kind(
                 return inner_e;
             }
             let source_value = match &inner_e.result {
-                OperationResult::Value(arc) => Arc::clone(arc),
+                OperationResult::Value(v) => v,
                 OperationResult::Veto(_) => {
                     panic!(
                         "BUG: UnitConversion operand passed veto check but is vetoed (source={conversion_source:?})"
                     )
                 }
             };
-            let result = convert_unit_operand(Arc::clone(&source_value), target);
+            let result =
+                convert_unit_operand(source_value, plan.result_type(*inner).as_ref(), target);
             if !explain {
                 return Explained::value_only(result);
             }
             let expression = explanation_display(plan.normal_forms.as_slice(), id);
             let result_lit = match &result {
-                OperationResult::Value(arc) => arc.as_ref(),
+                OperationResult::Value(v) => v,
                 OperationResult::Veto(_) => {
                     let node = ExplanationNode::Veto {
-                        message: Some(format_operation_result(&result)),
+                        message: Some(format_operation_result(
+                            &result,
+                            plan.result_type(id).as_ref(),
+                        )),
                     };
                     return Explained {
                         result,
@@ -1249,9 +1251,11 @@ fn eval_kind(
                 _ => None,
             };
             let steps = crate::evaluation::conversion_trace::build_conversion_steps(
-                source_value.as_ref(),
+                source_value,
+                plan.result_type(*inner),
                 target,
                 result_lit,
+                plan.result_type(id),
                 data_ref,
             );
             let operands = inner_e.as_operand.into_iter().collect::<Vec<_>>();
@@ -1321,6 +1325,7 @@ fn eval_kind(
             let result = crate::computation::datetime::evaluate_past_future_range(
                 kind,
                 borrow_value(&inner_e.result, "offset operand"),
+                plan.result_type(*inner),
                 now_date(ctx),
             );
             compose_unary(id, result, inner_e, explain, plan)
@@ -1336,10 +1341,22 @@ fn eval_kind(
                 let range_literal = borrow_value(&range_result, "range operand");
                 match &range_literal.value {
                     ValueKind::Range(range_left, range_right) => {
+                        let endpoint_type = plan
+                            .result_type(*range)
+                            .specifications
+                            .element_from_range()
+                            .map(|element| {
+                                std::sync::Arc::new(
+                                    crate::planning::semantics::LemmaType::primitive(element),
+                                )
+                            })
+                            .expect("BUG: range containment requires a range result type");
                         crate::computation::range::check_containment(
                             borrow_value(value_result, "value operand"),
+                            plan.result_type(*value),
                             range_left.as_ref(),
                             range_right.as_ref(),
+                            &endpoint_type,
                         )
                     }
                     other => {
@@ -1354,12 +1371,12 @@ fn eval_kind(
                 OperationResult::from_literal(LiteralValue::from_bool(inner_e.result.vetoed()));
             compose_unary(id, result, inner_e, explain, plan)
         }
-        NormalFormKind::Piecewise(arms) => evaluate_piecewise(id, arms, plan, ctx, explain),
+        NormalFormKind::Piecewise(arms) => evaluate_piecewise(arms, plan, ctx, explain),
         NormalFormKind::OrderedDispatch {
             scrutinee,
             boundaries,
             regions,
-        } => evaluate_ordered_dispatch(id, *scrutinee, boundaries, regions, plan, ctx, explain),
+        } => evaluate_ordered_dispatch(*scrutinee, boundaries, regions, plan, ctx, explain),
     }
 }
 
@@ -1435,6 +1452,7 @@ fn fold_nary_arithmetic(
     let mut first_veto: Option<OperationResult> = None;
     let mut continue_for_recording = false;
     let mut acc: Option<OperationResult> = None;
+    let mut acc_type: Option<std::sync::Arc<crate::planning::semantics::LemmaType>> = None;
 
     for child in children {
         if first_veto.is_some() && !continue_for_recording {
@@ -1456,15 +1474,31 @@ fn fold_nary_arithmetic(
             first_veto = Some(explained.result);
             continue;
         }
+        let child_type = std::sync::Arc::clone(plan.result_type(*child));
         match acc.take() {
-            None => acc = Some(explained.result),
+            None => {
+                acc = Some(explained.result);
+                acc_type = Some(child_type);
+            }
             Some(left) => {
-                let combined = binary_arithmetic_result(&left, explained.result, op.clone(), plan);
+                let left_type = acc_type.take().expect("BUG: acc without type");
+                let combined = binary_arithmetic_result(
+                    &left,
+                    &left_type,
+                    explained.result,
+                    &child_type,
+                    op.clone(),
+                    plan,
+                );
                 if combined.vetoed() {
                     continue_for_recording = combined.is_missing_data();
                     first_veto = Some(combined);
                 } else {
+                    let next_type = crate::planning::graph::compute_arithmetic_result_type(
+                        left_type, &op, child_type,
+                    );
                     acc = Some(combined);
+                    acc_type = Some(next_type);
                 }
             }
         }
@@ -1548,20 +1582,33 @@ fn binary_arithmetic(
         ctx,
         explain,
         id,
-        |left_result, right_result| binary_arithmetic_result(left_result, right_result, op, plan),
+        |left_result, right_result| {
+            binary_arithmetic_result(
+                left_result,
+                plan.result_type(left),
+                right_result,
+                plan.result_type(right),
+                op,
+                plan,
+            )
+        },
     )
 }
 
 fn binary_arithmetic_result(
     left: &OperationResult,
+    left_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     right: OperationResult,
+    right_type: &std::sync::Arc<crate::planning::semantics::LemmaType>,
     op: ArithmeticComputation,
     plan: &ExecutionPlan,
 ) -> OperationResult {
     arithmetic_operation(
         borrow_value(left, "left operand"),
+        left_type,
         &op,
         borrow_value(&right, "right operand"),
+        right_type,
         &plan.resolved_types.unit_index,
         &plan.signature_index,
     )
@@ -1608,8 +1655,6 @@ fn evaluate_and(
                         "BUG: And must be binary after lowering, got {} children",
                         children.len()
                     );
-                    // Left conjunct is false → right child edge dead.
-                    ctx.record_dead_control_edges(id, [children[1]]);
                     let result = OperationResult::from_literal(LiteralValue::from_bool(false));
                     return finish_nary(id, result, operands, explain, plan);
                 }

@@ -2,24 +2,26 @@
 //!
 //! Domain failures (division by zero, etc.) surface as Veto, not Error.
 
+use std::sync::Arc;
+
 use crate::computation::measure_math::{
     mathematical_computation_preserves_measure_magnitude, measure_magnitude_math,
 };
 use crate::computation::{OperationResult, VetoType};
-use crate::planning::semantics::{LiteralValue, MathematicalComputation, ValueKind};
-use std::sync::Arc;
+use crate::planning::semantics::{LemmaType, LiteralValue, MathematicalComputation, ValueKind};
 
 pub(crate) fn evaluate_mathematical_operator(
     op: &MathematicalComputation,
     value: &LiteralValue,
+    lemma_type: &Arc<LemmaType>,
 ) -> OperationResult {
     use crate::computation::decimal_math::{decimal_acos, decimal_asin, decimal_atan};
     use rust_decimal::MathematicalOps;
 
-    if matches!(&value.value, ValueKind::Measure(_, _))
+    if matches!(&value.value, ValueKind::Measure(_))
         && mathematical_computation_preserves_measure_magnitude(op)
     {
-        return measure_magnitude_math(op, value);
+        return measure_magnitude_math(op, value, lemma_type);
     }
 
     match &value.value {
@@ -64,11 +66,12 @@ pub(crate) fn evaluate_mathematical_operator(
             let result_rational = decimal_to_rational(rounded_decimal)
                 .expect("BUG: transcendental result must lift back to stored rational");
             let result_value =
-                LiteralValue::number_with_type(result_rational, value.lemma_type.clone());
+                LiteralValue::number_with_type(result_rational, Arc::clone(lemma_type));
             OperationResult::from_literal(result_value)
         }
         _ => unreachable!(
-            "BUG: mathematical operator with non-number operand; planning should have rejected this"
+            "BUG: mathematical operator with non-number operand (type {}); planning should have rejected this",
+            lemma_type.name()
         ),
     }
 }
@@ -78,14 +81,11 @@ pub(crate) fn resolve_data_path_value(
     plan: &crate::planning::execution_plan::ExecutionPlan,
     context: &crate::evaluation::EvaluationContext,
 ) -> OperationResult {
-    if let Some(veto) = context.get_veto(data_path) {
-        return OperationResult::Veto(veto.clone());
+    if let Some(slot) = context.data_slot(plan, data_path) {
+        return slot.clone();
     }
-    if let Some(value) = context.get_data_value(data_path) {
-        return OperationResult::from_literal_arc(Arc::clone(value));
-    }
-    if let Some(rule_path) =
-        crate::planning::normalize::follow_data_reference_to_rule_target(&plan.data, data_path)
+    if let Some(crate::planning::semantics::ReferenceEnd::Rule(rule_path)) =
+        plan.reference_ends.get(data_path)
     {
         panic!(
             "BUG: rule-target data path '{}' (→ rule '{}') reached evaluation; planning must inline these",

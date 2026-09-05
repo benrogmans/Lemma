@@ -34,46 +34,6 @@ pub fn rational_from_parsed_decimal(decimal: Decimal) -> Result<RationalInteger,
     rational::decimal_to_rational(decimal).map_err(|failure| failure.to_string())
 }
 
-/// Serde for stored rationals: API format is decimal string or JSON number (lifted at boundary).
-pub mod stored_rational_serde {
-    use super::{rational_from_parsed_decimal, rational_to_serialized_str, RationalInteger};
-    use rust_decimal::Decimal;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(
-        value: &RationalInteger,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(
-            &rational_to_serialized_str(value)
-                .expect("BUG: planned bound must serialize to decimal string"),
-        )
-    }
-
-    pub mod option {
-        use super::*;
-
-        pub fn serialize<S: Serializer>(
-            value: &Option<RationalInteger>,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error> {
-            match value {
-                Some(rational) => super::serialize(rational, serializer),
-                None => serializer.serialize_none(),
-            }
-        }
-
-        pub fn deserialize<'de, D: Deserializer<'de>>(
-            deserializer: D,
-        ) -> Result<Option<RationalInteger>, D::Error> {
-            Option::<Decimal>::deserialize(deserializer)?
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)
-        }
-    }
-}
-
 /// A single unit within a Measure type.
 ///
 /// `factor` is the conversion factor: 1 of this unit equals `factor` canonical units.
@@ -81,7 +41,7 @@ pub mod stored_rational_serde {
 /// (e.g., `meter/second` produces `[("meter", 1), ("second", -1)]`). Empty for base units.
 /// `decomposition` is the dimensional decomposition vector, populated during the planning
 /// decomposition pass. It is empty until that pass completes.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MeasureUnit {
     pub name: String,
     /// Conversion factor: 1 of this unit equals `value` canonical units.
@@ -94,84 +54,6 @@ pub struct MeasureUnit {
     pub maximum: Option<RationalInteger>,
     /// Default suggestion magnitude in this unit (schema/UI).
     pub suggestion_magnitude: Option<RationalInteger>,
-}
-
-impl Serialize for MeasureUnit {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use measure_unit_factor_serialization::FactorSerializer;
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("MeasureUnit", 7)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("factor", &FactorSerializer::from_ratio(&self.factor))?;
-        state.serialize_field("derived_measure_factors", &self.derived_measure_factors)?;
-        state.serialize_field("decomposition", &self.decomposition)?;
-        if let Some(minimum) = &self.minimum {
-            state.serialize_field(
-                "minimum",
-                &rational_to_serialized_str(minimum)
-                    .expect("BUG: planned measure unit minimum must serialize to decimal string"),
-            )?;
-        }
-        if let Some(maximum) = &self.maximum {
-            state.serialize_field(
-                "maximum",
-                &rational_to_serialized_str(maximum)
-                    .expect("BUG: planned measure unit maximum must serialize to decimal string"),
-            )?;
-        }
-        if let Some(suggestion_magnitude) = &self.suggestion_magnitude {
-            state.serialize_field(
-                "suggestion",
-                &rational_to_serialized_str(suggestion_magnitude).expect(
-                    "BUG: planned measure unit suggestion must serialize to decimal string",
-                ),
-            )?;
-        }
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for MeasureUnit {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct MeasureUnitData {
-            name: String,
-            #[serde(with = "measure_unit_factor_serialization")]
-            factor: RationalInteger,
-            #[serde(default)]
-            derived_measure_factors: Vec<(String, i32)>,
-            #[serde(default)]
-            decomposition: BaseMeasureVector,
-            #[serde(default)]
-            minimum: Option<Decimal>,
-            #[serde(default)]
-            maximum: Option<Decimal>,
-            #[serde(default, rename = "suggestion")]
-            suggestion_magnitude: Option<Decimal>,
-        }
-        let data = MeasureUnitData::deserialize(deserializer)?;
-        Ok(Self {
-            name: data.name,
-            factor: data.factor,
-            derived_measure_factors: data.derived_measure_factors,
-            decomposition: data.decomposition,
-            minimum: data
-                .minimum
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            maximum: data
-                .maximum
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            suggestion_magnitude: data
-                .suggestion_magnitude
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-        })
-    }
 }
 
 impl MeasureUnit {
@@ -204,9 +86,7 @@ impl MeasureUnit {
     }
 
     pub fn is_positive_factor(&self) -> bool {
-        let numerator = self.factor.numer();
-        let denominator = self.factor.denom();
-        !numerator.is_zero() && numerator.is_positive() == denominator.is_positive()
+        self.factor.numer_is_positive()
     }
 
     /// Conversion factor as decimal (schema unit factors always commit).
@@ -252,51 +132,6 @@ impl MeasureUnit {
                 .try_to_decimal()
                 .expect("BUG: planned measure unit maximum canonical must convert to decimal")
         })
-    }
-}
-
-mod measure_unit_factor_serialization {
-    use super::RationalInteger;
-    use crate::computation::bigint::BigInt;
-    use crate::computation::rational::try_rational_new;
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Serialize, Deserialize)]
-    pub struct FactorSerializer {
-        numer: String,
-        denom: String,
-    }
-
-    impl FactorSerializer {
-        pub fn from_ratio(value: &RationalInteger) -> Self {
-            let reduced = value
-                .clone()
-                .try_reduce()
-                .expect("BUG: stored measure unit factor must reduce");
-            FactorSerializer {
-                numer: reduced.numer().to_string(),
-                denom: reduced.denom().to_string(),
-            }
-        }
-
-        pub fn into_ratio(self) -> Result<RationalInteger, String> {
-            let numer = BigInt::try_from_str_radix(&self.numer, 10)
-                .map_err(|_| format!("invalid numerator: {}", self.numer))?;
-            let denom = BigInt::try_from_str_radix(&self.denom, 10)
-                .map_err(|_| format!("invalid denominator: {}", self.denom))?;
-            if denom.is_zero() {
-                return Err("MeasureUnit conversion factor denominator cannot be zero".to_string());
-            }
-            try_rational_new(numer, denom).map_err(|e| e.to_string())
-        }
-    }
-
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<RationalInteger, D::Error> {
-        FactorSerializer::deserialize(deserializer)?
-            .into_ratio()
-            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -374,82 +209,13 @@ impl<'a> IntoIterator for &'a MeasureUnits {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RatioUnit {
     pub name: String,
     pub value: RationalInteger,
     pub minimum: Option<RationalInteger>,
     pub maximum: Option<RationalInteger>,
     pub suggestion_magnitude: Option<RationalInteger>,
-}
-
-impl Serialize for RatioUnit {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use measure_unit_factor_serialization::FactorSerializer;
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("RatioUnit", 5)?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("value", &FactorSerializer::from_ratio(&self.value))?;
-        if let Some(minimum) = &self.minimum {
-            state.serialize_field(
-                "minimum",
-                &rational_to_serialized_str(minimum)
-                    .expect("BUG: planned ratio unit minimum must serialize to decimal string"),
-            )?;
-        }
-        if let Some(maximum) = &self.maximum {
-            state.serialize_field(
-                "maximum",
-                &rational_to_serialized_str(maximum)
-                    .expect("BUG: planned ratio unit maximum must serialize to decimal string"),
-            )?;
-        }
-        if let Some(suggestion_magnitude) = &self.suggestion_magnitude {
-            state.serialize_field(
-                "suggestion",
-                &rational_to_serialized_str(suggestion_magnitude)
-                    .expect("BUG: planned ratio unit suggestion must serialize to decimal string"),
-            )?;
-        }
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for RatioUnit {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct RatioUnitData {
-            name: String,
-            #[serde(with = "measure_unit_factor_serialization")]
-            value: RationalInteger,
-            #[serde(default)]
-            minimum: Option<Decimal>,
-            #[serde(default)]
-            maximum: Option<Decimal>,
-            #[serde(default, rename = "suggestion")]
-            suggestion_magnitude: Option<Decimal>,
-        }
-        let data = RatioUnitData::deserialize(deserializer)?;
-        Ok(Self {
-            name: data.name,
-            value: data.value,
-            minimum: data
-                .minimum
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            maximum: data
-                .maximum
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            suggestion_magnitude: data
-                .suggestion_magnitude
-                .map(rational_from_parsed_decimal)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-        })
-    }
 }
 
 impl RatioUnit {
@@ -921,6 +687,22 @@ impl fmt::Display for DateTimeValue {
     }
 }
 
+/// Serde for [`Decimal`] as a decimal string (postcard-safe; matches JSON API DecimalString).
+pub mod decimal_string_serde {
+    use rust_decimal::Decimal;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S: Serializer>(value: &Decimal, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.normalize().to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Decimal, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Decimal::from_str(text.trim()).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Literal value data (no type information). Single source of truth in literals.
 ///
 /// `NumberWithUnit` is type-agnostic at parse time (`10 eur` and `50%` share this shape).
@@ -928,8 +710,8 @@ impl fmt::Display for DateTimeValue {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Value {
-    Number(Decimal),
-    NumberWithUnit(Decimal, String),
+    Number(#[serde(with = "decimal_string_serde")] Decimal),
+    NumberWithUnit(#[serde(with = "decimal_string_serde")] Decimal, String),
     Text(String),
     Date(DateTimeValue),
     Time(TimeValue),

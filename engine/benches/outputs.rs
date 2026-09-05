@@ -4,7 +4,7 @@
 //! prints a JSON document the xtask report can diff against the Python
 //! benchmark's output dump.
 
-use lemma::{Engine, OperationResult, SourceType, VetoType};
+use lemma::{Engine, LemmaType, LiteralValue, OperationResult, SourceType, ValueKind, VetoType};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -40,8 +40,9 @@ struct Output {
     unit: Option<String>,
 }
 
-fn normalize_value_kind(value: &lemma::ValueKind) -> Output {
-    let raw = serde_json::to_value(value).expect("BUG: ValueKind serialization is infallible here");
+fn serialized_magnitude(value: &ValueKind) -> String {
+    let raw = serde_json::to_value(lemma::api::ValueKind::from(value))
+        .expect("BUG: ValueKind serialization is infallible here");
     let Value::Object(mut map) = raw else {
         panic!("BUG: ValueKind serialized to non-object: {raw:?}");
     };
@@ -56,93 +57,84 @@ fn normalize_value_kind(value: &lemma::ValueKind) -> Output {
         .next()
         .map(|(k, v)| (k.clone(), v.take()))
         .expect("BUG: len-1 map has one entry");
-
     match tag.as_str() {
-        "number" => Output {
+        "number" => payload
+            .as_str()
+            .expect("BUG: number payload must be a string")
+            .to_string(),
+        "ratio" | "measure" => payload
+            .as_object()
+            .expect("BUG: measure/ratio payload must be an object")
+            .get("value")
+            .and_then(Value::as_str)
+            .expect("BUG: measure/ratio payload missing 'value' string")
+            .to_string(),
+        other => panic!("BUG: serialized_magnitude called on unexpected tag '{other}'"),
+    }
+}
+
+fn measure_unit_name(lemma_type: &LemmaType) -> Option<String> {
+    if let Some(binding) = lemma_type.measure_binding_unit.as_ref() {
+        return Some(binding.clone());
+    }
+    lemma_type
+        .measure_runtime_signature()
+        .first()
+        .map(|(name, _)| name.clone())
+}
+
+fn normalize_literal(literal: &LiteralValue, lemma_type: &LemmaType) -> Output {
+    match &literal.value {
+        ValueKind::Number(_) => Output {
             kind: "number",
-            value: payload
-                .as_str()
-                .expect("BUG: number payload must be a string")
-                .to_string(),
+            value: serialized_magnitude(&literal.value),
             unit: None,
         },
-        "ratio" => {
-            let (value, unit) = take_value_unit(&payload, "ratio");
-            Output {
-                kind: "ratio",
-                value,
-                unit: Some(unit),
-            }
-        }
-        "measure" => {
-            let (value, unit) = take_value_unit(&payload, "measure");
-            Output {
-                kind: "measure",
-                value,
-                unit: Some(unit),
-            }
-        }
-        "calendar" => {
-            let (value, unit) = take_value_unit(&payload, "calendar");
-            Output {
-                kind: "calendar",
-                value,
-                unit: Some(unit),
-            }
-        }
-        "boolean" => Output {
+        ValueKind::Ratio(_) => Output {
+            kind: "ratio",
+            value: serialized_magnitude(&literal.value),
+            unit: lemma_type.ratio_primary_unit().map(str::to_string),
+        },
+        ValueKind::Measure(_) if lemma_type.is_calendar_like() => Output {
+            kind: "calendar",
+            value: serialized_magnitude(&literal.value),
+            unit: measure_unit_name(lemma_type),
+        },
+        ValueKind::Measure(_) => Output {
+            kind: "measure",
+            value: serialized_magnitude(&literal.value),
+            unit: measure_unit_name(lemma_type),
+        },
+        ValueKind::Boolean(b) => Output {
             kind: "boolean",
-            value: match payload
-                .as_bool()
-                .expect("BUG: boolean payload must be a JSON bool")
-            {
-                true => "true".to_string(),
-                false => "false".to_string(),
+            value: if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
             },
             unit: None,
         },
-        "text" => Output {
+        ValueKind::Text(s) => Output {
             kind: "text",
-            value: payload
-                .as_str()
-                .expect("BUG: text payload must be a string")
-                .to_string(),
+            value: s.clone(),
             unit: None,
         },
-        "date" => Output {
+        ValueKind::Date(dt) => Output {
             kind: "date",
-            value: serde_json::to_string(&payload).expect("BUG: date payload is JSON-serializable"),
+            value: serde_json::to_string(dt).expect("BUG: date is JSON-serializable"),
             unit: None,
         },
-        "time" => Output {
+        ValueKind::Time(t) => Output {
             kind: "time",
-            value: serde_json::to_string(&payload).expect("BUG: time payload is JSON-serializable"),
+            value: serde_json::to_string(t).expect("BUG: time is JSON-serializable"),
             unit: None,
         },
-        "range" => {
+        ValueKind::Range(_, _) => {
             todo!(
                 "range output not yet expected in benchmark fixtures; comparison semantics undefined"
             )
         }
-        other => panic!("BUG: unknown ValueKind tag '{other}' in fixture output"),
     }
-}
-
-fn take_value_unit(payload: &Value, label: &str) -> (String, String) {
-    let object = payload
-        .as_object()
-        .unwrap_or_else(|| panic!("BUG: {label} payload must be an object"));
-    let value = object
-        .get("value")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("BUG: {label} payload missing 'value' string"))
-        .to_string();
-    let unit = object
-        .get("unit")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("BUG: {label} payload missing 'unit' string"))
-        .to_string();
-    (value, unit)
 }
 
 fn normalize_veto(veto: &VetoType) -> Output {
@@ -171,13 +163,14 @@ fn main() {
 
         let mut outputs = serde_json::Map::new();
         for (rule_name, result) in &response.results {
-            let operation_result = &result
+            let explanation = result
                 .explanation
                 .as_ref()
-                .expect("BUG: outputs bench requires explain: true")
-                .result;
-            let normalized = match operation_result {
-                OperationResult::Value(literal) => normalize_value_kind(&literal.value),
+                .expect("BUG: outputs bench requires explain: true");
+            let normalized = match &explanation.result {
+                OperationResult::Value(literal) => {
+                    normalize_literal(literal, explanation.result_type.as_ref())
+                }
                 OperationResult::Veto(veto) => normalize_veto(veto),
             };
             outputs.insert(

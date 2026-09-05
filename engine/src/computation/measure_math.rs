@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use crate::computation::operation_result::{OperationResult, VetoType};
-use crate::planning::semantics::{LiteralValue, MathematicalComputation, ValueKind};
+use crate::planning::semantics::{LemmaType, LiteralValue, MathematicalComputation, ValueKind};
 
 pub fn mathematical_computation_preserves_measure_magnitude(op: &MathematicalComputation) -> bool {
     matches!(
@@ -27,13 +29,15 @@ fn apply_decimal_magnitude_op(
 pub fn measure_magnitude_math(
     op: &MathematicalComputation,
     value: &LiteralValue,
+    lemma_type: &Arc<LemmaType>,
 ) -> OperationResult {
     debug_assert!(mathematical_computation_preserves_measure_magnitude(op));
 
-    let ValueKind::Measure(canonical_magnitude, signature) = &value.value else {
+    let ValueKind::Measure(canonical_magnitude) = &value.value else {
         unreachable!("BUG: measure_magnitude_math called with non-measure value");
     };
 
+    let signature = lemma_type.measure_runtime_signature();
     if signature.len() != 1 || signature[0].1 != 1 {
         return OperationResult::Veto(VetoType::computation(format!(
             "Cannot apply '{op}' to measure with compound unit; convert with `as <unit>` first"
@@ -41,7 +45,7 @@ pub fn measure_magnitude_math(
     }
     let unit_name = signature[0].0.clone();
 
-    let unit_factor = value.lemma_type.measure_unit_factor(&unit_name);
+    let unit_factor = lemma_type.measure_unit_factor(&unit_name);
     let magnitude_in_unit =
         match crate::computation::rational::checked_div(canonical_magnitude, unit_factor) {
             Ok(magnitude) => magnitude,
@@ -80,10 +84,10 @@ pub fn measure_magnitude_math(
             }
         };
 
-    OperationResult::from_literal(LiteralValue::measure_with_type(
+    OperationResult::from_literal(LiteralValue::measure_with_bound_unit(
         new_canonical,
         unit_name,
-        value.lemma_type.clone(),
+        Arc::clone(lemma_type),
     ))
 }
 
@@ -91,17 +95,16 @@ pub fn measure_magnitude_math(
 mod tests {
     use super::*;
     use crate::computation::rational::rational_new;
-    use crate::planning::semantics::anonymous_measure_type;
-    use std::sync::Arc;
+    use crate::planning::semantics::{BaseMeasureVector, LemmaType};
 
     #[test]
     fn compound_signature_vetoes() {
-        let value = LiteralValue::measure_with_signature(
-            rational_new(100, 1),
-            vec![("meter".to_string(), 1), ("second".to_string(), -1)],
-            Arc::new(anonymous_measure_type()),
-        );
-        let result = measure_magnitude_math(&MathematicalComputation::Ceil, &value);
+        let mut decomp = BaseMeasureVector::new();
+        decomp.insert("meter".to_string(), 1);
+        decomp.insert("second".to_string(), -1);
+        let lemma_type = Arc::new(LemmaType::anonymous_for_decomposition(decomp));
+        let value = LiteralValue::measure(rational_new(100, 1));
+        let result = measure_magnitude_math(&MathematicalComputation::Ceil, &value, &lemma_type);
         assert!(
             result.vetoed(),
             "compound signature must veto, got {:?}",

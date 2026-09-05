@@ -386,7 +386,7 @@ pub fn api_v1_schema() -> Value {
         "RuleResultValue": {
             "type": "object",
             "additionalProperties": false,
-            "description": "API value shared by RuleResult (flattened), ShowData.prefilled, and ShowData.suggestion. When present: always `display`, plus exactly one typed field for a non-range value; `range` is set instead for a range value.",
+            "description": "API value shared by RuleResult (flattened), ShowData.fill, and ShowData.suggestion. When present: always `display`, plus exactly one typed field for a non-range value; `range` is set instead for a range value.",
             "properties": rule_result_value_properties
         },
         "ShowData": {
@@ -395,9 +395,13 @@ pub fn api_v1_schema() -> Value {
             "additionalProperties": false,
             "properties": {
                 "type": {"$ref": "#/$defs/LemmaType"},
-                "prefilled": {"$ref": "#/$defs/RuleResultValue"},
+                "fill": {"$ref": "#/$defs/RuleResultValue"},
                 "suggestion": {"$ref": "#/$defs/RuleResultValue"},
-                "needed_by_rules": {"type": "array", "items": {"type": "string"}}
+                "needed_by_rules": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Local rule names that transitively need this data after normalize. Empty = reuse catalog only (not an eval intake key for this spec)."
+                }
             }
         },
         "ShowVersion": {
@@ -418,7 +422,7 @@ pub fn api_v1_schema() -> Value {
             ]
         },
         "LiteralValue": {
-            "description": "Parsed literal value (meta field value). Externally tagged.",
+            "description": "Parsed literal value. Externally tagged.",
             "oneOf": [
                 {"type": "object", "required": ["number"], "additionalProperties": false, "properties": {"number": decimal_string()}},
                 {
@@ -460,18 +464,11 @@ pub fn api_v1_schema() -> Value {
                 }
             ]
         },
-        "MetaValue": {
-            "description": "Spec `meta` field value. Externally tagged.",
-            "oneOf": [
-                {"type": "object", "required": ["literal"], "additionalProperties": false, "properties": {"literal": {"$ref": "#/$defs/LiteralValue"}}},
-                {"type": "object", "required": ["unquoted"], "additionalProperties": false, "properties": {"unquoted": {"type": "string"}}}
-            ]
-        },
         "Show": {
             "type": "object",
             "required": ["spec", "start_line", "data", "rules", "meta"],
             "additionalProperties": false,
-            "description": "Result of Engine::show: data used by the spec's rules, local rule result types, and resolved temporal window.",
+            "description": "Result of Engine::show: declared promptable data catalog (needed_by_rules empty = reuse-only), local rule result types, and resolved temporal window.",
             "properties": {
                 "spec": {"type": "string"},
                 "commentary": nullable_string(),
@@ -482,7 +479,7 @@ pub fn api_v1_schema() -> Value {
                 "source_type": {"$ref": "#/$defs/SourceType"},
                 "data": {"type": "object", "additionalProperties": {"$ref": "#/$defs/ShowData"}},
                 "rules": {"type": "object", "additionalProperties": {"$ref": "#/$defs/LemmaType"}},
-                "meta": {"type": "object", "additionalProperties": {"$ref": "#/$defs/MetaValue"}}
+                "meta": {"type": "object", "additionalProperties": {"$ref": "#/$defs/LiteralValue"}}
             }
         },
         "RuleResult": {
@@ -670,6 +667,16 @@ pub fn api_v1_schema() -> Value {
                 "type": {"const": "veto"},
                 "message": {"type": "string"}
             }
+        },
+        "RepositoryInstallResult": {
+            "type": "object",
+            "required": ["source", "id"],
+            "additionalProperties": false,
+            "description": "Result of Engine.install / Lemma.install: LemmaBase repository source text and normalized id. Not yet loaded.",
+            "properties": {
+                "source": {"type": "string"},
+                "id": {"type": "string"}
+            }
         }
     });
 
@@ -677,13 +684,14 @@ pub fn api_v1_schema() -> Value {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://lemma.dev/schemas/api.v1.json",
         "title": "Lemma engine API",
-        "description": "Schema for the four JSON document shapes the engine produces at its consumer boundary: Show (Engine::show), Response (Engine::run), list (Engine::list, array of ResolvedRepository), and errors (array of EngineError, thrown by load/show/run/fetch). Explanation trees live under RuleResult.explanation (RuleNode / ExplanationNode).",
+        "description": "Schema for the JSON document shapes the engine produces at its consumer boundary: Show (Engine::show), Response (Engine::run), list (Engine::list, array of ResolvedRepository), errors (array of EngineError), and RepositoryInstallResult (SDK install). Explanation trees live under RuleResult.explanation (RuleNode / ExplanationNode).",
         "$defs": defs,
         "anyOf": [
             {"$ref": "#/$defs/Show"},
             {"$ref": "#/$defs/Response"},
             {"type": "array", "items": {"$ref": "#/$defs/ResolvedRepository"}},
-            {"type": "array", "items": {"$ref": "#/$defs/EngineError"}}
+            {"type": "array", "items": {"$ref": "#/$defs/EngineError"}},
+            {"$ref": "#/$defs/RepositoryInstallResult"}
         ]
     })
 }

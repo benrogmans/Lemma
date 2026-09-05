@@ -178,12 +178,13 @@ mod imp {
         }
     }
 
-    struct McpServer {
+    struct McpServer<T: lemma::HttpTransport> {
         engine: Engine,
         config: McpConfig,
         /// Workspace directory for write persist (add / update / remove / clear / install).
         workdir: PathBuf,
-        registry: Box<dyn lemma::Registry>,
+        registries: lemma::Registries,
+        transport: T,
         /// Set after a successful legacy `initialize`. Process-scoped (stdio lifetime).
         legacy_session: bool,
     }
@@ -245,18 +246,20 @@ mod imp {
         lemma_cli::install::atomic_write(path, contents)
     }
 
-    impl McpServer {
+    impl<T: lemma::HttpTransport> McpServer<T> {
         fn new(
             engine: Engine,
             config: McpConfig,
             workdir: PathBuf,
-            registry: Box<dyn lemma::Registry>,
+            registries: lemma::Registries,
+            transport: T,
         ) -> Self {
             Self {
                 engine,
                 config,
                 workdir,
-                registry,
+                registries,
+                transport,
                 legacy_session: false,
             }
         }
@@ -268,6 +271,20 @@ mod imp {
                     let path = source_path.as_ref();
                     if path.is_absolute() {
                         absolute_path_under_workdir(&self.workdir, path)
+                    } else if self.workdir.is_file() {
+                        let workdir_name = self.workdir.file_name().ok_or_else(|| {
+                            McpError::invalid_params(
+                                "single-file workspace path must have a file name".to_string(),
+                            )
+                        })?;
+                        if path.as_os_str() != workdir_name {
+                            return Err(McpError::invalid_params(format!(
+                                "attribute '{}' does not match single-file workspace '{}'",
+                                path.display(),
+                                self.workdir.display()
+                            )));
+                        }
+                        Ok(self.workdir.clone())
                     } else {
                         validated_write_path(&self.workdir, path)
                     }
@@ -478,14 +495,10 @@ mod imp {
                 }));
                 tools.push(serde_json::json!({
                     "name": "update_spec",
-                    "description": "Replace an existing spec with new source. After success, call source and present that formatted text in chat for user verify; do not paste the unformatted draft.",
+                    "description": "Replace identities in code for a source label (atomic upsert; Path/Dependency prune siblings). After success, call source and present that formatted text in chat for user verify; do not paste the unformatted draft.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "spec": {
-                                "type": "string",
-                                "description": "Name of the spec to replace"
-                            },
                             "code": {
                                 "type": "string",
                                 "description": "The complete new Lemma source"
@@ -496,14 +509,10 @@ mod imp {
                             },
                             "repository": {
                                 "type": "string",
-                                "description": "Repository qualifier when the spec is not in the workspace"
-                            },
-                            "effective": {
-                                "type": "string",
-                                "description": "Effective datetime of the version to replace"
+                                "description": "When set, every staged spec repository name must match"
                             }
                         },
-                        "required": ["spec", "code", "attribute"]
+                        "required": ["code", "attribute"]
                     }
                 }));
                 tools.push(serde_json::json!({
@@ -538,13 +547,13 @@ mod imp {
                 }));
                 tools.push(serde_json::json!({
                     "name": "install",
-                    "description": "Download a registry dependency (e.g. @iso/countries), persist under lemma_deps/, and load it. Pass force=true to overwrite an existing copy.",
+                    "description": "Download a repository from LemmaBase (e.g. @iso/countries), persist under lemma_deps/, and load it. Pass force=true to overwrite an existing copy.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "dependency": {
+                            "repository": {
                                 "type": "string",
-                                "description": "Registry identifier, e.g. @iso/countries"
+                                "description": "LemmaBase repository id, e.g. @iso/countries"
                             },
                             "force": {
                                 "type": "boolean",
@@ -552,7 +561,7 @@ mod imp {
                                 "default": false
                             }
                         },
-                        "required": ["dependency"]
+                        "required": ["repository"]
                     }
                 }));
             }
@@ -682,12 +691,6 @@ mod imp {
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let spec = args["spec"]
-                .as_str()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
-
             let (code, source_type) = Self::parse_code_and_source(args)?;
             let path = self.disk_path(&source_type)?;
 
@@ -696,62 +699,83 @@ mod imp {
                 .map(str::trim)
                 .filter(|s| !s.is_empty());
 
-            let effective = match args.get("effective").and_then(|v| v.as_str()) {
-                None => None,
-                Some(raw) => Some(
-                    lemma::resolve_effective(Some(raw))
-                        .map_err(|e| McpError::invalid_params(e.to_string()))?,
-                ),
-            };
+            // Ensure an existing file is readable before mutating the engine.
+            match fs::read_to_string(&path) {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(McpError::internal_error(format!(
+                        "Failed to read existing source {}: {e}",
+                        path.display()
+                    )));
+                }
+            }
 
-            let rollback_snapshot =
-                match self
-                    .engine
-                    .source(repository, Some(spec), effective.as_ref())
-                {
-                    Ok(old_code) => {
+            // Snapshot engine rows for this source before upsert so a failed disk
+            // write can restore engine state even when disk has diverged (including
+            // when the file is absent on disk but the engine already has rows).
+            let engine_snapshot = {
+                let mut pieces: Vec<String> = Vec::new();
+                for repo_group in self.engine.list() {
+                    let repo = repo_group.repository.clone();
+                    for listed in repo_group.specs {
                         let show = self
                             .engine
-                            .show(repository, spec, effective.as_ref())
-                            .expect("BUG: source succeeded so show must succeed for same identity");
-                        let old_source_type = show.source_type.expect(
-                            "BUG: loaded spec must carry source_type for update persist rollback",
-                        );
-                        Some((old_source_type, old_code))
+                            .show(
+                                repo.as_deref(),
+                                &listed.name,
+                                listed.effective_from.as_ref(),
+                            )
+                            .expect("BUG: listed spec must show for update snapshot");
+                        if show.source_type.as_ref() == Some(&source_type) {
+                            let piece = self
+                                .engine
+                                .source(
+                                    repo.as_deref(),
+                                    Some(&listed.name),
+                                    listed.effective_from.as_ref(),
+                                )
+                                .expect("BUG: listed source_type row must have source text");
+                            pieces.push(piece);
+                        }
                     }
-                    Err(_) => None,
-                };
+                }
+                if pieces.is_empty() {
+                    None
+                } else {
+                    Some(pieces.join("\n\n"))
+                }
+            };
 
-            if let Err(load_err) = self.engine.update(
-                repository,
-                spec,
-                effective.as_ref(),
-                source_type.clone(),
-                code.to_string(),
-            ) {
+            if let Err(load_err) =
+                self.engine
+                    .update(repository, code.to_string(), source_type.clone())
+            {
                 return Ok(Self::load_diagnostics_tool_result(load_err));
             }
 
             let formatted = Self::formatted_persist_source(code, &source_type);
             if let Err(e) = atomic_write(&path, &formatted) {
-                let (old_source_type, old_code) = rollback_snapshot
-                    .expect("BUG: successful update with persist requires rollback snapshot");
-                self.engine
-                    .update(
-                        repository,
-                        spec,
-                        effective.as_ref(),
-                        old_source_type,
-                        old_code,
-                    )
-                    .expect("BUG: restore previous spec after failed persist must succeed");
+                match engine_snapshot {
+                    None => self.rollback_added_source(code, &source_type),
+                    Some(old_code) => {
+                        if let Err(restore_err) =
+                            self.engine.update(None, old_code, source_type.clone())
+                        {
+                            return Err(McpError::internal_error(format!(
+                                "Failed to persist source to {} ({e}); restore also failed: {restore_err:?}",
+                                path.display()
+                            )));
+                        }
+                    }
+                }
                 return Err(McpError::internal_error(format!(
                     "Failed to persist source to {}: {e}",
                     path.display()
                 )));
             }
 
-            info!("Spec '{spec}' updated from source '{source_type}'");
+            info!("Source '{source_type}' updated");
 
             Ok(serde_json::json!({
                 "content": [{
@@ -759,32 +783,6 @@ mod imp {
                     "text": "Spec updated successfully."
                 }]
             }))
-        }
-
-        /// Remove every loaded temporal row whose `show.source_type` equals `source_type`.
-        fn remove_all_with_source_type(&mut self, source_type: &lemma::SourceType) {
-            let mut removals: Vec<(Option<String>, String, Option<DateTimeValue>)> = Vec::new();
-            for repo_group in self.engine.list() {
-                let repo = repo_group.repository.clone();
-                for listed in repo_group.specs {
-                    let show = self
-                        .engine
-                        .show(
-                            repo.as_deref(),
-                            &listed.name,
-                            listed.effective_from.as_ref(),
-                        )
-                        .expect("BUG: listed spec must show for source_type scan");
-                    if show.source_type.as_ref() == Some(source_type) {
-                        removals.push((repo.clone(), listed.name, listed.effective_from));
-                    }
-                }
-            }
-            for (repo, name, eff) in removals {
-                self.engine
-                    .remove(repo.as_deref(), &name, eff.as_ref())
-                    .expect("BUG: remove of previously listed source_type row must succeed");
-            }
         }
 
         fn tool_remove_spec(
@@ -896,10 +894,12 @@ mod imp {
             };
 
             if let Err(e) = disk_result {
-                self.remove_all_with_source_type(&source_type);
-                self.engine
-                    .load([(source_type, file_snapshot)])
-                    .expect("BUG: restore file after failed remove persist must succeed");
+                if let Err(restore_err) = self.engine.update(None, file_snapshot, source_type) {
+                    return Err(McpError::internal_error(format!(
+                        "Failed to persist remove to {} ({e}); restore also failed: {restore_err:?}",
+                        path.display()
+                    )));
+                }
                 return Err(McpError::internal_error(format!(
                     "Failed to persist remove to {}: {e}",
                     path.display()
@@ -963,19 +963,19 @@ mod imp {
             Ok(paths)
         }
 
-        fn dependency_in_engine(engine: &Engine, dependency: &str) -> bool {
+        fn repository_in_engine(engine: &Engine, repository: &str) -> bool {
             engine
                 .list()
                 .iter()
-                .any(|repo| repo.repository.as_deref() == Some(dependency))
+                .any(|repo| repo.repository.as_deref() == Some(repository))
         }
 
-        /// Remove every temporal row currently loaded under `dependency`.
-        fn unload_dependency(engine: &mut Engine, dependency: &str) {
+        /// Remove every temporal row currently loaded under `repository`.
+        fn unload_repository(engine: &mut Engine, repository: &str) {
             let rows: Vec<(String, Option<DateTimeValue>)> = engine
                 .list()
                 .into_iter()
-                .find(|repo| repo.repository.as_deref() == Some(dependency))
+                .find(|repo| repo.repository.as_deref() == Some(repository))
                 .map(|repo| {
                     repo.specs
                         .into_iter()
@@ -985,8 +985,8 @@ mod imp {
                 .unwrap_or_default();
             for (name, effective) in rows {
                 engine
-                    .remove(Some(dependency), &name, effective.as_ref())
-                    .expect("BUG: unload of previously listed dependency row must succeed");
+                    .remove(Some(repository), &name, effective.as_ref())
+                    .expect("BUG: unload of previously listed repository row must succeed");
             }
         }
 
@@ -994,12 +994,12 @@ mod imp {
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let dependency = args["dependency"]
+            let repository = args["repository"]
                 .as_str()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| {
-                    McpError::invalid_params("Missing 'dependency' field".to_string())
+                    McpError::invalid_params("Missing 'repository' field".to_string())
                 })?;
 
             let force = match args.get("force") {
@@ -1009,12 +1009,13 @@ mod imp {
                 })?,
             };
 
-            let source_type = lemma::SourceType::Dependency(dependency.to_string());
+            let source_type = lemma::SourceType::Dependency(repository.to_string());
             let outcome = lemma_cli::install::install_registry_dependency(
                 &self.workdir,
-                dependency,
+                repository,
                 force,
-                self.registry.as_ref(),
+                &self.registries,
+                &self.transport,
             );
 
             let (relative_path, source, freshly_written) = match outcome {
@@ -1031,13 +1032,12 @@ mod imp {
                 }
                 Err(lemma_cli::install::InstallError::Registry(error)) => {
                     return Err(McpError::internal_error(format!(
-                        "Registry error for {dependency}: {}",
-                        error.message
+                        "LemmaBase error for {repository}: {error}"
                     )));
                 }
                 Err(lemma_cli::install::InstallError::UnparseableRegistry(error)) => {
                     return Err(McpError::internal_error(format!(
-                        "Registry returned unparseable dependency: {error}"
+                        "LemmaBase returned unparseable repository: {error}"
                     )));
                 }
                 Err(
@@ -1049,14 +1049,14 @@ mod imp {
                 }
             };
 
-            let already_loaded = Self::dependency_in_engine(&self.engine, dependency);
+            let already_loaded = Self::repository_in_engine(&self.engine, repository);
             let rollback_source = if already_loaded {
                 Some(
                     self.engine
-                        .source(Some(dependency), None, None)
+                        .source(Some(repository), None, None)
                         .map_err(|e| {
                             McpError::internal_error(format!(
-                                "Failed to snapshot existing dependency '{dependency}' for rollback: {e}"
+                                "Failed to snapshot existing repository '{repository}' for rollback: {e}"
                             ))
                         })?,
                 )
@@ -1065,27 +1065,27 @@ mod imp {
             };
 
             if already_loaded {
-                Self::unload_dependency(&mut self.engine, dependency);
+                Self::unload_repository(&mut self.engine, repository);
             }
 
             if let Err(load_err) = self.engine.load([(source_type, source)]) {
                 if let Some(old) = rollback_source.as_ref() {
                     self.engine
                         .load([(
-                            lemma::SourceType::Dependency(dependency.to_string()),
+                            lemma::SourceType::Dependency(repository.to_string()),
                             old.clone(),
                         )])
-                        .expect("BUG: restore previous dependency after failed load must succeed");
+                        .expect("BUG: restore previous repository after failed load must succeed");
                 }
                 return Ok(Self::load_diagnostics_tool_result(load_err));
             }
 
             let message = if freshly_written {
-                format!("Installed {} -> {}", dependency, relative_path.display())
+                format!("Installed {} -> {}", repository, relative_path.display())
             } else {
                 format!(
                     "Already up to date: {} -> {}",
-                    dependency,
+                    repository,
                     relative_path.display()
                 )
             };
@@ -1206,6 +1206,9 @@ mod imp {
         let request_timeout = config.request_timeout;
         let workdir = workdir.to_path_buf();
 
+        let registries = lemma::Registries::default();
+        let transport = lemma_cli::install::ReqwestTransport::new();
+
         // Requests are handled on a dedicated worker thread that owns the
         // engine state, so the reader loop can enforce a wall-clock timeout
         // per request. The worker sends exactly one response per request; a
@@ -1214,8 +1217,7 @@ mod imp {
         let (request_tx, request_rx) = std::sync::mpsc::channel::<McpRequest>();
         let (response_tx, response_rx) = std::sync::mpsc::channel::<Option<McpResponse>>();
         std::thread::spawn(move || {
-            let mut server =
-                McpServer::new(engine, config, workdir, Box::new(lemma::LemmaBase::new()));
+            let mut server = McpServer::new(engine, config, workdir, registries, transport);
             for request in request_rx {
                 let request_id = request.id.clone();
                 let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1376,16 +1378,17 @@ mod imp {
     mod tests {
         use super::*;
 
-        fn server() -> McpServer {
+        fn server() -> McpServer<lemma::__test_support::FixtureTransport> {
             McpServer::new(
                 Engine::new(),
                 McpConfig::default(),
                 std::env::temp_dir(),
-                Box::new(lemma::LemmaBase::test()),
+                lemma::Registries::default(),
+                lemma::__test_support::FixtureTransport::bundled(),
             )
         }
 
-        fn write_server(workdir: PathBuf) -> McpServer {
+        fn write_server(workdir: PathBuf) -> McpServer<lemma::__test_support::FixtureTransport> {
             McpServer::new(
                 Engine::new(),
                 McpConfig {
@@ -1393,7 +1396,8 @@ mod imp {
                     ..McpConfig::default()
                 },
                 workdir,
-                Box::new(lemma::LemmaBase::test()),
+                lemma::Registries::default(),
+                lemma::__test_support::FixtureTransport::bundled(),
             )
         }
 
@@ -1562,7 +1566,7 @@ mod imp {
                 .handle_request(tools_call(
                     1,
                     "install",
-                    serde_json::json!({ "dependency": "@iso/countries" }),
+                    serde_json::json!({ "repository": "@iso/countries" }),
                 ))
                 .expect("response");
             let text = resp.result.as_ref().unwrap()["content"][0]["text"]
@@ -1596,7 +1600,7 @@ mod imp {
                     .handle_request(tools_call(
                         1,
                         "install",
-                        serde_json::json!({ "dependency": "@iso/countries", "force": bad }),
+                        serde_json::json!({ "repository": "@iso/countries", "force": bad }),
                     ))
                     .expect("response");
                 let err = resp.error.as_ref().expect("invalid_params");
@@ -1613,7 +1617,7 @@ mod imp {
                 .handle_request(tools_call(
                     1,
                     "install",
-                    serde_json::json!({ "dependency": "@iso/countries" }),
+                    serde_json::json!({ "repository": "@iso/countries" }),
                 ))
                 .expect("response");
             assert!(first.result.as_ref().unwrap()["content"][0]["text"]
@@ -1625,7 +1629,7 @@ mod imp {
                 .handle_request(tools_call(
                     2,
                     "install",
-                    serde_json::json!({ "dependency": "@iso/countries" }),
+                    serde_json::json!({ "repository": "@iso/countries" }),
                 ))
                 .expect("response");
             let skip = second.result.as_ref().unwrap()["content"][0]["text"]
@@ -1642,13 +1646,13 @@ mod imp {
                 .handle_request(tools_call(
                     1,
                     "install",
-                    serde_json::json!({ "dependency": "@org/does-not-exist" }),
+                    serde_json::json!({ "repository": "@org/does-not-exist" }),
                 ))
                 .expect("response");
             let err = resp.error.as_ref().expect("registry miss");
             assert!(
                 err.message.contains("@org/does-not-exist")
-                    || err.message.contains("Registry error"),
+                    || err.message.contains("LemmaBase error"),
                 "got: {}",
                 err.message
             );
@@ -1666,12 +1670,12 @@ mod imp {
                 .handle_request(tools_call(
                     1,
                     "install",
-                    serde_json::json!({ "dependency": "not-a-registry-id" }),
+                    serde_json::json!({ "repository": "not-a-registry-id" }),
                 ))
                 .expect("response");
             let err = resp.error.as_ref().expect("registry miss");
             assert!(
-                err.message.contains("Registry error")
+                err.message.contains("LemmaBase error")
                     || err.message.contains("must start with '@'")
                     || err.message.contains("not-a-registry-id"),
                 "got: {}",
@@ -1683,7 +1687,11 @@ mod imp {
         fn install_identical_content_elsewhere_conflicts_without_force() {
             let dir = tempfile::tempdir().unwrap();
             let fixture = fs::read_to_string(
-                lemma::LemmaBase::test_fixtures_dir()
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("engine")
+                    .join("tests")
+                    .join("registry_fixtures")
                     .join("@iso")
                     .join("countries.lemma"),
             )
@@ -1697,7 +1705,7 @@ mod imp {
                 .handle_request(tools_call(
                     1,
                     "install",
-                    serde_json::json!({ "dependency": "@iso/countries" }),
+                    serde_json::json!({ "repository": "@iso/countries" }),
                 ))
                 .expect("response");
             let err = resp.error.expect("overlapping foreign copy must conflict");
@@ -1777,6 +1785,39 @@ mod imp {
             input.push(b'\n');
             let lines = read_all_capped(&input, 10);
             assert!(matches!(&lines[0], CappedLine::Line(s) if s.len() == 10));
+        }
+
+        #[test]
+        fn disk_path_single_file_prefix_writes_workdir_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("tax.lemma");
+            fs::write(&file, "spec tax\ndata rate: 0.1\nrule amount: rate * 100\n").unwrap();
+
+            let mut s = write_server(file.clone());
+            let resp = s
+                .handle_request(tools_call(
+                    1,
+                    "update_spec",
+                    serde_json::json!({
+                        "attribute": "tax.lemma",
+                        "code": "spec tax\ndata rate: 0.2\nrule amount: rate * 100\n"
+                    }),
+                ))
+                .expect("response");
+            assert!(
+                resp.error.is_none(),
+                "single-file update_spec must succeed: {:?}",
+                resp.error
+            );
+            let on_disk = fs::read_to_string(&file).expect("tax.lemma");
+            assert!(
+                on_disk.contains("0.2"),
+                "must write the workdir file itself, not tax.lemma/tax.lemma; got: {on_disk}"
+            );
+            assert!(
+                !file.join("tax.lemma").exists(),
+                "must not create nested tax.lemma/tax.lemma"
+            );
         }
 
         #[test]

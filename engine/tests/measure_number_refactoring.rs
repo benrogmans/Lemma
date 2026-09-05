@@ -60,8 +60,15 @@ rule quotient: price1 / price2"#;
             .value()
             .unwrap_or_else(|| panic!("{name} must produce a value"));
         assert!(
-            v.get_type().is_measure(),
+            matches!(v.value, lemma::ValueKind::Measure(_)),
             "{name} result must stay in measure money type"
+        );
+        assert!(
+            r.value
+                .as_ref()
+                .and_then(|val| val.measure.as_ref())
+                .is_some(),
+            "{name} must expose measure map"
         );
     }
     {
@@ -76,7 +83,7 @@ rule quotient: price1 / price2"#;
             .value()
             .unwrap_or_else(|| panic!("{name} must produce a value"));
         assert!(
-            v.get_type().is_number(),
+            matches!(v.value, lemma::ValueKind::Number(_)),
             "{name} result must be dimensionless number"
         );
     }

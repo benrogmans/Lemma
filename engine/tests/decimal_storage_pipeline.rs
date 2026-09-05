@@ -31,7 +31,8 @@ fn rule_number(resp: &lemma::Response, rule: &str) -> Decimal {
 }
 
 fn assert_json_number_scalar(lit: &LiteralValue) {
-    let json = serde_json::to_value(lit).expect("LiteralValue serializes");
+    let json =
+        serde_json::to_value(lemma::api::LiteralValue::from(lit)).expect("LiteralValue serializes");
     let number = json
         .get("value")
         .and_then(|v| v.get("number"))
@@ -211,15 +212,24 @@ rule converted: amount as eur
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Measure(magnitude, signature) => {
-            assert_eq!(*signature, vec![("eur".to_string(), 1)]);
+        ValueKind::Measure(magnitude) => {
+            let measure = rr
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .expect("measure map");
+            assert!(
+                measure.contains_key("eur"),
+                "expected eur in measure map, got {:?}",
+                measure.keys().collect::<Vec<_>>()
+            );
             assert_eq!(
                 lemma::ValueKind::Number(magnitude.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 Decimal::from(84)
             );
-            let json = serde_json::to_value(lit).unwrap();
+            let json = serde_json::to_value(lemma::api::LiteralValue::from(lit)).unwrap();
             let measure_json = json.get("value").and_then(|v| v.get("measure")).unwrap();
             assert!(
                 !measure_json

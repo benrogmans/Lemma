@@ -15,6 +15,26 @@ use crate::Error;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Plan every spec set of a fresh context, starting from no committed plans: the
+/// pass a first load performs, where every spec set is new and therefore changed.
+fn plan_everything(ctx: &Context) -> crate::planning::PlanningResult {
+    let changed: Vec<(std::sync::Arc<crate::LemmaRepository>, String)> = ctx
+        .repositories()
+        .iter()
+        .flat_map(|(repository, by_name)| {
+            by_name
+                .keys()
+                .map(move |spec_name| (std::sync::Arc::clone(repository), spec_name.clone()))
+        })
+        .collect();
+    plan(
+        ctx,
+        &ResourceLimits::default(),
+        &crate::planning::ReplanScope::from_changed_sets(ctx, changed),
+        &crate::planning::PlanStore::new(),
+    )
+}
+
 /// Test helper: plan a single spec and return its execution plan.
 fn plan_single(
     main_spec: &LemmaSpec,
@@ -29,7 +49,7 @@ fn plan_single(
         .spec_set(&repository, main_spec.name.as_str())
         .and_then(|ss| ss.get_exact(main_spec.effective_from()).cloned())
         .expect("main_spec must be in all_specs");
-    let result = plan(&ctx, &ResourceLimits::default());
+    let result = plan_everything(&ctx);
     if !result.errors.is_empty() {
         return Err(result.errors);
     }
@@ -544,7 +564,7 @@ data imported_price: examples.money
         .and_then(|ss| ss.get_exact(None).cloned())
         .expect("checkout spec should be present");
 
-    let result = plan(&ctx, &ResourceLimits::default());
+    let result = plan_everything(&ctx);
     assert!(
         result.errors.is_empty(),
         "No checkout planning errors expected, got: {:?}",
@@ -623,7 +643,7 @@ rule total_measure: inventory.quantity"#;
             .expect("insert spec");
     }
 
-    let result = plan(&ctx, &ResourceLimits::default());
+    let result = plan_everything(&ctx);
     assert!(
         result.errors.is_empty(),
         "Planning under registry-scoped specs should succeed: {:?}",
@@ -851,7 +871,7 @@ data imported_value: src_a.amount
             .expect("insert spec");
     }
 
-    let result = plan(&ctx, &ResourceLimits::default());
+    let result = plan_everything(&ctx);
 
     let spec_errors: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
     assert!(

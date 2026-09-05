@@ -11,9 +11,8 @@ pub fn run_stdio(workspace_files: Option<Arc<dyn WorkspaceFiles>>) -> std::io::R
     tokio::runtime::Runtime::new()?.block_on(async {
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
-        let registry = Box::new(lemma::LemmaBase::new());
         let (service, socket) = LspService::new(move |client| {
-            crate::server::LemmaLanguageServer::new(client, registry, workspace_files)
+            crate::server::LemmaLanguageServer::new(client, workspace_files)
         });
         Server::new(stdin, stdout, socket).serve(service).await;
     });

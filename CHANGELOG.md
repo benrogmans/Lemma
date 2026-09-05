@@ -2,6 +2,60 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.9.9] - 2026-09-05
+
+Sans-IO registries and SDK `install`, engine binary snapshot across Rust/npm/Maven/Hex, rule-embed evaluation boundaries, Java SDK sealed results and native cache, scoped replanning, unqualified imported types, and inline rational arithmetic.
+
+### Added
+
+- **Sans-IO registries**: `Registry` trait, hard-bound `LemmaBase` (`https://lemmabase.com`), `Registries` catalogue, `Header` / `Fetch` / `HttpResponse` / `TransportFailure`, exhaustive `InstallStep` / `ResolveStep`, `Install` and `Resolve` step machines, sync `HttpTransport` plus `Install::run` / `Resolve::run`, `RepositoryInstallResult` / `RegistryBundle` / `RegistryError` in the engine.
+- **SDK `install`**: Hex `Lemma.install/2-3` (optional transport fun; default Req), Maven `Engine.install(String)` and `install(String, HttpClient)`, npm `Engine.install` (wasm over host `fetch`). Download only (`{ source, id }`); no load, no `lemma_deps/` write. Wire shape in `api.v1.json`.
+- **CLI `ReqwestTransport`**: reqwest with `rustls` + `system-proxy`; MCP `McpServer` parameterized by `HttpTransport`.
+- **Offline fixtures**: `__test_support::FixtureTransport` over `engine/tests/registry_fixtures` (native).
+- **Unqualified imported type**: `data x: TypeName` resolves to an imported type when exactly one `uses` import exports that name. Ambiguous names error with `"Qualify as alias.TypeName"`.
+- **Engine binary snapshot**: `Engine::snapshot()` / `Engine::from_snapshot(&[u8])` encode Context AST + execution plans + limits as compact postcard bytes (whole-slice CRC32C + engine-version header). Same sources → identical bytes. Stale version / corrupt bytes return `Error`. JSON API documents (`Show`, `Response`, `LemmaType`, …) serialize through `lemma::api` only; domain types use exact postcard-safe serde. SDKs expose the same opaque bytes: npm `snapshot` / `fromSnapshot`, Java `snapshot()` / `fromSnapshot(byte[])`, Hex `Lemma.snapshot/1` / `Lemma.from_snapshot/1`.
+- **`cargo benchmarks engine` snapshot table**: logistics ladder (1050 / 6300 / 18900 / 126000 rate cells, byte-identical to the Java `SpecGenerator.logistics` fixtures) reporting load, loaded heap, snapshot bytes, encode / restore medians, allocations per restore and restored heap; written to `engine.md` as "Snapshot (logistics ladder)".
+- **Java `ResourceLimits.builder()`**: named limit overrides for `Engine.create(Builder)`. Unset keys keep engine defaults (numbers live in Rust only). `Engine.create(ResourceLimits)` still accepts a full limits copy from `limits()`.
+- **Java sealed `RuleResult` / `RuleResultValue`**: pattern-match variants (veto, missing data, number, text, boolean, date, time, measure, ratio, calendar, range). Dates/times are `java.time`; literal booleans are `boolean`.
+- **Java `LemmaNativeException`**: deploy-time native load failures (missing `.so`, unsupported arch, cache). Use-after-close stays `LemmaBugError`.
+- **Java native cache**: `~/.cache/lemma-jni/{version}-{triple}/{sha256}/` so same-version rebuilds pick up new natives.
+- **Java `Engine.load(Path)` / `loadResource(Class, String)`**: file and classpath load helpers.
+- **Java schema package**: `LemmaType`, `TypeExtends`, `LiteralValue`, `ExplanationNode` live under `com.lemmabase.lemma.schema`.
+
+### Fixed
+
+- **Linear rule-chain stack overflow**: load and tip-only run of long `r_i: r_{i-1} + 1` chains no longer abort the native process. JNI, npm, and Hex hosts get results or a structured `Error`, never SIGSEGV.
+- **Maven natives**: `xtask maven-natives` and precommit build `lemma_jni` with `--release` and package only `target/release`; a stale `target/debug` library is no longer picked up, so the Java package and `benchmarks/java` measure release code.
+
+### Changed
+
+- **Snapshot codec**: body is checksummed once as a slice with hardware CRC32C (`crc32c`) instead of one digest update per varint byte inside the postcard flavor; `RationalInteger` serializes its native representation (two `i128` varints for the inline case, bignums only when the pair does not fit) and rejects unreduced, non-positive-denominator or `Big`-that-fits-`Small` input; `DispatchKey::Text` deserializes straight into `Arc<str>` without an intermediate `String`. On the 126000-cell logistics fixture (10.1 MiB source): restore 766 ms → 559 ms, encode 439 ms → 291 ms, allocations per restore 11.43 M → 8.95 M.
+- **Rule embeds are evaluation boundaries**: a run evaluates the requested rules' dependency closure in plan topological order; embed cells read the stored rule value. Tip-only `missing_data` matches full-run `missing_data` and is ordered by the evaluation tree. `max_normal_form_depth` and `max_normalized_expression_nodes` count rule embeds as one cell (intra-rule nesting / IR size only). Show `needed_by_rules` is stored as rule positions per data slot on the plan, built eagerly in `build_execution_plan` with bitset unions over embeds (no per-entry `DataPath`/`String` clones or per-list sorts). Data-reference chains resolve once in planning (`ReferenceEnd` on the graph/plan); evaluation no longer walks them.
+- **MCP `run`/`evaluate`**: success text is `format_explanation` ASCII trees plus a `Missing data` block when inputs are unbound (not Engine Response JSON). Args unchanged; `list`/`show`/`check` still JSON.
+- **`Engine::update`**: `update(repository, code, source_type)` — identities come from parsing `code` (upsert). For `Path` / `Dependency`, live specs with that `source_type` absent from `code` are removed in the same apply — including when `code` has zero specs (prune every live row of that source). `Volatile` never prunes siblings and still requires at least one spec. Dropped `spec` and `effective` parameters (they disagreed with `code`). Bindings: npm/Java/Hex/MCP same arity change.
+- **`Engine::remove`**: public signature unchanged; resolves active-at then removes by exact `effective_from`.
+- **First-pass planning**: no-op normalize rewrites no longer clone and re-hash wide Piecewise nodes; type inference caches within a graph build (cleared between rule-reference resolve and type check); OrderedDispatch text keys use `Arc<str>`; one normal-form interner is shared across temporal slices of a spec set in a planning pass. Large unless-chain fixtures plan substantially faster on a cold load.
+- **Parse**: string literal tokens carry unquoted content (no quote round-trip); keyword and constraint-command matching folds ASCII without allocating. LSP semantic tokens reconstruct quotes for `StringLit` highlight lengths.
+- **Scoped replanning**: `load` / `update` / `remove` replan only the spec sets the batch touched plus their transitive consumers; every other spec set keeps the plans it already had (moved, not rebuilt). Editing one file in a 257 spec set workspace: 42.2 ms → 0.22 ms. `apply` stays all-or-nothing, so a batch that fails leaves the previous plans in place.
+- **HTTP `--watch` refresh**: builds a scratch engine outside the write lock and swaps only on success; failure keeps the previous engine (never emptied, never partially refreshed).
+- **LSP workspace**: initial / multi-file validation batch-loads (order-independent, sorted attributes); single-file edits use per-file `update` and keep the attribute dirty on failure. Disk delete/rename queues an empty Path/Dependency prune applied on validate (planning failures surface as diagnostics, not panics).
+- **CLI / MCP wording**: install repositories from LemmaBase (arg `repository`), not “dependencies from the registry”.
+- **LemmaBase / registries**: engine owns registry policy and performs no I/O; hosts supply the socket only. LemmaBase is hard-bound to `https://lemmabase.com` (not overridable). Request and response headers on `Fetch` / `HttpResponse`. Install ids use the repository-qualifier grammar (rejects URL/path injection).
+- **Maven install**: step protocol over JNI (`installStart` / `installStep` / `installRespond` / `installFail` / `installFree`); Java HTTP loop uses injected or default `HttpClient`; does not hold the engine lock across the download; handle always freed in `finally`.
+- **Hex install**: default Req transport uses `decode_body: false`; `lemma_install_respond` on DirtyCpu; success payload is engine JSON (`Jason.decode!`) with string keys.
+- **Scoped replanning `PlanView`**: slice-mode members expose committed slices outside the dirty ranges plus replanned dirty slices (fixes spurious/missed interface-drift checks and mid-edit panics).
+- **Result/show rule unit maps**: `results.<rule>.measure` / `.ratio` and `show.rules.<rule>.units` list every unit in the measure/ratio family (including units declared on extending types), from a plan-time family unit catalog. Show data input types stay declared-only.
+- **Show data catalog**: `Show.data` lists every declared promptable slot (not only rule-used). Empty `needed_by_rules` means offered for reuse (`data x: alias.slot`). OpenAPI request bodies still include only slots with non-empty `needed_by_rules`.
+- **`Show.meta`**: values are literal JSON (`{"text": "..."}`, `{"number": "1"}`, etc.), not the former `MetaValue` wrapper (`literal` / `unquoted` tags). Any literal form is valid; `meta title` is no longer restricted to text.
+- **Rational arithmetic**: inline `i128` fast path for small numerator/denominator pairs (zero allocation); promotes to heap `BigInt` only on overflow. Reduces allocation pressure in arithmetic-heavy specs.
+
+### Removed
+
+- Engine HTTP stack and old registry helpers: `reqwest`, `async-trait`, `gloo-net`, `registry` feature, `LEMMABASE_URL`, `lemmabase_source_url` / `lemmabase_navigation_url` / `lemmabase_install_failure`, callback `resolve_registry_references`, `RegistryFetchFailure`, `LEMMA_BASE_URL`, debug-build `localhost:4222`, `LemmaBase::test`.
+- **npm** JS `LemmaBase` helper / env / `Engine.prototype.install` patch (wasm `Engine.install` is the surface).
+- **npm `Engine.fetch`**: renamed to `Engine.install` (same download-only contract).
+- **`MetaValue` wire tag** and unquoted meta identifiers in source.
+
 ## [0.9.8] - 2026-08-26
 
 0.9.8 aligns MCP with SDK `run`, requires one declaring type per unit name, and unifies HTTP explain with CLI `--explain`.

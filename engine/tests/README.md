@@ -31,6 +31,9 @@ cargo nextest run -p lemma-engine --tests
 | `veto_inversion.rs` | Veto + inversion |
 | `missing_data_propagation.rs` | Missing data through rules |
 | `branch_aware_missing_data.rs` | Per-rule `missing_data` and missing-data veto propagation |
+| `linear_rule_chain_stack.rs` | Linear rule-chain stack safety (tip-only eval depth; load NF depth) |
+| `load_scaling.rs` | Deep/wide/unless load wall-clock bounds; wide show transitive needed_by pin |
+| `rule_embed_schedule.rs` | Rule-embed schedule: gated missing_data, cross-spec tip-only |
 
 ### Inversion
 
@@ -106,8 +109,8 @@ cargo nextest run -p lemma-engine --tests
 | `data_with_values_contract.rs` | Run data contract |
 | `typed_values.rs` | Typed value handling |
 | `show_suggestion_distinction.rs` | Show vs suggestions (`-> suggest` never commits) |
-| `show_only_rule_used_data.rs` | Show lists only data reachable from rules |
-| `show_with_bindings.rs` | Show + `with` / prefilled bindings |
+| `show_only_rule_used_data.rs` | Show lists declared data; needed_by_rules marks intake vs reuse |
+| `show_with_bindings.rs` | Show + `with` / fill bindings |
 | `show_unless_last_wins_pruning.rs` | Show after static unless collapse |
 | `show_unit_constraints.rs` | Show unit / suggest magnitudes |
 | `show_uncommittable_bounds.rs` | Show bounds that cannot commit |
@@ -165,6 +168,7 @@ cargo nextest run -p lemma-engine --tests
 
 | File | Focus |
 |------|--------|
+| `engine_snapshot.rs` | Binary snapshot round-trip, determinism, corrupt/stale bytes, wide N=5000 |
 | `load_wasm_planning_parity.rs` | WASM vs native planning parity |
 | `repro_finance_dual_slice_registry_uses.rs` | Registry + dual slice |
 | `resource_limits_test.rs` | Resource limits |

@@ -15,8 +15,18 @@ pub struct LemmaEngineResource(pub Mutex<Engine>);
 
 impl Resource for LemmaEngineResource {}
 
+pub struct InstallResource(pub Mutex<lemma::Install<'static>>);
+
+impl Resource for InstallResource {}
+
+fn registries() -> &'static lemma::Registries {
+    use std::sync::OnceLock;
+    static REGISTRIES: OnceLock<lemma::Registries> = OnceLock::new();
+    REGISTRIES.get_or_init(lemma::Registries::default)
+}
+
 fn load(env: Env, _info: Term) -> bool {
-    env.register::<LemmaEngineResource>().is_ok()
+    env.register::<LemmaEngineResource>().is_ok() && env.register::<InstallResource>().is_ok()
 }
 
 #[rustler::nif]
@@ -160,7 +170,7 @@ fn lemma_show<'a>(
         .filter(|s| !s.is_empty());
     match engine.show(repo, &spec, effective.as_ref()) {
         Ok(view) => {
-            let json = serde_json::to_vec(&view).map_err(|e| {
+            let json = serde_json::to_vec(&lemma::api::Show::from(&view)).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Show serialization failed: {}", e)))
             })?;
             let mut owned = OwnedBinary::new(json.len()).ok_or_else(|| {
@@ -255,7 +265,7 @@ fn lemma_run<'a>(
         explain,
     ) {
         Ok(response) => {
-            let json = serde_json::to_vec(&response).map_err(|e| {
+            let json = serde_json::to_vec(&lemma::api::Response::from(&response)).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Response serialization failed: {}", e)))
             })?;
             let mut owned = OwnedBinary::new(json.len()).ok_or_else(|| {
@@ -308,8 +318,6 @@ fn lemma_update<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
     repository: Option<String>,
-    spec_name: String,
-    effective: Option<String>,
     code: String,
     attribute: Option<String>,
 ) -> NifResult<Term<'a>> {
@@ -317,12 +325,6 @@ fn lemma_update<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    let effective_dt = match effective {
-        None => None,
-        Some(s) => Some(s.parse::<DateTimeValue>().map_err(|e| {
-            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
-        })?),
-    };
     let repo = repository
         .as_deref()
         .map(str::trim)
@@ -337,7 +339,7 @@ fn lemma_update<'a>(
             rustler::Error::RaiseTerm(Box::new(format!("update: label '{label}': {e}")))
         })?,
     };
-    match engine.update(repo, &spec_name, effective_dt.as_ref(), source_type, code) {
+    match engine.update(repo, code, source_type) {
         Ok(()) => Ok(rustler::Atom::from_str(env, "ok")?.encode(env)),
         Err(load_err) => {
             let list = error_encoding::encode_errors(env, &load_err.errors)?;
@@ -363,6 +365,44 @@ fn lemma_limits<'a>(
     owned.as_mut_slice().copy_from_slice(&json);
     let binary = rustler::Binary::from_owned(owned, env);
     Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
+}
+
+#[rustler::nif]
+fn lemma_snapshot<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+) -> NifResult<Term<'a>> {
+    let engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+    match engine.snapshot() {
+        Ok(bytes) => {
+            let mut owned = OwnedBinary::new(bytes.len())
+                .ok_or_else(|| rustler::Error::RaiseTerm(Box::new("out of memory".to_string())))?;
+            owned.as_mut_slice().copy_from_slice(&bytes);
+            let binary = rustler::Binary::from_owned(owned, env);
+            Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
+        }
+        Err(err) => {
+            let term = encode_error(env, &err)?;
+            Ok((rustler::Atom::from_str(env, "error")?, term).encode(env))
+        }
+    }
+}
+
+#[rustler::nif]
+fn lemma_from_snapshot<'a>(env: Env<'a>, bytes: Binary) -> NifResult<Term<'a>> {
+    match Engine::from_snapshot(bytes.as_slice()) {
+        Ok(engine) => {
+            let resource = ResourceArc::new(LemmaEngineResource(Mutex::new(engine)));
+            Ok((rustler::Atom::from_str(env, "ok")?, resource).encode(env))
+        }
+        Err(err) => {
+            let term = encode_error(env, &err)?;
+            Ok((rustler::Atom::from_str(env, "error")?, term).encode(env))
+        }
+    }
 }
 
 #[rustler::nif]
@@ -757,4 +797,164 @@ fn mcp_guide<'a>(env: Env<'a>, args_json: String) -> NifResult<Term<'a>> {
     mcp_tool_result(env, lemma::mcp::guide(&args))
 }
 
+#[rustler::nif]
+fn lemma_install_start<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+    repository: String,
+) -> NifResult<Term<'a>> {
+    let limits = {
+        let engine = resource
+            .0
+            .lock()
+            .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+        engine.limits().clone()
+    };
+    let (install, step) = lemma::Install::start(registries(), &repository, limits);
+    encode_install_step(env, step, InstallCarrier::New(install))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lemma_install_respond<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<InstallResource>,
+    response: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let transport = decode_transport_result(response)
+        .map_err(|msg| rustler::Error::RaiseTerm(Box::new(msg)))?;
+    let step = {
+        let mut install = resource.0.lock().map_err(|_| {
+            rustler::Error::RaiseTerm(Box::new("Install lock poisoned".to_string()))
+        })?;
+        install.respond(transport)
+    };
+    encode_install_step(env, step, InstallCarrier::Existing(resource))
+}
+
+enum InstallCarrier {
+    New(lemma::Install<'static>),
+    Existing(ResourceArc<InstallResource>),
+}
+
+fn encode_install_step<'a>(
+    env: Env<'a>,
+    step: lemma::InstallStep,
+    carrier: InstallCarrier,
+) -> NifResult<Term<'a>> {
+    match step {
+        lemma::InstallStep::Fetch(fetch) => {
+            let resource = match carrier {
+                InstallCarrier::New(install) => {
+                    ResourceArc::new(InstallResource(Mutex::new(install)))
+                }
+                InstallCarrier::Existing(resource) => resource,
+            };
+            let headers: Vec<(String, String)> = fetch
+                .headers
+                .into_iter()
+                .map(|h| (h.name, h.value))
+                .collect();
+            let fetch_atom = rustler::Atom::from_str(env, "fetch")?;
+            Ok((fetch_atom, fetch.url, headers, resource).encode(env))
+        }
+        lemma::InstallStep::Finished(Ok(result)) => {
+            let json = serde_json::to_string(&result).map_err(|e| {
+                rustler::Error::RaiseTerm(Box::new(format!(
+                    "BUG: RepositoryInstallResult serialize failed: {e}"
+                )))
+            })?;
+            let finished = rustler::Atom::from_str(env, "finished")?;
+            Ok((finished, (atom::ok(), json)).encode(env))
+        }
+        lemma::InstallStep::Finished(Err(error)) => {
+            let list = error_encoding::encode_errors(env, std::slice::from_ref(&error))?;
+            let finished = rustler::Atom::from_str(env, "finished")?;
+            Ok((finished, (atom::error(), list)).encode(env))
+        }
+    }
+}
+
+fn decode_transport_result(
+    term: Term,
+) -> Result<Result<lemma::HttpResponse, lemma::TransportFailure>, String> {
+    if let Ok((tag, status, headers, body)) =
+        term.decode::<(rustler::Atom, u16, Vec<(String, String)>, rustler::Binary)>()
+    {
+        if tag == atom::ok() {
+            let body = match std::str::from_utf8(body.as_slice()) {
+                Ok(s) => s.to_owned(),
+                Err(_) => {
+                    return Ok(Err(lemma::TransportFailure {
+                        message: "response body is not valid UTF-8".to_string(),
+                    }));
+                }
+            };
+            let headers = headers
+                .into_iter()
+                .map(|(name, value)| lemma::Header { name, value })
+                .collect();
+            return Ok(Ok(lemma::HttpResponse {
+                status,
+                headers,
+                body,
+            }));
+        }
+    }
+    if let Ok((tag, status, headers, body)) =
+        term.decode::<(rustler::Atom, u16, Vec<(String, String)>, String)>()
+    {
+        if tag == atom::ok() {
+            let headers = headers
+                .into_iter()
+                .map(|(name, value)| lemma::Header { name, value })
+                .collect();
+            return Ok(Ok(lemma::HttpResponse {
+                status,
+                headers,
+                body,
+            }));
+        }
+    }
+    if let Ok((tag, message)) = term.decode::<(rustler::Atom, String)>() {
+        if tag == atom::error() {
+            return Ok(Err(lemma::TransportFailure { message }));
+        }
+    }
+    Err("install respond: expected {:ok, status, headers, body} or {:error, message}".to_string())
+}
+
 rustler::init!("Elixir.Lemma.Native", load = load);
+
+#[cfg(test)]
+mod tests {
+    use lemma::{Install, Registries};
+
+    #[test]
+    fn install_rejects_empty_id() {
+        let transport = lemma::__test_support::FixtureTransport::bundled();
+        let registries = Registries::default();
+        let err = Install::run(
+            &registries,
+            "   ",
+            &transport,
+            lemma::ResourceLimits::default(),
+        )
+        .expect_err("empty id");
+        assert_eq!(err.kind(), lemma::ErrorKind::Registry);
+    }
+
+    #[test]
+    fn install_fixture_countries() {
+        let transport = lemma::__test_support::FixtureTransport::bundled();
+        let registries = Registries::default();
+        let result = Install::run(
+            &registries,
+            "@iso/countries",
+            &transport,
+            lemma::ResourceLimits::default(),
+        )
+        .expect("install");
+        assert_eq!(result.id, "@iso/countries");
+        assert!(result.source.contains("spec alpha2"));
+    }
+}

@@ -2,12 +2,16 @@ package com.lemmabase.lemma;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -24,59 +28,78 @@ final class NativeLibraryCacheTest {
   }
 
   @Test
-  void preExistingCacheFileIsReused(@TempDir Path tempDir) throws IOException {
+  void matchingContentHashReusesCacheFile(@TempDir Path tempDir) throws Exception {
+    byte[] resourceBytes = readResource(RESOURCE_PATH);
+    String hash = sha256Hex(resourceBytes);
     Path cacheRoot = tempDir.resolve("cache");
-    Path cacheDir = cacheRoot.resolve("lemma-jni").resolve(VERSION + "-" + TRIPLE);
+    Path cacheDir =
+        cacheRoot.resolve("lemma-jni").resolve(VERSION + "-" + TRIPLE).resolve(hash);
     Files.createDirectories(cacheDir);
     Path existingLib = cacheDir.resolve(LIB_NAME);
-    byte[] existingContent = new byte[] {0x7f, 'E', 'L', 'F', 9, 9, 9, 9};
-    Files.write(existingLib, existingContent);
-    FileTime originalModified = Files.getLastModifiedTime(existingLib);
+    Files.write(existingLib, resourceBytes);
 
     Path result = Native.extractToCache(RESOURCE_PATH, TRIPLE, LIB_NAME, VERSION, cacheRoot);
 
-    assertEquals(existingLib, result, "should return existing path");
-    assertEquals(
-        originalModified,
-        Files.getLastModifiedTime(result),
-        "should not modify existing file");
-    assertArrayEquals(
-        existingContent, Files.readAllBytes(result), "should keep original content");
+    assertEquals(existingLib, result);
+    assertArrayEquals(resourceBytes, Files.readAllBytes(result));
   }
 
   @Test
-  void cachePathStructureIsCorrect(@TempDir Path tempDir) throws IOException {
+  void staleVersionOnlyCacheIsIgnored(@TempDir Path tempDir) throws Exception {
+    byte[] resourceBytes = readResource(RESOURCE_PATH);
     Path cacheRoot = tempDir.resolve("cache");
-    Path cacheDir = cacheRoot.resolve("lemma-jni").resolve(VERSION + "-" + TRIPLE);
-    Files.createDirectories(cacheDir);
-    Path existingLib = cacheDir.resolve(LIB_NAME);
-    Files.write(existingLib, new byte[] {1, 2, 3});
+    Path staleDir = cacheRoot.resolve("lemma-jni").resolve(VERSION + "-" + TRIPLE);
+    Files.createDirectories(staleDir);
+    Path staleLib = staleDir.resolve(LIB_NAME);
+    Files.write(staleLib, new byte[] {0x7f, 'E', 'L', 'F', 9, 9, 9, 9});
 
     Path result = Native.extractToCache(RESOURCE_PATH, TRIPLE, LIB_NAME, VERSION, cacheRoot);
 
-    Path expectedPath = cacheRoot.resolve("lemma-jni").resolve(VERSION + "-" + TRIPLE).resolve(LIB_NAME);
-    assertEquals(expectedPath, result, "cache path should follow version-triple structure");
-    assertTrue(result.startsWith(cacheRoot), "result should be under cache root");
+    assertNotEquals(staleLib, result);
+    assertArrayEquals(resourceBytes, Files.readAllBytes(result));
+    assertTrue(result.toString().contains(sha256Hex(resourceBytes)));
   }
 
   @Test
-  void differentVersionsUseDifferentCachePaths(@TempDir Path tempDir) throws IOException {
+  void cachePathIncludesContentHash(@TempDir Path tempDir) throws Exception {
+    byte[] resourceBytes = readResource(RESOURCE_PATH);
+    String hash = sha256Hex(resourceBytes);
+    Path cacheRoot = tempDir.resolve("cache");
+
+    Path result = Native.extractToCache(RESOURCE_PATH, TRIPLE, LIB_NAME, VERSION, cacheRoot);
+
+    Path expected =
+        cacheRoot
+            .resolve("lemma-jni")
+            .resolve(VERSION + "-" + TRIPLE)
+            .resolve(hash)
+            .resolve(LIB_NAME);
+    assertEquals(expected, result);
+    assertTrue(result.startsWith(cacheRoot));
+  }
+
+  @Test
+  void differentVersionsUseDifferentCachePaths(@TempDir Path tempDir) throws Exception {
     Path cacheRoot = tempDir.resolve("cache");
     String version1 = "1.0.0";
     String version2 = "2.0.0";
 
-    Path cache1 = cacheRoot.resolve("lemma-jni").resolve(version1 + "-" + TRIPLE);
-    Path cache2 = cacheRoot.resolve("lemma-jni").resolve(version2 + "-" + TRIPLE);
-    Files.createDirectories(cache1);
-    Files.createDirectories(cache2);
-    Files.write(cache1.resolve(LIB_NAME), new byte[] {1});
-    Files.write(cache2.resolve(LIB_NAME), new byte[] {2});
-
     Path result1 = Native.extractToCache(RESOURCE_PATH, TRIPLE, LIB_NAME, version1, cacheRoot);
     Path result2 = Native.extractToCache(RESOURCE_PATH, TRIPLE, LIB_NAME, version2, cacheRoot);
 
-    assertTrue(!result1.equals(result2), "different versions should use different paths");
-    assertArrayEquals(new byte[] {1}, Files.readAllBytes(result1));
-    assertArrayEquals(new byte[] {2}, Files.readAllBytes(result2));
+    assertNotEquals(result1, result2);
+    assertTrue(result1.toString().contains(version1));
+    assertTrue(result2.toString().contains(version2));
+  }
+
+  private static byte[] readResource(String path) throws IOException {
+    try (InputStream in = NativeLibraryCacheTest.class.getClassLoader().getResourceAsStream(path)) {
+      assertTrue(in != null, "test resource missing: " + path);
+      return in.readAllBytes();
+    }
+  }
+
+  private static String sha256Hex(byte[] bytes) throws NoSuchAlgorithmException {
+    return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
   }
 }

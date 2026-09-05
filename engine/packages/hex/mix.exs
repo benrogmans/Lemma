@@ -1,7 +1,7 @@
 defmodule Lemma.MixProject do
   use Mix.Project
 
-  @version "0.9.8"
+  @version "0.9.9"
   @source_url "https://github.com/lemma/lemma"
 
   def project do
@@ -47,6 +47,7 @@ defmodule Lemma.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:req, "~> 0.5"},
       {:rustler_precompiled, "~> 0.9"},
       {:rustler, "~> 0.38", optional: true},
       {:ex_doc, "~> 0.40.3", only: :dev, runtime: false}

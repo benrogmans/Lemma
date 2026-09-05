@@ -48,14 +48,7 @@ fn rule_type(response: &lemma::Response, rule: &str) -> Arc<lemma::LemmaType> {
         .get(rule)
         .unwrap_or_else(|| panic!("no rule '{rule}'"));
     assert!(!rr.vetoed, "rule '{rule}' vetoed: {:?}", rr.veto_reason);
-    rr.explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .expect("value")
-        .lemma_type
-        .clone()
+    Arc::clone(&rr.rule.rule_type)
 }
 
 #[test]

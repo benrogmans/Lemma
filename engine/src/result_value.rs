@@ -1,18 +1,22 @@
-//! API value for a rule result, `ShowData.prefilled`, or `ShowData.suggestion`.
+//! API value for a rule result, `ShowData.fill`, or `ShowData.suggestion`.
 //!
 //! This is the single API-facing value representation shared by all three sites, expanded
-//! into every declared unit for measure/ratio. It sits at the crate root (not under
+//! into every declared unit for measure/ratio on data inputs, and into every unit in the
+//! result type's family for rule results. It sits at the crate root (not under
 //! `evaluation/`) because `planning::execution_plan::ShowData` needs it too, and planning
 //! must not import evaluation. The plan/eval-internal representation is the canonical
 //! `planning::semantics::LiteralValue`; this module is the boundary between the two.
 
-use crate::computation::rational::{checked_div, checked_mul, NumericFailure};
+use crate::computation::rational::{
+    checked_div, checked_mul, decimal_to_display_str, NumericFailure,
+};
 use crate::literals::rational_from_parsed_decimal;
 use crate::planning::semantics::{
-    range_element_type_specification, semantic_calendar_unit_from_measure_signature, LemmaType,
-    LiteralUnitMapFailure, LiteralValue, SemanticDateTime, SemanticTime, TypeSpecification,
-    ValueKind,
+    format_decimal_for_api, range_element_type_specification, ratio_element_type_for_api,
+    semantic_calendar_unit_from_measure_type, LemmaType, LiteralUnitMapFailure, LiteralValue,
+    SemanticDateTime, SemanticTime, TypeSpecification, UnitFactorSource, ValueKind,
 };
+use crate::planning::unit_family::{declared_bare_names_only, FamilyUnitCatalog, FamilyUnitEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -38,7 +42,7 @@ pub struct RangeResult {
 }
 
 /// API value shared by flattened [`crate::evaluation::response::RuleResult`],
-/// `ShowData.prefilled`, and `ShowData.suggestion`.
+/// `ShowData.fill`, and `ShowData.suggestion`.
 ///
 /// When present: always `display` (from [`LiteralValue::display_value`]), plus exactly
 /// one typed field for a non-range value; `range` is set instead for a range value, and
@@ -47,25 +51,15 @@ pub struct RangeResult {
 pub struct RuleResultValue {
     /// Engine-rendered string for UI (`LiteralValue::display_value`). Present whenever
     /// this value is present, including range endpoints.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measure: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ratio: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boolean: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<SemanticDateTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<SemanticTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<CalendarResult>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<Box<RangeResult>>,
 }
 
@@ -75,6 +69,14 @@ pub enum RuleResultValueFailure {
     DecimalLimit,
     NumericOverflow,
     OutOfMemory,
+}
+
+/// Which units to expand when building a [`RuleResultValue`] from a measure or ratio literal.
+pub(crate) enum UnitExpansion<'a> {
+    /// Show data fill/suggestion: units declared on `lemma_type` only.
+    Declared,
+    /// Rule results: precomputed family entry from the plan catalog.
+    Family(&'a FamilyUnitEntry),
 }
 
 /// Human-readable veto message for a [`RuleResultValueFailure`].
@@ -127,57 +129,84 @@ fn map_literal_unit_map_failure(failure: LiteralUnitMapFailure) -> RuleResultVal
     }
 }
 
-fn measure_to_unit_map(
-    literal: &LiteralValue,
-    result_type: &LemmaType,
-) -> Result<BTreeMap<String, String>, RuleResultValueFailure> {
-    result_type
-        .measure_literal_in_all_units(literal)
-        .map_err(map_literal_unit_map_failure)
-}
-
-fn ratio_to_unit_map(
-    literal: &LiteralValue,
-    result_type: &LemmaType,
-) -> Result<BTreeMap<String, String>, RuleResultValueFailure> {
-    result_type
-        .ratio_literal_in_all_units(literal)
-        .map_err(map_literal_unit_map_failure)
-}
-
 fn element_type_from_range_rule(rule_type: &LemmaType) -> Option<LemmaType> {
     range_element_type_specification(&rule_type.specifications).map(LemmaType::primitive)
 }
 
-/// A range endpoint uses its own declared type when it carries one
-/// (unit-scoped range endpoints), falling back to the range's element type otherwise.
-fn range_endpoint_type(endpoint: &LiteralValue, range_element_type: &LemmaType) -> LemmaType {
-    if endpoint.lemma_type.measure_unit_names().is_some() {
-        endpoint.lemma_type.as_ref().clone()
-    } else {
-        range_element_type.clone()
+/// A range endpoint uses the range's element type (unit identity lives on the
+/// range / endpoint result types, not on bare [`LiteralValue`]).
+fn range_endpoint_type(range_element_type: &LemmaType) -> LemmaType {
+    range_element_type.clone()
+}
+
+fn unit_names_for_expansion(
+    lemma_type: &LemmaType,
+    expansion: &UnitExpansion<'_>,
+    catalog: Option<&FamilyUnitCatalog>,
+) -> Vec<String> {
+    match expansion {
+        UnitExpansion::Declared => declared_bare_names_only(lemma_type),
+        UnitExpansion::Family(_) => catalog
+            .expect("BUG: family expansion requires FamilyUnitCatalog")
+            .ordered_bare_names_for_type(lemma_type),
     }
 }
 
+fn expansion_for_type<'a>(
+    lemma_type: &LemmaType,
+    catalog: Option<&'a FamilyUnitCatalog>,
+) -> UnitExpansion<'a> {
+    let Some(catalog) = catalog else {
+        return UnitExpansion::Declared;
+    };
+    match catalog.entry_for_type(lemma_type) {
+        Some(entry) => UnitExpansion::Family(entry),
+        // No family name (anonymous/calendar) or result type outside this plan's
+        // expression-scope unit index: expand declared units only.
+        None => UnitExpansion::Declared,
+    }
+}
+
+fn measure_factor_source<'a>(
+    lemma_type: &'a LemmaType,
+    expansion: &'a UnitExpansion<'a>,
+) -> UnitFactorSource<'a> {
+    match expansion {
+        UnitExpansion::Declared => UnitFactorSource::DeclaredOn(lemma_type),
+        UnitExpansion::Family(entry) => UnitFactorSource::Merged {
+            measure: entry.merged_measure_units.as_ref(),
+            ratio: entry.merged_ratio_units.as_ref(),
+        },
+    }
+}
+
+fn ratio_factor_source<'a>(
+    lemma_type: &'a LemmaType,
+    expansion: &'a UnitExpansion<'a>,
+) -> UnitFactorSource<'a> {
+    measure_factor_source(lemma_type, expansion)
+}
+
 /// Build a [`RuleResultValue`] from a canonical [`LiteralValue`].
-///
-/// Measure and ratio expand into every unit declared on `rule_type`. A range value
-/// builds both endpoints; an endpoint that is itself a range is a planning bug
-/// (ranges do not nest) and panics rather than being silently flattened.
-pub fn rule_result_value_from_literal(
+pub(crate) fn result_value_from_literal(
     literal: &LiteralValue,
-    rule_type: &LemmaType,
+    lemma_type: &LemmaType,
+    expansion: &UnitExpansion<'_>,
+    catalog: Option<&FamilyUnitCatalog>,
 ) -> Result<RuleResultValue, RuleResultValueFailure> {
     match &literal.value {
         ValueKind::Range(from, to) => {
             let endpoint_type =
-                element_type_from_range_rule(rule_type).unwrap_or_else(|| rule_type.clone());
-            let from_type = range_endpoint_type(from, &endpoint_type);
-            let to_type = range_endpoint_type(to, &endpoint_type);
-            let from_value = rule_result_value_from_range_endpoint(from, &from_type)?;
-            let to_value = rule_result_value_from_range_endpoint(to, &to_type)?;
+                element_type_from_range_rule(lemma_type).unwrap_or_else(|| lemma_type.clone());
+            let from_type = range_endpoint_type(&endpoint_type);
+            let to_type = range_endpoint_type(&endpoint_type);
+            let from_expansion = expansion_for_type(&from_type, catalog);
+            let to_expansion = expansion_for_type(&to_type, catalog);
+            let from_value =
+                result_value_from_range_endpoint(from, &from_type, &from_expansion, catalog)?;
+            let to_value = result_value_from_range_endpoint(to, &to_type, &to_expansion, catalog)?;
             Ok(RuleResultValue {
-                display: Some(literal.display_value()),
+                display: Some(literal.display_value_with_type(lemma_type)),
                 range: Some(Box::new(RangeResult {
                     from: from_value,
                     to: to_value,
@@ -185,32 +214,56 @@ pub fn rule_result_value_from_literal(
                 ..RuleResultValue::default()
             })
         }
-        _ => rule_result_value_from_non_range_literal(literal, rule_type),
+        _ => result_value_from_non_range_literal(literal, lemma_type, expansion, catalog),
     }
 }
 
-fn rule_result_value_from_range_endpoint(
+/// Build a [`RuleResultValue`] from a canonical [`LiteralValue`] for a rule result.
+///
+/// Measure and ratio expand into every unit in the result type's family.
+pub(crate) fn rule_result_value_from_literal(
+    literal: &LiteralValue,
+    rule_type: &LemmaType,
+    catalog: &FamilyUnitCatalog,
+) -> Result<RuleResultValue, RuleResultValueFailure> {
+    let expansion = expansion_for_type(rule_type, Some(catalog));
+    result_value_from_literal(literal, rule_type, &expansion, Some(catalog))
+}
+
+/// Build a [`RuleResultValue`] using only units declared on `lemma_type` (Show data fill/suggestion).
+pub fn type_scoped_result_value_from_literal(
+    literal: &LiteralValue,
+    lemma_type: &LemmaType,
+) -> Result<RuleResultValue, RuleResultValueFailure> {
+    let expansion = UnitExpansion::Declared;
+    result_value_from_literal(literal, lemma_type, &expansion, None)
+}
+
+fn result_value_from_range_endpoint(
     endpoint: &LiteralValue,
     endpoint_type: &LemmaType,
+    expansion: &UnitExpansion<'_>,
+    catalog: Option<&FamilyUnitCatalog>,
 ) -> Result<RuleResultValue, RuleResultValueFailure> {
     if matches!(&endpoint.value, ValueKind::Range(_, _)) {
         panic!("BUG: range endpoint must not itself be a range");
     }
-    rule_result_value_from_non_range_literal(endpoint, endpoint_type)
+    result_value_from_non_range_literal(endpoint, endpoint_type, expansion, catalog)
 }
 
-fn rule_result_value_from_non_range_literal(
+fn result_value_from_non_range_literal(
     literal: &LiteralValue,
     result_type: &LemmaType,
+    expansion: &UnitExpansion<'_>,
+    catalog: Option<&FamilyUnitCatalog>,
 ) -> Result<RuleResultValue, RuleResultValueFailure> {
-    let display = Some(literal.display_value());
     match &literal.value {
-        ValueKind::Measure(rational, sig) if literal.lemma_type.is_calendar_like() => {
-            let unit = semantic_calendar_unit_from_measure_signature(sig);
-            let value = literal
-                .lemma_type
+        ValueKind::Measure(rational) if result_type.is_calendar_like() => {
+            let unit = semantic_calendar_unit_from_measure_type(result_type);
+            let value = result_type
                 .try_rational_as_decimal_string(rational)
                 .map_err(map_numeric_to_rule_result_value_failure)?;
+            let display = Some(literal.display_value_with_type(result_type));
             Ok(RuleResultValue {
                 display,
                 calendar: Some(CalendarResult {
@@ -220,49 +273,106 @@ fn rule_result_value_from_non_range_literal(
                 ..RuleResultValue::default()
             })
         }
-        ValueKind::Measure(_, _) => Ok(RuleResultValue {
-            display,
-            measure: Some(measure_to_unit_map(literal, result_type)?),
-            ..RuleResultValue::default()
-        }),
-        ValueKind::Ratio(_, _) => Ok(RuleResultValue {
-            display,
-            ratio: Some(ratio_to_unit_map(literal, result_type)?),
-            ..RuleResultValue::default()
-        }),
-        ValueKind::Number(rational) => {
-            let number = result_type
-                .try_rational_as_decimal_string(rational)
-                .map_err(map_numeric_to_rule_result_value_failure)?;
+        ValueKind::Measure(_) => {
+            let display = Some(literal.display_value_with_type(result_type));
+            let unit_names = unit_names_for_expansion(result_type, expansion, catalog);
+            let unit_name_refs: Vec<&str> = unit_names.iter().map(String::as_str).collect();
             Ok(RuleResultValue {
                 display,
-                number: Some(number),
+                measure: Some(
+                    result_type
+                        .measure_literal_unit_map(
+                            literal,
+                            &unit_name_refs,
+                            measure_factor_source(result_type, expansion),
+                        )
+                        .map_err(map_literal_unit_map_failure)?,
+                ),
                 ..RuleResultValue::default()
             })
         }
-        ValueKind::Boolean(b) => Ok(RuleResultValue {
-            display,
-            boolean: Some(*b),
-            ..RuleResultValue::default()
-        }),
-        ValueKind::Text(s) => Ok(RuleResultValue {
+        ValueKind::Ratio(_) => {
+            let display = Some(literal.display_value_with_type(result_type));
+            let unit_names = unit_names_for_expansion(result_type, expansion, catalog);
+            let unit_name_refs: Vec<&str> = unit_names.iter().map(String::as_str).collect();
+            Ok(RuleResultValue {
+                display,
+                ratio: Some(
+                    result_type
+                        .ratio_literal_unit_map(
+                            literal,
+                            &unit_name_refs,
+                            ratio_factor_source(result_type, expansion),
+                        )
+                        .map_err(map_literal_unit_map_failure)?,
+                ),
+                ..RuleResultValue::default()
+            })
+        }
+        other => scalar_result_value(result_type, other),
+    }
+}
+
+fn scalar_result_value(
+    result_type: &LemmaType,
+    value: &ValueKind,
+) -> Result<RuleResultValue, RuleResultValueFailure> {
+    match value {
+        ValueKind::Number(rational) => {
+            let decimal = rational
+                .try_to_decimal()
+                .map_err(map_numeric_to_rule_result_value_failure)?;
+            let api_string = format_decimal_for_api(decimal, result_type.decimal_places());
+            let display_string = decimal_to_display_str(&decimal);
+            Ok(RuleResultValue {
+                display: Some(display_string),
+                number: Some(api_string),
+                ..RuleResultValue::default()
+            })
+        }
+        ValueKind::Boolean(b) => {
+            let display = Some(value.to_string());
+            Ok(RuleResultValue {
+                display,
+                boolean: Some(*b),
+                ..RuleResultValue::default()
+            })
+        }
+        ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) => {
+            let display = Some(value.to_string());
+            Ok(scalar_result_value_non_numeric(result_type, display, value))
+        }
+        ValueKind::Measure(_) | ValueKind::Ratio(_) => {
+            unreachable!("BUG: measure and ratio must be handled by caller")
+        }
+        ValueKind::Range(_, _) => {
+            unreachable!("BUG: range must be handled by result_value_from_literal")
+        }
+    }
+}
+
+fn scalar_result_value_non_numeric(
+    _result_type: &LemmaType,
+    display: Option<String>,
+    value: &ValueKind,
+) -> RuleResultValue {
+    match value {
+        ValueKind::Text(s) => RuleResultValue {
             display,
             text: Some(s.clone()),
             ..RuleResultValue::default()
-        }),
-        ValueKind::Date(d) => Ok(RuleResultValue {
+        },
+        ValueKind::Date(d) => RuleResultValue {
             display,
             date: Some(d.clone()),
             ..RuleResultValue::default()
-        }),
-        ValueKind::Time(t) => Ok(RuleResultValue {
+        },
+        ValueKind::Time(t) => RuleResultValue {
             display,
             time: Some(t.clone()),
             ..RuleResultValue::default()
-        }),
-        ValueKind::Range(_, _) => {
-            unreachable!("BUG: range must be handled by rule_result_value_from_literal")
-        }
+        },
+        _ => unreachable!("BUG: scalar_result_value_non_numeric called with non-scalar type"),
     }
 }
 
@@ -291,33 +401,13 @@ fn literal_from_measure_map(
     let canonical = checked_mul(&rational, factor).unwrap_or_else(|failure| {
         panic!("BUG: measure canonicalization from RuleResultValue fields failed: {failure}")
     });
-    LiteralValue::measure_with_type(
-        canonical,
-        (*unit_name).to_string(),
-        Arc::new(rule_type.clone()),
-    )
+    LiteralValue::measure_with_type(canonical, Arc::new(rule_type.clone()))
 }
 
 fn literal_from_ratio_map(ratio: &BTreeMap<String, String>, rule_type: &LemmaType) -> LiteralValue {
-    let units = match &rule_type.specifications {
+    let ratio_type = ratio_element_type_for_api(rule_type);
+    let units = match &ratio_type.specifications {
         TypeSpecification::Ratio { units, .. } => units,
-        TypeSpecification::RatioRange { .. } => {
-            let element = range_element_type_specification(&rule_type.specifications)
-                .expect("BUG: ratio range rule type must have ratio element specification");
-            let TypeSpecification::Ratio { units, .. } = element else {
-                panic!("BUG: ratio range element spec must be Ratio");
-            };
-            return literal_from_ratio_map(
-                ratio,
-                &LemmaType::primitive(TypeSpecification::Ratio {
-                    minimum: None,
-                    maximum: None,
-                    decimals: None,
-                    units,
-                    help: String::new(),
-                }),
-            );
-        }
         _ => panic!(
             "BUG: ratio rule result type must be Ratio, got {}",
             rule_type.name()
@@ -335,7 +425,7 @@ fn literal_from_ratio_map(ratio: &BTreeMap<String, String>, rule_type: &LemmaTyp
     let canonical = checked_div(&display_rational, &unit.value).unwrap_or_else(|failure| {
         panic!("BUG: ratio canonicalization from RuleResultValue fields failed: {failure}")
     });
-    LiteralValue::ratio_with_type(canonical, None, Arc::new(rule_type.clone()))
+    LiteralValue::ratio_with_type(canonical, Arc::new(rule_type.clone()))
 }
 
 impl RuleResultValue {
@@ -355,13 +445,10 @@ impl RuleResultValue {
             return LiteralValue::range(left, right);
         }
 
-        let owned_rule_type = Arc::new(rule_type.clone());
         if let Some(b) = self.boolean {
-            return LiteralValue {
-                value: ValueKind::Boolean(b),
-                lemma_type: owned_rule_type,
-            };
+            return LiteralValue::from_bool(b);
         }
+        let owned_rule_type = Arc::new(rule_type.clone());
         if let Some(number) = &self.number {
             return LiteralValue::number_with_type_from_decimal(
                 decimal_from_api_string(number),
@@ -371,11 +458,7 @@ impl RuleResultValue {
         if let Some(calendar) = &self.calendar {
             let rational = rational_from_parsed_decimal(decimal_from_api_string(&calendar.value))
                 .expect("BUG: calendar rule result value must lift to rational");
-            return LiteralValue::measure_with_type(
-                rational,
-                calendar.unit.clone(),
-                owned_rule_type,
-            );
+            return LiteralValue::measure_with_type(rational, owned_rule_type);
         }
         if let Some(measure) = &self.measure {
             return literal_from_measure_map(measure, rule_type);
@@ -384,22 +467,13 @@ impl RuleResultValue {
             return literal_from_ratio_map(ratio, rule_type);
         }
         if let Some(date) = &self.date {
-            return LiteralValue {
-                value: ValueKind::Date(date.clone()),
-                lemma_type: owned_rule_type,
-            };
+            return LiteralValue::date_with_type(date.clone(), owned_rule_type);
         }
         if let Some(time) = &self.time {
-            return LiteralValue {
-                value: ValueKind::Time(time.clone()),
-                lemma_type: owned_rule_type,
-            };
+            return LiteralValue::time_with_type(time.clone(), owned_rule_type);
         }
         if let Some(text) = &self.text {
-            return LiteralValue {
-                value: ValueKind::Text(text.clone()),
-                lemma_type: owned_rule_type,
-            };
+            return LiteralValue::text_with_type(text.clone(), owned_rule_type);
         }
         panic!("BUG: rule result value fields cannot reconstruct literal");
     }

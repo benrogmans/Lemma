@@ -53,7 +53,7 @@ data hours_per_week: number
 rule within_limit: hours_per_week <= 48
 ```
 
-The right-hand side may be a text literal or an unquoted identifier (for example `v1.2.3`). The key `title`, when present, must be a text literal. Duplicate meta keys fail planning.
+The right-hand side is a literal. Duplicate meta keys fail planning.
 
 ### `data`
 
@@ -270,9 +270,9 @@ Planning **rejects** a reference that resolves to the **same** spec body, for ex
 `uses finance 2026-01-01`. Dependency cycles across temporal rows (for example 2026
 depending on 2027 while 2027 depends on 2026) are rejected as spec dependency cycles.
 
-### Registry references
+### LemmaBase references
 
-Registry references use the `@` prefix:
+LemmaBase repositories use the `@` prefix:
 
 ```lemma
 spec ledger_spec
@@ -303,15 +303,15 @@ uses inv: accounting invoice
 rule total: inv.amount
 ```
 
-`uses inv: accounting invoice` imports `invoice` from the `accounting` repository. Registry imports keep the `@` form (`uses iso: @iso/countries alpha2`). See [Composing specs: Repositories](../learn/composing_specs.md#repositories).
+`uses inv: accounting invoice` imports `invoice` from the `accounting` repository. LemmaBase imports keep the `@` form (`uses iso: @iso/countries alpha2`). See [Composing specs: Repositories](../learn/composing_specs.md#repositories).
 
 ### Unpinned vs pinned imports
 
 An **unpinned** import (`uses p: policy`) follows the dependency's timeline: planning may split the consumer into temporal slices at dependency `effective_from` boundaries, and resolved values can change when the dependency gains a new row. A **pinned** import (`uses f: finance 2025-06-01`) freezes that edge (and its transitive imports) to the body active at that instant. Coverage gaps and interface compatibility across slices are checked at planning: details in [Composing specs](../learn/composing_specs.md#unpinned-vs-pinned-uses).
 
-### `uses` and qualified parents
+### `uses` and imported types
 
-Bring another spec into scope with `uses <alias>: <target>` (optional effective datetime on the target). Reference data defined there with a qualified parent: `data x: alias.name`. Temporal pins belong on the `uses` line.
+Bring another spec into scope with `uses <alias>: <target>` (optional effective datetime on the target). Reference data types defined there as a parent type, either qualified (`data x: alias.name`) or bare (`data x: name`) when the name is unambiguous across all imports. When two or more imports export the same type name, qualify to disambiguate. Temporal pins belong on the `uses` line.
 
 ```lemma
 spec base_types
@@ -584,7 +584,7 @@ rule span_days: ((2024-02-15...2024-03-15) + 1 day) as day
 
 Date endpoints can be built from separate `date` values: `hire_date...today`.
 
-For duration quantities, import SI types with `uses lemma units` so literals like `8 hour` and `7 day` resolve (`units.duration`). Calendar periods (`25 year`, `18 year...67 year`) use `units.calendar`.
+For duration quantities, import SI types with `uses lemma units` so literals like `8 hour` and `7 day` resolve. Declare duration slots with `data elapsed: duration` (or qualified `units.duration`). Calendar periods (`25 year`, `18 year...67 year`) use `calendar` (or `units.calendar`).
 
 ## Data
 
@@ -592,7 +592,7 @@ Every input slot and every named type is declared with `data`. The right-hand si
 
 ### Values
 
-A literal **prefills** the slot and Lemma infers the type. Callers may override at evaluation time; interactive UIs typically skip review for prefilled fields (including literal `uses` block `  -> with` bindings on templates):
+A literal **fills** the slot and Lemma infers the type. Callers may override at evaluation time; interactive UIs typically skip review for filled fields (including literal `uses` block `  -> with` bindings on templates):
 
 ```lemma
 spec employment
@@ -612,7 +612,7 @@ data salary:     75_000
 
 ### Open inputs
 
-Declare a type without a value to leave the slot open for evaluation. Add constraints on the same declaration. Use `-> suggest` for a **suggestion** (UIs may offer it; Enter to accept); this differs from a literal prefilled value or a `uses` block `-> with path: literal` binding:
+Declare a type without a value to leave the slot open for evaluation. Add constraints on the same declaration. Use `-> fill` to set a committed value on a typed slot (same evaluation behavior as a literal; callers may override). Use `-> suggest` for a **suggestion** (UIs may offer it; Enter to accept); suggestions do not commit — the engine still requires the value unless `-> fill` or a literal is present. `-> fill` and `-> suggest` cannot appear on the same declaration.
 
 ```lemma
 spec loan_application
@@ -622,6 +622,7 @@ data birth_date: date
 data rating: number
   -> minimum 0
   -> maximum 100
+  -> fill 50
 
 data status: text
   -> option "active"
@@ -634,9 +635,9 @@ data amount: measure
   -> decimals 2
 ```
 
-A literal on the right-hand side prefills the slot. A type alone leaves it open. `-> suggest` is only a suggestion for callers or UIs; it does not prefill and so the  engine still requires the value to be provided. 
+A literal on the right-hand side fills the slot. A type alone leaves it open. `-> fill <value>` fills a typed slot. `-> suggest` is only a suggestion for callers or UIs; it does not fill and so the engine still requires the value to be provided.
 
-Constraints such as `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, and `-> help` depend on the primitive: see [Data commands](#data-commands). At evaluation, an open input with no supplied value yields a missing-data veto when the rule needs it; a bad value (wrong type, failed constraint, disallowed option, excess decimals) vetoes that data. Duplicate names that canonicalize to the same identifier (for example `Age` and `age`) are a request error.
+Constraints such as `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> fill`, `-> suggest`, and `-> help` depend on the primitive: see [Data commands](#data-commands). At evaluation, an open input with no supplied value yields a missing-data veto when the rule needs it; a bad value (wrong type, failed constraint, disallowed option, excess decimals) vetoes that data. Duplicate names that canonicalize to the same identifier (for example `Age` and `age`) are a request error.
 
 ### Named types
 
@@ -714,6 +715,7 @@ Each `->` row on a `data` declaration is a **data command**. Built-in primitives
 - `minimum <value>` - Set minimum value
 - `maximum <value>` - Set maximum value
 - `help "<text>"` - Add help text
+- `fill <value>` - Fill the slot with a value (committed; callers may override). Cannot combine with `suggest` on the same declaration
 - `suggest <value>` - Set suggestion value (UI hint; does not commit)
 
 **For** `ratio`**:**
@@ -722,6 +724,7 @@ Each `->` row on a `data` declaration is a **data command**. Built-in primitives
 - `minimum <value>` - Set minimum value
 - `maximum <value>` - Set maximum value
 - `help "<text>"` - Add help text
+- `fill <value>` - Fill the slot with a value (committed; callers may override). Cannot combine with `suggest` on the same declaration
 - `suggest <value>` - Set suggestion value (UI hint; does not commit)
 
 In the **show JSON**, `measure` and `ratio` types expose type-level `minimum` / `maximum` in **canonical** form (same as evaluation). Each `units[]` entry may also include `minimum`, `maximum`, and `suggestion` as magnitudes in that unit, so a UI can bind to them without converting on the client.
@@ -732,6 +735,7 @@ In the **show JSON**, `measure` and `ratio` types expose type-level `minimum` / 
 - `options "<value1>" "<value2>" ...` - Add multiple allowed options
 - `length <n>` - Exact string length
 - `help "<text>"` - Add help text
+- `fill "<value>"` - Fill the slot with a value (committed; callers may override). Cannot combine with `suggest` on the same declaration
 - `suggest "<value>"` - Set suggestion value (UI hint; does not commit)
 
 **For** `date` **and** `time`**:**
@@ -739,6 +743,7 @@ In the **show JSON**, `measure` and `ratio` types expose type-level `minimum` / 
 - `minimum <value>` - Minimum date/time
 - `maximum <value>` - Maximum date/time
 - `help "<text>"` - Add help text
+- `fill <value>` - Fill the slot with a value (committed; callers may override). Cannot combine with `suggest` on the same declaration
 - `suggest <value>` - Set suggestion value (UI hint; does not commit)
 
 **For** `date range`**,** `number range`**,** `measure range`**,** `time range`**, and** `ratio range`**:**
@@ -748,6 +753,7 @@ In the **show JSON**, `measure` and `ratio` types expose type-level `minimum` / 
 - `minimum <value>` - Minimum span width (see span table; not an endpoint envelope)
 - `maximum <value>` - Maximum span width
 - `help "<text>"` - Add help text
+- `fill <lo>...<hi>` - Fill the slot with an interval (half-open; committed). Cannot combine with `suggest` on the same declaration
 - `suggest <lo>...<hi>` - Suggested interval (half-open; UI hint)
 
 On ranges, `minimum` / `maximum` always mean **width**. Endpoint limits use `lower` / `upper`. Measure and ratio range bounds may use any declaring unit of the type (same mixed-unit model as scalar measure min/max). Date range width may be duration or calendar, but not both on one type; time range width is duration only.
@@ -757,6 +763,7 @@ On ranges, `minimum` / `maximum` always mean **width**. Endpoint limits use `low
 **For** `boolean`**:**
 
 - `help "<text>"` - Add help text
+- `fill <value>` - Fill the slot with a value (committed; callers may override). Cannot combine with `suggest` on the same declaration
 - `suggest <value>` - Set suggestion value (UI hint; does not commit)
 
 

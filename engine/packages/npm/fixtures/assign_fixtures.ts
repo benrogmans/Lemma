@@ -13,8 +13,14 @@
 
 import showMinimalJson from "../../../tests/fixtures/api/show_minimal.json";
 import sourceTypeVariantsJson from "../../../tests/fixtures/api/source_type_variants.json";
+import repositoryInstallResultJson from "../../../tests/fixtures/api/repository_install_result.json";
 
-import type { ListedSpec, Show, SourceType } from "../lemma";
+import type {
+  ListedSpec,
+  RepositoryInstallResult,
+  Show,
+  SourceType,
+} from "../lemma";
 
 const showMinimal = showMinimalJson as {
   spec: "sample";
@@ -59,8 +65,8 @@ const showMinimal = showMinimalJson as {
     };
   };
   meta: {
-    title: { literal: { text: "t" } };
-    author: { unquoted: "alice" };
+    title: { text: "t" };
+    author: { text: "alice" };
   };
 };
 
@@ -86,3 +92,9 @@ const volatileForm: SourceType = sourceTypeVariants.volatile;
 void pathForm;
 void dependencyForm;
 void volatileForm;
+
+const installResult: RepositoryInstallResult = repositoryInstallResultJson as {
+  source: string;
+  id: "@iso/countries";
+};
+void installResult;

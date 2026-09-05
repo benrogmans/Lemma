@@ -17,21 +17,317 @@ pub mod normalize;
 pub mod ordered_dispatch;
 pub mod semantics;
 pub mod spec_set;
+pub mod unit_family;
 pub mod unit_index;
 use crate::engine::Context;
 use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaRepository};
 use crate::Error;
 pub use execution_plan::ExecutionPlan;
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 pub use spec_set::LemmaSpecSet;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::unreachable;
+
+/// Canonical identity of one temporal spec set: `(repository, spec name)`.
+///
+/// `repository` is `None` for the workspace. Both components are canonicalized
+/// exactly as [`PlanStore`] canonicalizes its own keys, so a key built here always
+/// addresses the same entry the plans were stored under.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct SpecSetKey {
+    repository: Option<String>,
+    spec: String,
+}
+
+impl SpecSetKey {
+    pub(crate) fn new(repository: Option<&str>, spec: &str) -> Self {
+        Self {
+            repository: PlanStore::repo_key(repository),
+            spec: PlanStore::spec_key(spec),
+        }
+    }
+}
+
+impl std::fmt::Display for SpecSetKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.repository {
+            Some(repository) => write!(formatter, "{repository} {}", self.spec),
+            None => write!(formatter, "{}", self.spec),
+        }
+    }
+}
+
+/// One spec set a planning pass rebuilds, with the identity needed to address it in
+/// both the [`Context`] and a [`PlanStore`].
+///
+/// `repository` and `spec` are the identity as the context spells it, or as the caller
+/// spelled it for a spec set that this batch removed from the context.
+///
+/// `dirty_slices`: `None` means every temporal slice must be rebuilt; `Some` lists
+/// only the `effective_from` values whose bodies changed (structural add/remove of
+/// versions and reverse-edge consumers are always whole-set).
+pub(crate) struct ScopeMember {
+    key: SpecSetKey,
+    repository: Arc<LemmaRepository>,
+    spec: String,
+    dirty_slices: Option<HashSet<EffectiveDate>>,
+}
+
+/// The spec sets a planning pass rebuilds.
+///
+/// A spec set's execution plans are a function of its own spec versions plus the
+/// spec versions and temporal structure of every spec set reachable through its
+/// dependency edges (`uses` imports and qualified parent types, as extracted by
+/// [`discovery::dependency_edges`]). Mutating one spec set therefore invalidates
+/// that set and every set that transitively depends on it, and nothing else:
+/// plans outside the scope remain valid and are kept as they are.
+///
+/// Reverse edges are derived from the context on every pass rather than cached
+/// across passes. Edge resolution depends on global context state (`uses` aliases,
+/// repository qualifiers), so a cached reverse index could resolve differently than
+/// the forward pass and silently under-report consumers, leaving stale plans behind.
+/// Deriving the edges costs one cheap walk of the context per pass and cannot go
+/// stale.
+pub(crate) struct ReplanScope {
+    /// Sorted by [`SpecSetKey`], so a pass visits its members in an order determined
+    /// only by which spec sets are in scope, never by the order specs were loaded.
+    members: Vec<ScopeMember>,
+    keys: HashSet<SpecSetKey>,
+}
+
+impl ReplanScope {
+    /// Every listed set is fully dirty (first load / structural identity change).
+    #[cfg(test)]
+    pub(crate) fn from_changed_sets(
+        context: &Context,
+        changed: Vec<(Arc<LemmaRepository>, String)>,
+    ) -> Self {
+        let whole_set: HashSet<SpecSetKey> = changed
+            .iter()
+            .map(|(repository, spec)| SpecSetKey::new(repository.name.as_deref(), spec))
+            .collect();
+        let changed = changed
+            .into_iter()
+            .map(|(repository, spec)| (repository, spec, EffectiveDate::Origin))
+            .collect();
+        Self::from_changed(context, changed, whole_set)
+    }
+
+    /// `changed` plus every spec set that transitively depends on a changed one.
+    ///
+    /// Keys in `whole_set` rebuild every temporal slice. Other seed keys rebuild only
+    /// the `EffectiveDate`s listed in `changed`. Consumers reached via reverse edges
+    /// are always whole-set.
+    ///
+    /// A changed spec set need not be in `context`: this batch may have removed it.
+    /// Pinned edges (`uses dep 2025-06-01`) propagate dirtiness like any other, since
+    /// a pin fixes the resolution instant, not the pinned source text.
+    pub(crate) fn from_changed(
+        context: &Context,
+        changed: Vec<(Arc<LemmaRepository>, String, EffectiveDate)>,
+        whole_set: HashSet<SpecSetKey>,
+    ) -> Self {
+        let mut identities: HashMap<SpecSetKey, (Arc<LemmaRepository>, String)> = HashMap::new();
+        let mut consumers_of: HashMap<SpecSetKey, Vec<SpecSetKey>> = HashMap::new();
+        let mut worklist: Vec<SpecSetKey> = Vec::with_capacity(changed.len());
+        let mut seed_slices: HashMap<SpecSetKey, HashSet<EffectiveDate>> = HashMap::new();
+
+        for (repository, by_name) in context.repositories() {
+            for (spec_name, spec_set) in by_name {
+                let consumer = SpecSetKey::new(repository.name.as_deref(), spec_name);
+                identities.insert(
+                    consumer.clone(),
+                    (Arc::clone(repository), spec_name.clone()),
+                );
+                for spec in spec_set.iter_specs() {
+                    match discovery::dependency_edges(spec, repository, context) {
+                        Ok(edges) => {
+                            for edge in edges {
+                                consumers_of
+                                    .entry(SpecSetKey::new(
+                                        edge.dep_repository.name.as_deref(),
+                                        &edge.dep_name,
+                                    ))
+                                    .or_default()
+                                    .push(consumer.clone());
+                            }
+                        }
+                        // This spec set's dependencies are unknown, so it cannot be shown
+                        // to be unaffected. Replanning it surfaces the same edge errors
+                        // through the normal planning path.
+                        Err(_) => worklist.push(consumer.clone()),
+                    }
+                }
+            }
+        }
+
+        for (repository, spec, effective) in changed {
+            let key = SpecSetKey::new(repository.name.as_deref(), &spec);
+            identities
+                .entry(key.clone())
+                .or_insert_with(|| (Arc::clone(&repository), spec.clone()));
+            seed_slices
+                .entry(key.clone())
+                .or_default()
+                .insert(effective);
+            worklist.push(key);
+        }
+
+        let mut keys: HashSet<SpecSetKey> = HashSet::new();
+        let mut consumer_keys: HashSet<SpecSetKey> = HashSet::new();
+        while let Some(key) = worklist.pop() {
+            if !keys.insert(key.clone()) {
+                continue;
+            }
+            if let Some(consumers) = consumers_of.get(&key) {
+                for consumer in consumers {
+                    consumer_keys.insert(consumer.clone());
+                    worklist.push(consumer.clone());
+                }
+            }
+        }
+
+        let mut members: Vec<ScopeMember> = keys
+            .iter()
+            .map(|key| {
+                let (repository, spec) = identities.get(key).unwrap_or_else(|| {
+                    panic!("BUG: spec set '{key}' entered the replan scope without an identity")
+                });
+                let dirty_slices = if whole_set.contains(key)
+                    || consumer_keys.contains(key)
+                    || !seed_slices.contains_key(key)
+                {
+                    None
+                } else {
+                    Some(seed_slices.get(key).cloned().expect(
+                        "BUG: seed_slices.contains_key was true in the complementary branch",
+                    ))
+                };
+                ScopeMember {
+                    key: key.clone(),
+                    repository: Arc::clone(repository),
+                    spec: spec.clone(),
+                    dirty_slices,
+                }
+            })
+            .collect();
+        members.sort_by(|left, right| left.key.cmp(&right.key));
+
+        Self { members, keys }
+    }
+
+    pub(crate) fn contains(&self, repository: Option<&str>, spec: &str) -> bool {
+        self.keys.contains(&SpecSetKey::new(repository, spec))
+    }
+
+    /// The spec sets this pass rebuilds, in canonical order.
+    pub(crate) fn members(&self) -> impl Iterator<Item = &ScopeMember> + '_ {
+        self.members.iter()
+    }
+}
+
+/// Plans as they must be read while a pass is still in progress: newly built plans
+/// for whole-set members inside the [`ReplanScope`], a merged view (committed slices
+/// outside the dirty ranges plus replanned dirty slices) for slice-mode members, and
+/// already committed plans for every spec set outside the scope.
+///
+/// A committed store always holds plans for every spec set of its context, because
+/// [`crate::Engine`] commits a pass only when that pass reported no errors. A spec
+/// set outside the scope with no committed plans is therefore a bug.
+pub(crate) struct PlanView<'a> {
+    replanned: &'a PlanStore,
+    committed: &'a PlanStore,
+    scope: &'a ReplanScope,
+    /// Merged plans for slice-mode members: committed outside dirty ranges, then
+    /// overlay of replanned dirty slices. Built once so [`Self::get_plans`] can
+    /// return a stable reference for the duration of the pass.
+    slice_merged: HashMap<SpecSetKey, BTreeMap<EffectiveDate, ExecutionPlan>>,
+}
+
+impl<'a> PlanView<'a> {
+    pub(crate) fn new(
+        replanned: &'a PlanStore,
+        committed: &'a PlanStore,
+        scope: &'a ReplanScope,
+        context: &Context,
+    ) -> Self {
+        let mut slice_merged = HashMap::new();
+        for member in scope.members() {
+            let Some(dirty) = &member.dirty_slices else {
+                continue;
+            };
+            let mut merged = committed
+                .get_plans(member.key.repository.as_deref(), &member.key.spec)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(spec_set) = context.spec_set(&member.repository, &member.spec) {
+                let dirty_ranges: Vec<(Option<DateTimeValue>, Option<DateTimeValue>)> = spec_set
+                    .iter_with_ranges()
+                    .filter(|(spec, _, _)| dirty.contains(&spec.effective_from))
+                    .map(|(_, from, to)| (from, to))
+                    .collect();
+                merged.retain(|effective, _| {
+                    !dirty_ranges.iter().any(|(from, to)| {
+                        effective_in_version_range(effective, from.as_ref(), to.as_ref())
+                    })
+                });
+            }
+            if let Some(from_replan) =
+                replanned.get_plans(member.key.repository.as_deref(), &member.key.spec)
+            {
+                for (effective, plan) in from_replan {
+                    merged.insert(effective.clone(), plan.clone());
+                }
+            }
+            slice_merged.insert(member.key.clone(), merged);
+        }
+        Self {
+            replanned,
+            committed,
+            scope,
+            slice_merged,
+        }
+    }
+
+    /// Temporal slices for `(repository, spec)`, ordered by `effective`.
+    ///
+    /// `None` means a spec set inside the scope has no plans in this pass: its
+    /// planning failed for every slice that still exists in context, or it is no
+    /// longer in the context.
+    pub(crate) fn get_plans(
+        &self,
+        repository: Option<&str>,
+        spec: &str,
+    ) -> Option<&BTreeMap<EffectiveDate, ExecutionPlan>> {
+        let key = SpecSetKey::new(repository, spec);
+        if let Some(merged) = self.slice_merged.get(&key) {
+            if merged.is_empty() {
+                return None;
+            }
+            return Some(merged);
+        }
+        if self.scope.contains(repository, spec) {
+            return self.replanned.get_plans(repository, spec);
+        }
+        Some(
+            self.committed
+                .get_plans(repository, spec)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "BUG: spec set '{}' is outside the replan scope but has no committed plans",
+                        key
+                    )
+                }),
+        )
+    }
+}
 
 /// Compiled plans keyed by repository name (`None` = workspace) then spec name.
 ///
 /// Temporal slices per spec are a [`BTreeMap`] keyed by [`ExecutionPlan::effective`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct PlanStore {
     plans: IndexMap<Option<String>, IndexMap<String, BTreeMap<EffectiveDate, ExecutionPlan>>>,
 }
@@ -98,9 +394,119 @@ impl PlanStore {
             .and_then(|plans| execution_plan::plan_at(plans, effective_at))
     }
 
-    /// Replace entire store after successful `plan()` (load/remove).
-    pub(crate) fn replace(&mut self, plans: Self) {
-        *self = plans;
+    fn take_spec_set(
+        &mut self,
+        key: &SpecSetKey,
+    ) -> Option<BTreeMap<EffectiveDate, ExecutionPlan>> {
+        self.plans
+            .get_mut(&key.repository)
+            .and_then(|by_name| by_name.shift_remove(&key.spec))
+    }
+
+    fn put_spec_set(&mut self, key: &SpecSetKey, slices: BTreeMap<EffectiveDate, ExecutionPlan>) {
+        self.plans
+            .entry(key.repository.clone())
+            .or_default()
+            .insert(key.spec.clone(), slices);
+    }
+
+    fn remove_spec_set(&mut self, key: &SpecSetKey) {
+        if let Some(by_name) = self.plans.get_mut(&key.repository) {
+            by_name.shift_remove(&key.spec);
+        }
+    }
+
+    fn holds_any_spec_set(&self) -> bool {
+        self.plans.values().any(|by_name| !by_name.is_empty())
+    }
+
+    /// Install the result of one planning pass.
+    ///
+    /// Whole-set members (`dirty_slices == None`) take the plans `replanned` built for
+    /// them, or lose plans when removed from `context`. Slice members merge dirty
+    /// keys into the existing `BTreeMap`, drop keys absent from context, and leave
+    /// other slices untouched. Spec sets outside `scope` keep their plans.
+    ///
+    /// Call only after the pass reported no errors.
+    pub(crate) fn commit(&mut self, context: &Context, scope: &ReplanScope, mut replanned: Self) {
+        for member in scope.members() {
+            match &member.dirty_slices {
+                None => match replanned.take_spec_set(&member.key) {
+                    Some(slices) => self.put_spec_set(&member.key, slices),
+                    None => {
+                        assert!(
+                            context
+                                .spec_set(&member.repository, &member.spec)
+                                .is_none(),
+                            "BUG: spec set '{}' is in the context but the planning pass produced no plans for it",
+                            member.key
+                        );
+                        self.remove_spec_set(&member.key);
+                    }
+                },
+                Some(dirty) => {
+                    let Some(spec_set) = context.spec_set(&member.repository, &member.spec) else {
+                        self.remove_spec_set(&member.key);
+                        let leftover = replanned.take_spec_set(&member.key);
+                        assert!(
+                            leftover.is_none(),
+                            "BUG: slice-mode member '{}' left context but replanned still holds slices",
+                            member.key
+                        );
+                        continue;
+                    };
+
+                    let dirty_ranges: Vec<(Option<DateTimeValue>, Option<DateTimeValue>)> =
+                        spec_set
+                            .iter_with_ranges()
+                            .filter(|(spec, _, _)| dirty.contains(&spec.effective_from))
+                            .map(|(_, from, to)| (from, to))
+                            .collect();
+
+                    let existing = self
+                        .plans
+                        .entry(member.key.repository.clone())
+                        .or_default()
+                        .entry(member.key.spec.clone())
+                        .or_default();
+                    existing.retain(|effective, _| {
+                        !dirty_ranges.iter().any(|(from, to)| {
+                            effective_in_version_range(effective, from.as_ref(), to.as_ref())
+                        })
+                    });
+
+                    let from_replan = replanned.take_spec_set(&member.key).unwrap_or_else(|| {
+                        panic!(
+                            "BUG: slice-mode member '{}' produced no replanned slices",
+                            member.key
+                        )
+                    });
+                    for (effective, plan) in from_replan {
+                        existing.insert(effective, plan);
+                    }
+                }
+            }
+        }
+        assert!(
+            !replanned.holds_any_spec_set(),
+            "BUG: planning pass produced plans for spec sets outside the replan scope"
+        );
+    }
+}
+
+/// Whether plan key `effective` falls in version half-open range `[from, to)`.
+fn effective_in_version_range(
+    effective: &EffectiveDate,
+    from: Option<&DateTimeValue>,
+    to: Option<&DateTimeValue>,
+) -> bool {
+    let from_key = EffectiveDate::from_option(from.cloned());
+    if effective < &from_key {
+        return false;
+    }
+    match to {
+        None => true,
+        Some(end) => effective < &EffectiveDate::DateTimeValue(end.clone()),
     }
 }
 
@@ -125,16 +531,25 @@ pub(crate) fn ranges_overlap(
     a_before_b_end && b_before_a_end
 }
 
-/// Result of a full planning pass over a [`Context`].
+/// Result of one planning pass over a [`Context`].
 pub(crate) struct PlanningResult {
+    /// Plans for the spec sets in the pass's [`ReplanScope`], and only those.
+    /// Install with [`PlanStore::commit`].
     pub plans: PlanStore,
     pub errors: Vec<Error>,
 }
 
-/// Build execution plans for every spec in `context`.
+/// Build execution plans for every spec set of `context` that is in `scope`.
 ///
-/// Returns newly built plans and any planning errors. Does not mutate caller state.
-pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) -> PlanningResult {
+/// `committed` holds the plans of the previous successful pass; spec sets outside
+/// `scope` are read from it during dependency interface validation instead of being
+/// rebuilt. Does not mutate caller state.
+pub(crate) fn plan(
+    context: &Context,
+    limits: &crate::limits::ResourceLimits,
+    scope: &ReplanScope,
+    committed: &PlanStore,
+) -> PlanningResult {
     let mut plans = PlanStore::new();
     let mut errors = Vec::new();
     let mut failed_specs: HashSet<(Arc<LemmaRepository>, String, EffectiveDate)> = HashSet::new();
@@ -145,17 +560,30 @@ pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) ->
         EffectiveDate,
     )> = HashSet::new();
 
-    for (repository, inner) in context.repositories().iter() {
-        for (_, lemma_spec_set) in inner.iter() {
-            let versions: Vec<execution_plan::ShowVersion> = lemma_spec_set
+    for member in scope.members() {
+        let repository = &member.repository;
+        // A member with no spec set left the context in this batch: it has no versions
+        // to plan. `PlanStore::commit` asserts that this is the only reason a scope
+        // member can end a pass without plans.
+        if let Some(lemma_spec_set) = context.spec_set(repository, &member.spec) {
+            let versions: std::sync::Arc<[execution_plan::ShowVersion]> = lemma_spec_set
                 .iter_with_ranges()
                 .map(|(_, from, to)| execution_plan::ShowVersion {
                     effective_from: from,
                     effective_to: to,
                 })
-                .collect();
+                .collect::<Vec<_>>()
+                .into();
+            // One interner for every temporal slice of this set in this pass: cons
+            // keys ignore spans, so identical subexpressions share cells across slices.
+            let mut interner = normalize::NormalFormInterner::new();
 
             for spec in lemma_spec_set.iter_specs() {
+                if let Some(dirty) = &member.dirty_slices {
+                    if !dirty.contains(&spec.effective_from) {
+                        continue;
+                    }
+                }
                 let spec_name = &spec.name;
                 let mut slice_errors = Vec::new();
                 let mut slice_plans = Vec::new();
@@ -200,6 +628,7 @@ pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) ->
                                 resolved_types,
                                 &effective,
                                 limits,
+                                &mut interner,
                             ) {
                                 Ok(mut execution_plan) => {
                                     execution_plan::attach_show_cache(
@@ -260,11 +689,15 @@ pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) ->
         }
     }
 
-    // Validate dependency interfaces across all specs in the context.
+    // Validate dependency interfaces for the replanned specs. A spec set outside the
+    // scope keeps the dependencies it was already validated against: its own edges did
+    // not change, and neither did any spec set it reaches, or it would be in the scope.
+    let plan_view = PlanView::new(&plans, committed, scope, context);
     for (consumer_repository, consumer_spec_name, consumer_spec, err) in
         discovery::validate_dependency_interfaces(
             context,
-            &plans,
+            &plan_view,
+            scope,
             &missing_repository_source_specs,
             &failed_specs,
         )
@@ -275,9 +708,7 @@ pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) ->
 
     // Remove failed plan sets from the plan store.
     for (repository, name) in &failed_plan_sets {
-        if let Some(by_name) = plans.plans.get_mut(&repository.name) {
-            by_name.shift_remove(name);
-        }
+        plans.remove_spec_set(&SpecSetKey::new(repository.name.as_deref(), name));
     }
 
     dedup_errors(&mut errors);
@@ -305,6 +736,7 @@ fn dedup_errors(errors: &mut Vec<Error>) {
 #[cfg(test)]
 mod tests {
     use super::dedup_errors;
+    use super::{Arc, Context, EffectiveDate, LemmaRepository, ReplanScope};
     use crate::parsing::ast::{LemmaSpec, Span};
     use crate::parsing::source::{Source, SourceType};
     use crate::Error;
@@ -778,6 +1210,862 @@ data x: 1
             slice_count(&engine, "consumer"),
             0,
             "consumer must have no slices when closure exceeds max_dag_specs"
+        );
+    }
+
+    // --- Incremental replanning: scope, reuse, transactionality ---
+
+    use crate::planning::normalize::NormalForm;
+    use std::path::PathBuf;
+
+    fn path_source(name: &str) -> SourceType {
+        SourceType::Path(Arc::new(PathBuf::from(name)))
+    }
+
+    /// Build a context from one source text and return it with its workspace repository.
+    fn context_from(source: &str) -> (Context, Arc<LemmaRepository>) {
+        let specs = crate::parse(
+            source,
+            SourceType::Volatile,
+            &crate::ResourceLimits::default(),
+        )
+        .expect("parse")
+        .into_flattened_specs();
+        let mut context = Context::new();
+        let workspace = context.workspace();
+        for spec in specs {
+            context
+                .insert_spec(Arc::clone(&workspace), spec)
+                .expect("insert spec");
+        }
+        (context, workspace)
+    }
+
+    /// Spec-set names the scope covers when `changed` names change, workspace only.
+    fn scope_names(source: &str, changed: &[&str]) -> std::collections::BTreeSet<String> {
+        let (context, workspace) = context_from(source);
+        let scope = ReplanScope::from_changed_sets(
+            &context,
+            changed
+                .iter()
+                .map(|name| (Arc::clone(&workspace), (*name).to_string()))
+                .collect(),
+        );
+        scope
+            .members()
+            .map(|member| member.key.spec.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    }
+
+    /// Heap identity of each slice's normal-form table for a spec set.
+    ///
+    /// A moved (reused) plan keeps its buffer address; a rebuilt plan allocates a new
+    /// one. Empty tables are rejected because every empty `Vec` shares one dangling
+    /// address, which would make reuse indistinguishable from a rebuild.
+    fn plan_buffers(
+        engine: &crate::Engine,
+        repository: Option<&str>,
+        spec_name: &str,
+    ) -> Vec<*const NormalForm> {
+        let plans = engine
+            .plans
+            .get_plans(repository, spec_name)
+            .unwrap_or_else(|| panic!("plans for spec '{spec_name}'"));
+        assert!(!plans.is_empty(), "spec '{spec_name}' must have slices");
+        plans
+            .values()
+            .map(|plan| {
+                assert!(
+                    !plan.normal_forms.is_empty(),
+                    "spec '{spec_name}' must have a non-empty normal-form table for buffer \
+                     identity to be meaningful; give it a rule"
+                );
+                plan.normal_forms.as_ptr()
+            })
+            .collect()
+    }
+
+    /// Structural fingerprint of the whole plan store: every spec set, its slice
+    /// boundaries, and per-slice rule names and normal-form table size.
+    type StoreShape = Vec<(
+        Option<String>,
+        String,
+        Vec<(EffectiveDate, Vec<String>, usize)>,
+    )>;
+
+    fn store_shape(engine: &crate::Engine) -> StoreShape {
+        let mut shape: StoreShape = engine
+            .plans
+            .plans
+            .iter()
+            .flat_map(|(repository, by_name)| {
+                by_name.iter().map(move |(spec_name, slices)| {
+                    let slice_shapes = slices
+                        .iter()
+                        .map(|(effective, plan)| {
+                            (
+                                effective.clone(),
+                                plan.rules
+                                    .values()
+                                    .map(|rule| rule.name().to_string())
+                                    .collect(),
+                                plan.normal_forms.len(),
+                            )
+                        })
+                        .collect();
+                    (repository.clone(), spec_name.clone(), slice_shapes)
+                })
+            })
+            .collect();
+        shape.sort();
+        shape
+    }
+
+    /// A change propagates to every transitive consumer and stops there.
+    #[test]
+    fn replan_scope_covers_transitive_consumers_only() {
+        let source = r#"
+spec base
+data v: 1
+rule r: v
+
+spec mid
+uses b: base
+rule r: b.r
+
+spec root
+uses m: mid
+rule out: m.r
+
+spec unrelated
+data v: 2
+rule r: v
+"#;
+        assert_eq!(
+            scope_names(source, &["base"]),
+            ["base", "mid", "root"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "a change to 'base' must dirty 'mid' and 'root', and must not dirty 'unrelated'"
+        );
+        assert_eq!(
+            scope_names(source, &["unrelated"]),
+            ["unrelated"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "a leaf change must dirty nothing else"
+        );
+        assert_eq!(
+            scope_names(source, &["mid"]),
+            ["mid", "root"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "dirtiness flows to consumers, never down into dependencies"
+        );
+    }
+
+    /// A pin fixes the resolution instant, not the pinned spec's source text or its own
+    /// dependencies. A pinned consumer must therefore still be replanned when the spec
+    /// set it pins into changes.
+    #[test]
+    fn replan_scope_includes_pinned_consumers() {
+        let source = r#"
+spec dep 2025-01-01
+data v: 1
+rule r: v
+
+spec pinned_consumer 2025-01-01
+uses d: dep 2025-01-01
+rule out: d.r
+"#;
+        assert_eq!(
+            scope_names(source, &["dep"]),
+            ["dep", "pinned_consumer"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "pinning must not exempt a consumer from replanning"
+        );
+    }
+
+    /// A diamond closure must dirty each consumer once and reach the root.
+    #[test]
+    fn replan_scope_handles_diamond_closure() {
+        let source = r#"
+spec base
+data v: 1
+rule r: v
+
+spec left
+uses b: base
+rule r: b.r
+
+spec right
+uses b: base
+rule r: b.r
+
+spec root
+uses l: left
+uses r_dep: right
+rule out: l.r
+"#;
+        assert_eq!(
+            scope_names(source, &["base"]),
+            ["base", "left", "right", "root"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "both diamond arms and the root must be dirty"
+        );
+    }
+
+    /// A dependency cycle must not make scope computation diverge.
+    #[test]
+    fn replan_scope_terminates_on_dependency_cycle() {
+        let source = r#"
+spec a
+uses b_dep: b
+data amount: number
+
+spec b
+uses a_dep: a
+data imported: a_dep.amount
+"#;
+        assert_eq!(
+            scope_names(source, &["a"]),
+            ["a", "b"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "a cyclic closure must be dirtied once and terminate"
+        );
+    }
+
+    /// Editing a workspace spec must not rebuild the plans of an untouched dependency
+    /// repository: those plans move into the new store instead.
+    #[test]
+    fn dependency_plans_are_reused_across_a_workspace_edit() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(
+                SourceType::Dependency("@iso/countries".to_string()),
+                r#"repo @iso/countries
+spec alpha2
+data code: 1
+rule current: code
+
+spec alpha2 2025-06-01
+data code: 2
+rule current: code
+
+spec alpha2 2026-01-01
+data code: 3
+rule current: code
+"#
+                .to_string(),
+            )])
+            .expect("dependency loads");
+        engine
+            .load([(
+                path_source("consumer.lemma"),
+                "spec consumer\nuses iso: @iso/countries alpha2\nrule out: iso.current\n"
+                    .to_string(),
+            )])
+            .expect("consumer loads");
+
+        let dependency_before = plan_buffers(&engine, Some("@iso/countries"), "alpha2");
+        let consumer_before = plan_buffers(&engine, None, "consumer");
+        assert_eq!(
+            dependency_before.len(),
+            3,
+            "dependency must have one slice per temporal version"
+        );
+
+        engine
+            .update(
+                None,
+                "spec consumer\nuses iso: @iso/countries alpha2\nrule out: iso.current + 1\n"
+                    .to_string(),
+                path_source("consumer.lemma"),
+            )
+            .expect("consumer edit applies");
+
+        assert_eq!(
+            plan_buffers(&engine, Some("@iso/countries"), "alpha2"),
+            dependency_before,
+            "untouched dependency slices must be moved, not replanned"
+        );
+        assert_ne!(
+            plan_buffers(&engine, None, "consumer"),
+            consumer_before,
+            "the edited spec must be replanned"
+        );
+    }
+
+    /// Editing a dependency must replan it and every transitive consumer, and leave
+    /// unrelated spec sets alone.
+    #[test]
+    fn editing_a_dependency_replans_transitive_consumers_only() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([
+                (
+                    path_source("base.lemma"),
+                    "spec base\ndata v: 1\nrule r: v\n",
+                ),
+                (
+                    path_source("mid.lemma"),
+                    "spec mid\nuses b: base\nrule r: b.r\n",
+                ),
+                (
+                    path_source("root.lemma"),
+                    "spec root\nuses m: mid\nrule out: m.r\n",
+                ),
+                (
+                    path_source("unrelated.lemma"),
+                    "spec unrelated\ndata v: 2\nrule r: v\n",
+                ),
+            ])
+            .expect("initial load");
+
+        let base_before = plan_buffers(&engine, None, "base");
+        let mid_before = plan_buffers(&engine, None, "mid");
+        let root_before = plan_buffers(&engine, None, "root");
+        let unrelated_before = plan_buffers(&engine, None, "unrelated");
+
+        engine
+            .update(
+                None,
+                "spec base\ndata v: 7\nrule r: v\n".to_string(),
+                path_source("base.lemma"),
+            )
+            .expect("base edit applies");
+
+        assert_ne!(
+            plan_buffers(&engine, None, "base"),
+            base_before,
+            "the edited dependency must be replanned"
+        );
+        assert_ne!(
+            plan_buffers(&engine, None, "mid"),
+            mid_before,
+            "a direct consumer must be replanned"
+        );
+        assert_ne!(
+            plan_buffers(&engine, None, "root"),
+            root_before,
+            "a transitive consumer must be replanned"
+        );
+        assert_eq!(
+            plan_buffers(&engine, None, "unrelated"),
+            unrelated_before,
+            "an unrelated spec set must keep its plans"
+        );
+        assert_eq!(
+            run_display(&engine, "root", &date(2025, 1, 1), "out"),
+            "7",
+            "the transitive consumer must observe the edited dependency value"
+        );
+    }
+
+    /// A pinned consumer reads one fixed dependency slice, but that slice's source can
+    /// change underneath it. The pinned consumer must be replanned and must observe the
+    /// new value.
+    #[test]
+    fn editing_a_pinned_dependency_slice_replans_the_pinned_consumer() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([
+                (
+                    path_source("dep.lemma"),
+                    "spec dep 2025-01-01\ndata v: 1\nrule r: v\n",
+                ),
+                (
+                    path_source("consumer.lemma"),
+                    "spec consumer 2025-01-01\nuses d: dep 2025-01-01\nrule out: d.r\n",
+                ),
+            ])
+            .expect("initial load");
+
+        let consumer_before = plan_buffers(&engine, None, "consumer");
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 3, 1), "out"),
+            "1"
+        );
+
+        engine
+            .update(
+                None,
+                "spec dep 2025-01-01\ndata v: 42\nrule r: v\n".to_string(),
+                path_source("dep.lemma"),
+            )
+            .expect("pinned dependency slice edit applies");
+
+        assert_ne!(
+            plan_buffers(&engine, None, "consumer"),
+            consumer_before,
+            "a pinned consumer must be replanned when the slice it pins changes"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 3, 1), "out"),
+            "42",
+            "a pinned consumer must observe the new source of the pinned slice"
+        );
+    }
+
+    /// Removing one temporal version of a dependency changes the sibling slice windows
+    /// and the consumer's breakpoints, so the whole dependency set and its consumers
+    /// must be replanned.
+    #[test]
+    fn removing_a_dependency_version_replans_the_set_and_its_consumers() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([
+                (
+                    path_source("dep_v1.lemma"),
+                    "spec dep\ndata v: 1\nrule r: v\n",
+                ),
+                (
+                    path_source("dep_v2.lemma"),
+                    "spec dep 2025-06-01\ndata v: 2\nrule r: v\n",
+                ),
+                (
+                    path_source("consumer.lemma"),
+                    "spec consumer\nuses d: dep\nrule out: d.r\n",
+                ),
+            ])
+            .expect("initial load");
+
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            2,
+            "unpinned consumer must have a slice per dependency version"
+        );
+
+        engine
+            .remove(None, "dep", Some(&date(2025, 6, 1)))
+            .expect("removing the second dependency version applies");
+
+        assert_eq!(
+            slice_count(&engine, "dep"),
+            1,
+            "the dependency set must lose its second slice"
+        );
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            1,
+            "the consumer must lose the breakpoint the removed version introduced"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 9, 1), "out"),
+            "1",
+            "after removal the consumer must resolve to the remaining version"
+        );
+    }
+
+    /// Removing the last version of a spec set drops its plans from the store.
+    #[test]
+    fn removing_the_last_version_drops_the_plan_set() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(
+                path_source("solo.lemma"),
+                "spec solo\ndata v: 1\nrule r: v\n".to_string(),
+            )])
+            .expect("initial load");
+        assert_eq!(slice_count(&engine, "solo"), 1);
+
+        engine
+            .remove(None, "solo", None)
+            .expect("removing the only version applies");
+
+        assert_eq!(
+            slice_count(&engine, "solo"),
+            0,
+            "a spec set that left the context must leave no plans behind"
+        );
+    }
+
+    /// A failed batch must leave the committed store byte-for-byte as it was, including
+    /// the plans of spec sets the failed batch would have replanned.
+    #[test]
+    fn a_failed_batch_leaves_committed_plans_untouched() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([
+                (path_source("dep.lemma"), "spec dep\ndata v: 1\nrule r: v\n"),
+                (
+                    path_source("consumer.lemma"),
+                    "spec consumer\nuses d: dep\nrule out: d.r\n",
+                ),
+            ])
+            .expect("initial load");
+
+        let shape_before = store_shape(&engine);
+        let dep_before = plan_buffers(&engine, None, "dep");
+        let consumer_before = plan_buffers(&engine, None, "consumer");
+
+        // Replacing the dependency with a version that no longer exposes rule `r`
+        // breaks the consumer. Both spec sets are in the replan scope, so both are
+        // rebuilt during the failed pass.
+        engine
+            .update(
+                None,
+                "spec dep\ndata other: 5\nrule unrelated_rule: other\n".to_string(),
+                path_source("dep.lemma"),
+            )
+            .expect_err("the batch must fail because the consumer's dependency broke");
+
+        assert_eq!(
+            plan_buffers(&engine, None, "dep"),
+            dep_before,
+            "a failed batch must not replace the dependency's plans"
+        );
+        assert_eq!(
+            plan_buffers(&engine, None, "consumer"),
+            consumer_before,
+            "a failed batch must not replace a replanned consumer's plans"
+        );
+        assert_eq!(
+            store_shape(&engine),
+            shape_before,
+            "a failed batch must leave the whole store unchanged"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 1, 1), "out"),
+            "1",
+            "the pre-failure plans must still evaluate"
+        );
+    }
+
+    /// Removing a spec set that another spec set still depends on must fail the batch
+    /// and leave both spec sets' plans in place. The removed spec set is in the replan
+    /// scope but no longer in the context, so this drives the pass over a scope member
+    /// that has no spec set to plan.
+    #[test]
+    fn removing_a_dependency_that_has_a_consumer_fails_and_rolls_back() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([
+                (path_source("dep.lemma"), "spec dep\ndata v: 1\nrule r: v\n"),
+                (
+                    path_source("consumer.lemma"),
+                    "spec consumer\nuses d: dep\nrule out: d.r\n",
+                ),
+            ])
+            .expect("initial load");
+
+        let shape_before = store_shape(&engine);
+        let consumer_before = plan_buffers(&engine, None, "consumer");
+
+        engine
+            .remove(None, "dep", None)
+            .expect_err("removing a spec set that still has a consumer must fail");
+
+        assert_eq!(
+            store_shape(&engine),
+            shape_before,
+            "the failed removal must leave the store unchanged"
+        );
+        assert_eq!(
+            plan_buffers(&engine, None, "consumer"),
+            consumer_before,
+            "the consumer must keep the exact plans it had before the failed removal"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 1, 1), "out"),
+            "1",
+            "the consumer must still evaluate against its dependency"
+        );
+    }
+
+    /// A new spec that fails to plan must not disturb existing plans.
+    #[test]
+    fn a_failed_new_spec_leaves_existing_plans_untouched() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(
+                path_source("good.lemma"),
+                "spec good\ndata v: 1\nrule r: v\n".to_string(),
+            )])
+            .expect("initial load");
+        let shape_before = store_shape(&engine);
+
+        engine
+            .load([(
+                path_source("bad.lemma"),
+                "spec bad\nuses missing_dep: nonexistent\nrule out: missing_dep.r\n".to_string(),
+            )])
+            .expect_err("a spec referencing a missing dependency must fail to load");
+
+        assert_eq!(
+            store_shape(&engine),
+            shape_before,
+            "a failed load must leave the store unchanged"
+        );
+    }
+
+    /// A dirty consumer reading an untouched dependency must find that dependency's
+    /// committed plans. The embedded stdlib is the case that always exists: it is
+    /// loaded by `Engine::new` and never mutated again, and it carries no rules, so
+    /// its plans exercise the empty-normal-form-table path through commit.
+    ///
+    /// If a commit dropped the stdlib's plans, the next edit of a spec that imports
+    /// it would panic inside [`PlanView::get_plans`] instead of applying.
+    #[test]
+    fn a_dirty_consumer_validates_against_committed_stdlib_plans() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(
+                path_source("measures.lemma"),
+                "spec measures\nuses lemma units\ndata distance: 5 kilometer\nrule doubled: distance * 2\n"
+                    .to_string(),
+            )])
+            .expect("spec importing the embedded stdlib loads");
+
+        let stdlib_before: StoreShape = store_shape(&engine)
+            .into_iter()
+            .filter(|(repository, _, _)| repository.as_deref() == Some("lemma"))
+            .collect();
+        assert!(
+            !stdlib_before.is_empty(),
+            "the embedded stdlib must be planned after Engine::new"
+        );
+
+        engine
+            .update(
+                None,
+                "spec measures\nuses lemma units\ndata distance: 5 kilometer\nrule tripled: distance * 3\n"
+                    .to_string(),
+                path_source("measures.lemma"),
+            )
+            .expect("editing the consumer of the embedded stdlib applies");
+
+        assert_eq!(
+            store_shape(&engine)
+                .into_iter()
+                .filter(|(repository, _, _)| repository.as_deref() == Some("lemma"))
+                .collect::<StoreShape>(),
+            stdlib_before,
+            "a workspace edit must leave the embedded stdlib's plans as they were"
+        );
+        assert_eq!(
+            run_display(&engine, "measures", &date(2025, 1, 1), "tripled"),
+            "15 kilometer",
+            "the edited consumer must expose its new rule and still resolve stdlib units"
+        );
+    }
+
+    /// Reaching a context incrementally must produce the same plans as planning that
+    /// context from scratch. This is the guarantee that makes scoped replanning safe.
+    #[test]
+    fn incremental_and_from_scratch_planning_agree() {
+        let base_v1 = "spec base\ndata v: 1\nrule r: v\n";
+        let base_v2 = "spec base 2025-06-01\ndata v: 2\nrule r: v\n";
+        let mid = "spec mid\nuses b: base\nrule r: b.r + 1\n";
+        let root = "spec root\nuses m: mid\nrule out: m.r * 2\n";
+        let pinned = "spec pinned\nuses b: base 2025-06-01\nrule out: b.r\n";
+
+        let mut incremental = crate::Engine::new();
+        incremental
+            .load([(path_source("base_v1.lemma"), base_v1.to_string())])
+            .expect("load base v1");
+        incremental
+            .load([(path_source("mid.lemma"), mid.to_string())])
+            .expect("load mid");
+        incremental
+            .load([(path_source("root.lemma"), root.to_string())])
+            .expect("load root");
+        incremental
+            .load([(path_source("base_v2.lemma"), base_v2.to_string())])
+            .expect("load base v2");
+        incremental
+            .load([(path_source("pinned.lemma"), pinned.to_string())])
+            .expect("load pinned");
+
+        let mut from_scratch = crate::Engine::new();
+        from_scratch
+            .load([
+                (path_source("base_v1.lemma"), base_v1),
+                (path_source("base_v2.lemma"), base_v2),
+                (path_source("mid.lemma"), mid),
+                (path_source("root.lemma"), root),
+                (path_source("pinned.lemma"), pinned),
+            ])
+            .expect("load everything at once");
+
+        assert_eq!(
+            store_shape(&incremental),
+            store_shape(&from_scratch),
+            "incremental planning must produce the same plan store as a single full pass"
+        );
+
+        for at in [date(2025, 3, 1), date(2025, 9, 1)] {
+            assert_eq!(
+                run_display(&incremental, "root", &at, "out"),
+                run_display(&from_scratch, "root", &at, "out"),
+                "root must evaluate identically at {at}"
+            );
+            assert_eq!(
+                run_display(&incremental, "pinned", &at, "out"),
+                run_display(&from_scratch, "pinned", &at, "out"),
+                "pinned must evaluate identically at {at}"
+            );
+        }
+    }
+
+    /// Repeating the same edit must reach the same store: no order or iteration
+    /// dependence leaks in through scoped commits.
+    #[test]
+    fn repeated_identical_edits_reach_the_same_store() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([
+                (path_source("dep.lemma"), "spec dep\ndata v: 1\nrule r: v\n"),
+                (
+                    path_source("consumer.lemma"),
+                    "spec consumer\nuses d: dep\nrule out: d.r\n",
+                ),
+            ])
+            .expect("initial load");
+
+        let edit = "spec dep\ndata v: 9\nrule r: v\n";
+        engine
+            .update(None, edit.to_string(), path_source("dep.lemma"))
+            .expect("first edit");
+        let shape_after_first = store_shape(&engine);
+
+        for _ in 0..3 {
+            engine
+                .update(None, edit.to_string(), path_source("dep.lemma"))
+                .expect("repeat edit");
+            assert_eq!(
+                store_shape(&engine),
+                shape_after_first,
+                "re-applying the same edit must reach the same store shape"
+            );
+        }
+    }
+
+    /// Body-only edit of the last temporal version must rebuild that version's
+    /// plans and keep earlier slice plan buffer identity (earlier spans unchanged).
+    #[test]
+    fn body_edit_one_version_preserves_other_slice_plan_identity() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(
+                path_source("versions.lemma"),
+                r#"spec item
+data v: 1
+rule r: v
+
+spec item 2025-06-01
+data v: 2
+rule r: v
+
+spec item 2026-01-01
+data v: 3
+rule r: v
+"#
+                .to_string(),
+            )])
+            .expect("load versions");
+
+        let before = plan_buffers(&engine, None, "item");
+        assert_eq!(before.len(), 3);
+
+        engine
+            .update(
+                None,
+                r#"spec item
+data v: 1
+rule r: v
+
+spec item 2025-06-01
+data v: 2
+rule r: v
+
+spec item 2026-01-01
+data v: 30
+rule r: v
+"#
+                .to_string(),
+                path_source("versions.lemma"),
+            )
+            .expect("body-edit last version");
+
+        let after = plan_buffers(&engine, None, "item");
+        assert_eq!(after.len(), 3);
+        assert_eq!(
+            after[0], before[0],
+            "origin slice plan buffer must be reused"
+        );
+        assert_eq!(
+            after[1], before[1],
+            "unedited mid slice plan buffer must be reused"
+        );
+        assert_ne!(after[2], before[2], "edited last slice must be rebuilt");
+        assert_eq!(
+            run_display(&engine, "item", &date(2026, 2, 1), "r"),
+            "30",
+            "edited version must evaluate the new body"
+        );
+    }
+
+    /// Adding or removing a temporal version dirties the whole spec set.
+    #[test]
+    fn version_add_forces_whole_set_replan() {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(
+                path_source("versions.lemma"),
+                r#"spec item
+data v: 1
+rule r: v
+
+spec item 2025-06-01
+data v: 2
+rule r: v
+"#
+                .to_string(),
+            )])
+            .expect("load versions");
+
+        let before = plan_buffers(&engine, None, "item");
+        assert_eq!(before.len(), 2);
+
+        engine
+            .update(
+                None,
+                r#"spec item
+data v: 1
+rule r: v
+
+spec item 2025-06-01
+data v: 2
+rule r: v
+
+spec item 2026-01-01
+data v: 3
+rule r: v
+"#
+                .to_string(),
+                path_source("versions.lemma"),
+            )
+            .expect("add third version");
+
+        let after = plan_buffers(&engine, None, "item");
+        assert_eq!(after.len(), 3);
+        assert_ne!(
+            after[0], before[0],
+            "whole-set replan must rebuild the origin slice"
+        );
+        assert_ne!(
+            after[1], before[1],
+            "whole-set replan must rebuild the mid slice"
         );
     }
 }

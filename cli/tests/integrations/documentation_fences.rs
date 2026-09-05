@@ -4,8 +4,8 @@
 //! workspace source (so multi-spec examples may stay in separate visual blocks).
 
 use lemma::{
-    parse, resolve_registry_references, Context, DateTimeValue, Engine, LemmaBase, ResourceLimits,
-    SourceType, EMBEDDED_STDLIB_REPOSITORY,
+    parse, Context, DateTimeValue, Engine, Registries, Resolve, ResourceLimits, SourceType,
+    EMBEDDED_STDLIB_REPOSITORY,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -141,7 +141,12 @@ fn fence_needs_registry(content: &str) -> bool {
     content.contains('@')
 }
 
-async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
+fn load_fence_engine(
+    path: &Path,
+    fence: &LemmaFence,
+    registries: &Registries,
+    transport: &lemma::__test_support::FixtureTransport,
+) -> Engine {
     let label = fence_label(path, fence.line);
     let workspace_source = SourceType::Path(Arc::new(PathBuf::from(&label)));
     let limits = ResourceLimits::default();
@@ -170,10 +175,8 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
     let mut sources = HashMap::from([(workspace_source.clone(), fence.content.clone())]);
 
     if fence_needs_registry(&fence.content) {
-        let registry = LemmaBase::test();
-        resolve_registry_references(&mut ctx, &mut sources, &registry, &limits)
-            .await
-            .unwrap_or_else(|errs| {
+        Resolve::run(registries, &mut ctx, &mut sources, &limits, transport).unwrap_or_else(
+            |errs| {
                 panic!(
                     "resolve registry for ```lemma fence at {label} failed: {}",
                     errs.iter()
@@ -181,7 +184,8 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
                         .collect::<Vec<_>>()
                         .join("; ")
                 );
-            });
+            },
+        );
     }
 
     let mut engine = Engine::new();
@@ -219,11 +223,16 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
     engine
 }
 
-async fn run_fence(path: &Path, fence: &LemmaFence) {
+fn run_fence(
+    path: &Path,
+    fence: &LemmaFence,
+    registries: &Registries,
+    transport: &lemma::__test_support::FixtureTransport,
+) {
     let label = fence_label(path, fence.line);
     let workspace_source = SourceType::Path(Arc::new(PathBuf::from(&label)));
     let target_specs = specs_declared_in_fence(&fence.content, &workspace_source);
-    let engine = load_fence_engine(path, fence).await;
+    let engine = load_fence_engine(path, fence, registries, transport);
     let now = DateTimeValue::now();
     for (repo, spec_name) in target_specs {
         if repo.as_deref() == Some(EMBEDDED_STDLIB_REPOSITORY) {
@@ -244,8 +253,10 @@ async fn run_fence(path: &Path, fence: &LemmaFence) {
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn all_lemma_fences_load_and_run() {
+#[test]
+fn all_lemma_fences_load_and_run() {
+    let registries = Registries::default();
+    let transport = lemma::__test_support::FixtureTransport::bundled();
     let root = workspace_root();
     let files = collect_markdown_and_text_files(&root);
     let mut ran = 0usize;
@@ -253,7 +264,7 @@ async fn all_lemma_fences_load_and_run() {
         let content = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         for fence in extract_lemma_fences(&content) {
-            run_fence(&path, &fence).await;
+            run_fence(&path, &fence, &registries, &transport);
             ran += 1;
         }
     }

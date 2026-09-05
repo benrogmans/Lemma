@@ -6,6 +6,14 @@ from business_rules.rational import Rational, parse_rational
 
 TERMINAL_RULE = "total"
 
+ZERO = Rational(0)
+PCT_3 = Rational("0.03")
+PCT_5 = Rational("0.05")
+PCT_6 = Rational("0.06")
+PCT_8 = Rational("0.08")
+PCT_10 = Rational("0.10")
+PCT_15 = Rational("0.15")
+
 
 @dataclass(frozen=True, slots=True)
 class Inputs:
@@ -51,36 +59,52 @@ def build_inputs(raw: dict[str, str]) -> Inputs:
     )
 
 
-def compute(inputs: Inputs) -> Outputs:
-    is_standard = inputs.product_type == "standard"
+def _eval_closure(
+    inputs: Inputs,
+) -> tuple[
+    bool,
+    bool,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+    Rational,
+]:
     is_premium = inputs.product_type == "premium"
     is_luxury = inputs.product_type == "luxury"
 
-    volume_discount = Rational(0)
+    volume_discount = ZERO
     if inputs.quantity >= 10:
-        volume_discount = Rational("0.05")
+        volume_discount = PCT_5
     if inputs.quantity >= 50:
-        volume_discount = Rational("0.10")
+        volume_discount = PCT_10
     if inputs.quantity >= 100:
-        volume_discount = Rational("0.15")
+        volume_discount = PCT_15
 
-    tier_discount = Rational(0)
+    tier_discount = ZERO
     if is_premium:
-        tier_discount = Rational("0.05")
+        tier_discount = PCT_5
     if is_luxury:
-        tier_discount = Rational("0.15")
+        tier_discount = PCT_15
 
-    member_discount = Rational(0)
+    member_discount = ZERO
     if inputs.is_member:
-        member_discount = Rational("0.05")
+        member_discount = PCT_5
 
-    loyalty_discount = Rational(0)
+    loyalty_discount = ZERO
     if inputs.is_loyalty and inputs.loyalty_years >= 1:
-        loyalty_discount = Rational("0.03")
+        loyalty_discount = PCT_3
     if inputs.is_loyalty and inputs.loyalty_years >= 3:
-        loyalty_discount = Rational("0.06")
+        loyalty_discount = PCT_6
     if inputs.is_loyalty and inputs.loyalty_years >= 5:
-        loyalty_discount = Rational("0.10")
+        loyalty_discount = PCT_10
 
     coupon_discount = inputs.coupon_percent / 100
 
@@ -96,15 +120,50 @@ def compute(inputs: Inputs) -> Outputs:
     discount_amount = subtotal * combined_discount
     taxable = subtotal - discount_amount
 
-    tax_rate = Rational("0.08")
+    tax_rate = PCT_8
     if inputs.is_tax_exempt:
-        tax_rate = Rational(0)
+        tax_rate = ZERO
 
     tax = taxable * tax_rate
     total = taxable + tax
 
+    return (
+        is_premium,
+        is_luxury,
+        volume_discount,
+        tier_discount,
+        member_discount,
+        loyalty_discount,
+        coupon_discount,
+        combined_discount,
+        subtotal,
+        discount_amount,
+        taxable,
+        tax_rate,
+        tax,
+        total,
+    )
+
+
+def compute(inputs: Inputs) -> Outputs:
+    (
+        is_premium,
+        is_luxury,
+        volume_discount,
+        tier_discount,
+        member_discount,
+        loyalty_discount,
+        coupon_discount,
+        combined_discount,
+        subtotal,
+        discount_amount,
+        taxable,
+        tax_rate,
+        tax,
+        total,
+    ) = _eval_closure(inputs)
     return Outputs(
-        is_standard=is_standard,
+        is_standard=inputs.product_type == "standard",
         is_premium=is_premium,
         is_luxury=is_luxury,
         volume_discount=volume_discount,
@@ -123,4 +182,4 @@ def compute(inputs: Inputs) -> Outputs:
 
 
 def compute_terminal(inputs: Inputs) -> Rational:
-    return compute(inputs).total
+    return _eval_closure(inputs)[13]

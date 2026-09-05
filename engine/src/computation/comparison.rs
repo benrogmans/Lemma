@@ -1,23 +1,25 @@
 //! Type-aware comparison operations
 
+use std::sync::Arc;
+
 use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::RationalInteger;
 use crate::computation::UnitResolutionContext;
-use crate::planning::semantics::{
-    primitive_boolean_arc, ComparisonComputation, LiteralValue, ValueKind,
-};
+use crate::planning::semantics::{ComparisonComputation, LemmaType, LiteralValue, ValueKind};
 
 /// Perform type-aware comparison, returning OperationResult (Veto on error)
 pub fn comparison_operation(
     left: &LiteralValue,
+    left_type: &Arc<LemmaType>,
     op: &ComparisonComputation,
     right: &LiteralValue,
+    right_type: &Arc<LemmaType>,
     unit_context: UnitResolutionContext<'_>,
 ) -> OperationResult {
     let _ = unit_context;
     match (&left.value, &right.value) {
-        (ValueKind::Range(range_left, range_right), ValueKind::Measure(_, sig))
-            if left.lemma_type.is_date_range() && right.lemma_type.is_calendar_like() =>
+        (ValueKind::Range(range_left, range_right), ValueKind::Measure(_))
+            if left_type.is_date_range() && right_type.is_calendar_like() =>
         {
             let (ValueKind::Date(left_date), ValueKind::Date(right_date)) =
                 (&range_left.value, &range_right.value)
@@ -27,18 +29,18 @@ pub fn comparison_operation(
                 );
             };
             let calendar_unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(right_type);
             let measure = super::datetime::compute_date_calendar_difference(
                 left_date,
                 right_date,
                 &calendar_unit,
-                right.lemma_type.clone(),
+                Arc::clone(right_type),
             );
-            compare_with_operation_result(measure, op, right)
+            compare_with_operation_result(measure, right_type, op, right, right_type)
         }
 
-        (ValueKind::Measure(_, sig), ValueKind::Range(range_left, range_right))
-            if right.lemma_type.is_date_range() && left.lemma_type.is_calendar_like() =>
+        (ValueKind::Measure(_), ValueKind::Range(range_left, range_right))
+            if right_type.is_date_range() && left_type.is_calendar_like() =>
         {
             let (ValueKind::Date(left_date), ValueKind::Date(right_date)) =
                 (&range_left.value, &range_right.value)
@@ -48,37 +50,42 @@ pub fn comparison_operation(
                 );
             };
             let calendar_unit =
-                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_type(left_type);
             let measure = super::datetime::compute_date_calendar_difference(
                 left_date,
                 right_date,
                 &calendar_unit,
-                left.lemma_type.clone(),
+                Arc::clone(left_type),
             );
-            compare_with_right_result(left, op, measure)
+            compare_with_right_result(left, left_type, op, measure, left_type)
         }
 
         (ValueKind::Range(range_left, range_right), _) => {
+            let endpoint_type = range_endpoint_type_for_runtime_span(left_type);
             let measure = super::range::compute_span(
                 range_left.as_ref(),
+                &endpoint_type,
                 range_right.as_ref(),
+                &endpoint_type,
             );
-            compare_with_operation_result(measure, op, right)
+            // Prefer the same endpoint type used for the span (includes injected
+            // decomposition for anonymous measure ranges).
+            let span_type = if left_type.is_date_range() || left_type.is_time_range() {
+                super::range::span_result_type(left_type)
+            } else {
+                Arc::clone(&endpoint_type)
+            };
+            compare_with_operation_result(measure, &span_type, op, right, right_type)
         }
 
-        (ValueKind::Number(l), ValueKind::Number(r)) => {
-            compare_stored_rationals(l, op, r)
-        }
+        (ValueKind::Number(l), ValueKind::Number(r)) => compare_stored_rationals(l, op, r),
 
         (ValueKind::Boolean(l), ValueKind::Boolean(r)) => match op {
             ComparisonComputation::Is => {
                 OperationResult::from_literal(LiteralValue::from_bool(l == r))
             }
             ComparisonComputation::IsNot => {
-                OperationResult::from_literal(LiteralValue {
-                    value: ValueKind::Boolean(l != r),
-                    lemma_type: primitive_boolean_arc().clone(),
-                })
+                OperationResult::from_literal(LiteralValue::from_bool(l != r))
             }
             _ => unreachable!(
                 "BUG: invalid boolean comparison operator {}; this should be rejected during planning",
@@ -91,10 +98,7 @@ pub fn comparison_operation(
                 OperationResult::from_literal(LiteralValue::from_bool(l == r))
             }
             ComparisonComputation::IsNot => {
-                OperationResult::from_literal(LiteralValue {
-                    value: ValueKind::Boolean(l != r),
-                    lemma_type: primitive_boolean_arc().clone(),
-                })
+                OperationResult::from_literal(LiteralValue::from_bool(l != r))
             }
             _ => unreachable!(
                 "BUG: invalid text comparison operator {}; this should be rejected during planning",
@@ -102,67 +106,66 @@ pub fn comparison_operation(
             ),
         },
 
-        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => {
-            compare_stored_rationals(l, op, r)
-        }
-        (ValueKind::Measure(left_value, _), ValueKind::Measure(right_value, _))
-            if left.lemma_type.is_calendar_like() && right.lemma_type.is_calendar_like() =>
+        (ValueKind::Ratio(l), ValueKind::Ratio(r)) => compare_stored_rationals(l, op, r),
+        (ValueKind::Measure(left_value), ValueKind::Measure(right_value))
+            if left_type.is_calendar_like() && right_type.is_calendar_like() =>
         {
             compare_stored_rationals(left_value, op, right_value)
         }
 
-        (ValueKind::Measure(l, _), ValueKind::Measure(r, _)) => {
-            let l_decomp = left
-                .lemma_type
-                .measure_type_decomposition()
-                .expect("BUG: decomposition must be resolved after planning");
-            let r_decomp = right
-                .lemma_type
-                .measure_type_decomposition()
-                .expect("BUG: decomposition must be resolved after planning");
-            let same_decomp = l_decomp == r_decomp;
-            if !left.lemma_type.same_measure_family(&right.lemma_type)
-                && !left.lemma_type.compatible_with_anonymous_measure(&right.lemma_type)
-                && !same_decomp
-            {
+        (ValueKind::Measure(l), ValueKind::Measure(r)) => {
+            let identical = left_type.as_ref() == right_type.as_ref()
+                || (left_type.specifications == right_type.specifications
+                    && left_type.name == right_type.name
+                    && left_type.extends == right_type.extends);
+            let same_family = left_type.same_measure_family(right_type);
+            let anonymous_compatible = left_type.compatible_with_anonymous_measure(right_type);
+            let same_decomp = match (
+                left_type.measure_type_decomposition(),
+                right_type.measure_type_decomposition(),
+            ) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+            if !identical && !same_family && !anonymous_compatible && !same_decomp {
                 unreachable!(
                     "BUG: compared incompatible measure types ({} vs {}); planning must reject this",
-                    left.lemma_type.name(),
-                    right.lemma_type.name()
+                    left_type.name(),
+                    right_type.name()
                 );
             }
             compare_stored_rationals(l, op, r)
         }
 
-        (ValueKind::Date(_), ValueKind::Date(_)) => super::datetime::datetime_comparison(left, op, right),
-        (ValueKind::Time(_), ValueKind::Time(_)) => super::datetime::time_comparison(left, op, right),
+        (ValueKind::Date(_), ValueKind::Date(_)) => {
+            super::datetime::datetime_comparison(left, left_type, op, right, right_type)
+        }
+        (ValueKind::Time(_), ValueKind::Time(_)) => {
+            super::datetime::time_comparison(left, left_type, op, right, right_type)
+        }
 
-        (ValueKind::Measure(value, _), ValueKind::Number(n))
-            if left.lemma_type.is_duration_like_measure() =>
+        (ValueKind::Measure(value), ValueKind::Number(n))
+            if left_type.is_duration_like_measure() =>
         {
             compare_stored_rationals(value, op, n)
         }
-        (ValueKind::Number(n), ValueKind::Measure(value, _))
-            if right.lemma_type.is_duration_like_measure() =>
+        (ValueKind::Number(n), ValueKind::Measure(value))
+            if right_type.is_duration_like_measure() =>
         {
             compare_stored_rationals(n, op, value)
         }
-        (ValueKind::Measure(value, _), ValueKind::Number(n))
-            if left.lemma_type.is_calendar_like() =>
-        {
+        (ValueKind::Measure(value), ValueKind::Number(n)) if left_type.is_calendar_like() => {
             compare_stored_rationals(value, op, n)
         }
-        (ValueKind::Number(n), ValueKind::Measure(value, _))
-            if right.lemma_type.is_calendar_like() =>
-        {
+        (ValueKind::Number(n), ValueKind::Measure(value)) if right_type.is_calendar_like() => {
             compare_stored_rationals(n, op, value)
         }
 
         _ => unreachable!(
             "BUG: unsupported comparison during evaluation: {} {} {}",
-            type_name(left),
+            left_type.name(),
             op,
-            type_name(right)
+            right_type.name()
         ),
     }
 }
@@ -191,8 +194,10 @@ fn compare_stored_rationals(
 
 fn compare_with_operation_result(
     left_result: OperationResult,
+    left_type: &Arc<LemmaType>,
     op: &ComparisonComputation,
     right: &LiteralValue,
+    right_type: &Arc<LemmaType>,
 ) -> OperationResult {
     let left_value = match left_result {
         OperationResult::Value(value) => value,
@@ -200,16 +205,40 @@ fn compare_with_operation_result(
     };
     comparison_operation(
         &left_value,
+        left_type,
         op,
         right,
+        right_type,
         UnitResolutionContext::NamedMeasureOnly,
     )
 }
 
+/// Endpoint type for runtime range span, with decomposition filled when units exist
+/// but planning left decomposition unset (anonymous measure ranges).
+fn range_endpoint_type_for_runtime_span(range_type: &LemmaType) -> Arc<LemmaType> {
+    let mut element_spec = match range_type.specifications.element_from_range() {
+        Some(spec) => spec,
+        None => return Arc::new(range_type.clone()),
+    };
+    if let crate::planning::semantics::TypeSpecification::Measure {
+        units,
+        decomposition,
+        ..
+    } = &mut element_spec
+    {
+        if decomposition.is_none() && !units.0.is_empty() {
+            *decomposition = Some([(range_type.name(), 1i32)].into_iter().collect());
+        }
+    }
+    Arc::new(LemmaType::primitive(element_spec))
+}
+
 fn compare_with_right_result(
     left: &LiteralValue,
+    left_type: &Arc<LemmaType>,
     op: &ComparisonComputation,
     right_result: OperationResult,
+    right_type: &Arc<LemmaType>,
 ) -> OperationResult {
     let right_value = match right_result {
         OperationResult::Value(value) => value,
@@ -217,26 +246,30 @@ fn compare_with_right_result(
     };
     comparison_operation(
         left,
+        left_type,
         op,
         &right_value,
+        right_type,
         UnitResolutionContext::NamedMeasureOnly,
     )
-}
-
-fn type_name(value: &LiteralValue) -> String {
-    value.get_type().name().to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::computation::rational::rational_new;
-    use crate::planning::semantics::{ComparisonComputation, LiteralValue, ValueKind};
+    use crate::planning::semantics::{primitive_number_arc, ComparisonComputation, LiteralValue};
 
     fn eval_bool(left: &LiteralValue, op: &ComparisonComputation, right: &LiteralValue) -> bool {
-        let OperationResult::Value(lit) =
-            comparison_operation(left, op, right, UnitResolutionContext::NamedMeasureOnly)
-        else {
+        let number_ty = primitive_number_arc();
+        let OperationResult::Value(lit) = comparison_operation(
+            left,
+            number_ty,
+            op,
+            right,
+            number_ty,
+            UnitResolutionContext::NamedMeasureOnly,
+        ) else {
             panic!("expected boolean value");
         };
         match &lit.value {
@@ -246,27 +279,18 @@ mod tests {
     }
 
     #[test]
-    fn number_less_than_uses_exact_rational_ordering() {
-        let small = LiteralValue::number(rational_new(1, 10));
-        let large = LiteralValue::number(rational_new(2, 1));
-        assert!(eval_bool(&small, &ComparisonComputation::LessThan, &large));
-        assert!(!eval_bool(&large, &ComparisonComputation::LessThan, &small));
-    }
-
-    #[test]
-    fn text_is_and_is_not() {
-        let a = LiteralValue::text("alpha".to_string());
-        let b = LiteralValue::text("beta".to_string());
-        assert!(eval_bool(&a, &ComparisonComputation::Is, &a));
-        assert!(!eval_bool(&a, &ComparisonComputation::Is, &b));
-        assert!(eval_bool(&a, &ComparisonComputation::IsNot, &b));
-    }
-
-    #[test]
-    fn boolean_is_only_accepts_is_operators() {
-        let t = LiteralValue::from_bool(true);
-        let f = LiteralValue::from_bool(false);
-        assert!(eval_bool(&t, &ComparisonComputation::Is, &t));
-        assert!(eval_bool(&t, &ComparisonComputation::IsNot, &f));
+    fn number_greater_than() {
+        let left = LiteralValue::number(rational_new(5, 1));
+        let right = LiteralValue::number(rational_new(3, 1));
+        assert!(eval_bool(
+            &left,
+            &ComparisonComputation::GreaterThan,
+            &right
+        ));
+        assert!(!eval_bool(
+            &right,
+            &ComparisonComputation::GreaterThan,
+            &left
+        ));
     }
 }

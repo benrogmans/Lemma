@@ -69,7 +69,21 @@ fn eval_rule(
     rule_name: &str,
     effective: &DateTimeValue,
 ) -> String {
-    eval_literal(code, spec_name, rule_name, effective).to_string()
+    let code = code.as_ref();
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let response = engine
+        .run(None, spec_name, Some(effective), HashMap::new(), None, true)
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn eval_rule_measure_unit(

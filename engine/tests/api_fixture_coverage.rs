@@ -133,9 +133,8 @@ fn coverage_check_fails_when_a_variant_has_no_fixture() {
 fn show_minimal_fixture_deserializes_as_lemma_show() {
     let path = fixtures_dir().join("show_minimal.json");
     let text = std::fs::read_to_string(&path).expect("read show_minimal.json");
-    let show: lemma::Show = serde_json::from_str(&text).unwrap_or_else(|e| {
-        panic!("fixture must match lemma::Show API types: {e}\nfixture:\n{text}")
-    });
+    let show: lemma::api::Show = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("fixture must match lemma::api::Show: {e}\nfixture:\n{text}"));
     assert_eq!(show.spec, "sample");
 }
 

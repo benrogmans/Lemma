@@ -11,7 +11,7 @@
 //!
 //! Calendar measure-range span `as` is not supported.
 
-use lemma::{DateGranularity, DateTimeValue, Engine, LiteralValue, TimezoneValue};
+use lemma::{DateGranularity, DateTimeValue, Engine, TimezoneValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ fn default_effective() -> DateTimeValue {
     }
 }
 
-fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
+fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
     engine
         .load([(source(), code.to_string())])
@@ -53,28 +53,13 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
             true,
         )
         .expect("Should evaluate");
-    let rule = response
+    response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name));
-    if rule.vetoed {
-        panic!(
-            "Rule '{}' vetoed: {}",
-            rule_name,
-            rule.veto_reason.as_deref().unwrap_or("Vetoed")
-        );
-    }
-    rule.explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .expect("BUG: non-vetoed rule missing value")
-        .clone()
-}
-
-fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
-    eval_literal(code, spec_name, rule_name).to_string()
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {

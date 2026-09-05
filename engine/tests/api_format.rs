@@ -4,9 +4,9 @@
 //! [`engine::wasm`] and show export use (`serde_json` on those types).
 //! Plan persistence tests live in `execution_plan` unit tests (section I).
 //!
-//! `RuleResultValue` (the type behind `ShowData.prefilled`/`suggestion`) is a flat map of
+//! `RuleResultValue` (the type behind `ShowData.fill`/`suggestion`) is a flat map of
 //! every declared unit; it carries no unit tag for the "one value the user typed" the way the
-//! old canonical `ValueKind::Ratio(_, Option<String>)` did. `RuleResultValue::to_literal`
+//! old canonical `ValueKind::Ratio(_)` did. `RuleResultValue::to_literal`
 //! reconstructs a canonical literal for further computation, but for ratios that
 //! reconstruction always comes back with `unit: None` (it always binds to the type's first
 //! declared unit's key, and cannot know which key the caller originally committed). Section A
@@ -17,7 +17,10 @@
 //! as convenience input through [`Engine::run`] without computation veto — same path
 //! as the CLI interactive trial. See `cli/documentation/learn/precision.md`.
 
-use lemma::{DateTimeValue, Engine, LemmaType, LiteralValue, RuleResultValue, Show, ValueKind};
+use lemma::{
+    DateTimeValue, Engine, LemmaType, LiteralValue, RuleResultValue, Show, TypeSpecification,
+    ValueKind,
+};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -96,17 +99,18 @@ fn plan_interface_show(engine: &Engine, spec: &str) -> Show {
 /// Lossy for ratio unit tags: `RuleResultValue::to_literal` always reconstructs a ratio
 /// against the type's first declared unit and never carries the tag of the unit the value
 /// was originally expressed in (matching `RuleResult`'s established convention).
-fn show_default_literal(engine: &Engine, spec: &str, data_name: &str) -> LiteralValue {
+fn show_default_literal(engine: &Engine, spec: &str, data_name: &str) -> (LiteralValue, LemmaType) {
     let show = plan_interface_show(engine, spec);
     let entry = show
         .data
         .get(data_name)
         .unwrap_or_else(|| panic!("{data_name} missing from show"))
         .clone();
-    entry
+    let lit = entry
         .suggestion
         .unwrap_or_else(|| panic!("{data_name} has no show suggestion"))
-        .to_literal(&entry.lemma_type)
+        .to_literal(&entry.lemma_type);
+    (lit, entry.lemma_type)
 }
 
 /// Wrap an existing [`RuleResultValue`] as a one-entry [`Show`] `suggestion` and
@@ -121,7 +125,7 @@ fn wrap_suggestion_in_show_json(
         name.to_string(),
         lemma::ShowData {
             lemma_type,
-            prefilled: None,
+            fill: None,
             suggestion: Some(value),
             needed_by_rules: Vec::new(),
         },
@@ -138,23 +142,28 @@ fn wrap_suggestion_in_show_json(
         rules: indexmap::IndexMap::new(),
         meta: indexmap::IndexMap::new(),
     };
-    serde_json::to_value(&show).expect("Show API JSON must serialize")["data"][name]["suggestion"]
+    serde_json::to_value(lemma::api::Show::from(&show)).expect("Show API JSON must serialize")
+        ["data"][name]["suggestion"]
         .clone()
 }
 
 /// API response for a canonical literal: build RuleResultValue (same path as `Engine::show`) and
 /// embed the result in a [`Show`] `suggestion` field.
-fn api_json_for_literal(name: &str, literal: &LiteralValue) -> serde_json::Value {
-    let value = lemma::result_value::rule_result_value_from_literal(literal, &literal.lemma_type)
+fn api_json_for_literal(
+    name: &str,
+    literal: &LiteralValue,
+    lemma_type: &LemmaType,
+) -> serde_json::Value {
+    let value = lemma::result_value::type_scoped_result_value_from_literal(literal, lemma_type)
         .unwrap_or_else(|failure| {
-            panic!("rule_result_value_from_literal '{name}' for API JSON: {failure:?}")
+            panic!("type_scoped_result_value_from_literal '{name}' for API JSON: {failure:?}")
         });
-    wrap_suggestion_in_show_json(name, literal.lemma_type.as_ref().clone(), value)
+    wrap_suggestion_in_show_json(name, lemma_type.clone(), value)
 }
 
 fn api_show_default_json(engine: &Engine, spec: &str, data_name: &str) -> serde_json::Value {
-    let lit = show_default_literal(engine, spec, data_name);
-    api_json_for_literal(data_name, &lit)
+    let (lit, ty) = show_default_literal(engine, spec, data_name);
+    api_json_for_literal(data_name, &lit, &ty)
 }
 
 fn json_ratio_unit_value(json: &serde_json::Value, unit: &str) -> String {
@@ -190,7 +199,7 @@ fn assert_ratio_exact(
     expected_unit: Option<&str>,
 ) {
     match &lit.value {
-        ValueKind::Ratio(r, u) => {
+        ValueKind::Ratio(r) => {
             assert_eq!(
                 ValueKind::Number(r.clone())
                     .as_decimal_magnitude()
@@ -198,7 +207,7 @@ fn assert_ratio_exact(
                 decimal_lit(expected_canonical),
                 "{ctx}: canonical magnitude"
             );
-            assert_eq!(u.as_deref(), expected_unit, "{ctx}: unit tag");
+            let _ = expected_unit; // binding unit on type, not LiteralValue
         }
         other => panic!("{ctx}: expected Ratio, got {other:?}"),
     }
@@ -212,9 +221,9 @@ fn show_literal_api_json(engine: &Engine, spec: &str, data_name: &str) -> serde_
         .unwrap_or_else(|| panic!("{data_name} missing from show.data"))
         .clone();
     let value = entry
-        .prefilled
+        .fill
         .or(entry.suggestion)
-        .unwrap_or_else(|| panic!("{data_name} has no prefilled or suggestion in show.data"));
+        .unwrap_or_else(|| panic!("{data_name} has no fill or suggestion in show.data"));
     wrap_suggestion_in_show_json(data_name, entry.lemma_type, value)
 }
 
@@ -228,22 +237,25 @@ fn deserialize_api_literal(json: serde_json::Value, lemma_type: &LemmaType) -> L
 
 #[test]
 fn in_memory_ratio_percent_default_is_canonical() {
-    let default = show_default_literal(&policy_engine(), "policy", "margin");
+    let (default, _default_ty) = show_default_literal(&policy_engine(), "policy", "margin");
     assert_ratio_exact(&default, "margin default", "0.15", None);
 }
 
 #[test]
 fn in_memory_ratio_basis_points_default_is_canonical() {
-    let default = show_default_literal(&policy_engine(), "policy", "bps");
+    let (default, _default_ty) = show_default_literal(&policy_engine(), "policy", "bps");
     assert_ratio_exact(&default, "bps default", "0.05", None);
 }
 
 #[test]
 fn in_memory_measure_eur_per_hour_default_is_canonical() {
-    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let (default, ty) = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
     match &default.value {
-        ValueKind::Measure(r, sig) => {
-            assert_eq!(sig, &vec![("eur_per_hour".to_string(), 1)]);
+        ValueKind::Measure(r) => {
+            assert_eq!(
+                ty.measure_runtime_signature(),
+                vec![("eur_per_hour".to_string(), 1)]
+            );
             let magnitude = ValueKind::Number(r.clone())
                 .as_decimal_magnitude()
                 .expect("magnitude");
@@ -256,7 +268,7 @@ fn in_memory_measure_eur_per_hour_default_is_canonical() {
 
 #[test]
 fn in_memory_bare_ratio_is_canonical_0_5() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
     assert_ratio_exact(&bare, "bare ratio", "0.5", None);
 }
 
@@ -264,16 +276,24 @@ fn in_memory_bare_ratio_is_canonical_0_5() {
 
 #[test]
 fn ratio_api_bare_0_5() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
-    let json = api_json_for_literal("bare", &bare);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
+    let json = api_json_for_literal(
+        "bare",
+        &bare,
+        &LemmaType::primitive(TypeSpecification::ratio()),
+    );
     assert_eq!(json_ratio_unit_value(&json, "percent"), "50");
     assert_eq!(json_ratio_unit_value(&json, "permille"), "500");
 }
 
 #[test]
 fn ratio_api_bare_0_15() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.15"), None);
-    let json = api_json_for_literal("bare", &bare);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.15"));
+    let json = api_json_for_literal(
+        "bare",
+        &bare,
+        &LemmaType::primitive(TypeSpecification::ratio()),
+    );
     assert_eq!(json_ratio_unit_value(&json, "percent"), "15");
     assert_eq!(json_ratio_unit_value(&json, "permille"), "150");
 }
@@ -300,33 +320,43 @@ fn ratio_api_basis_points_500() {
 
 #[test]
 fn ratio_api_bare_0_5_accepted() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
-    let json = api_json_for_literal("bare", &bare);
-    let roundtrip = deserialize_api_literal(json, &bare.lemma_type);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
+    let json = api_json_for_literal(
+        "bare",
+        &bare,
+        &LemmaType::primitive(TypeSpecification::ratio()),
+    );
+    let roundtrip =
+        deserialize_api_literal(json, &LemmaType::primitive(TypeSpecification::ratio()));
     assert_ratio_exact(&roundtrip, "bare deserialize", "0.5", None);
 }
 
 #[test]
 fn ratio_api_bare_0_5_roundtrip() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
-    let json = api_json_for_literal("bare", &bare);
-    let roundtrip = deserialize_api_literal(json, &bare.lemma_type);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
+    let json = api_json_for_literal(
+        "bare",
+        &bare,
+        &LemmaType::primitive(TypeSpecification::ratio()),
+    );
+    let roundtrip =
+        deserialize_api_literal(json, &LemmaType::primitive(TypeSpecification::ratio()));
     assert_eq!(roundtrip.value, bare.value);
 }
 
 #[test]
 fn ratio_api_percent_roundtrip() {
-    let original = show_default_literal(&policy_engine(), "policy", "margin");
-    let json = api_json_for_literal("margin", &original);
-    let roundtrip = deserialize_api_literal(json, &original.lemma_type);
+    let (original, original_ty) = show_default_literal(&policy_engine(), "policy", "margin");
+    let json = api_json_for_literal("margin", &original, &original_ty);
+    let roundtrip = deserialize_api_literal(json, &original_ty);
     assert_ratio_exact(&roundtrip, "percent roundtrip", "0.15", None);
 }
 
 #[test]
 fn ratio_api_basis_points_roundtrip() {
-    let original = show_default_literal(&policy_engine(), "policy", "bps");
-    let json = api_json_for_literal("bps", &original);
-    let roundtrip = deserialize_api_literal(json, &original.lemma_type);
+    let (original, original_ty) = show_default_literal(&policy_engine(), "policy", "bps");
+    let json = api_json_for_literal("bps", &original, &original_ty);
+    let roundtrip = deserialize_api_literal(json, &original_ty);
     assert_ratio_exact(&roundtrip, "bps roundtrip", "0.05", None);
 }
 
@@ -334,9 +364,10 @@ fn ratio_api_basis_points_roundtrip() {
 
 #[test]
 fn ratio_prompt_bare_0_5() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
+    let ty = LemmaType::primitive(TypeSpecification::ratio());
     assert_eq!(
-        bare.magnitude_suggestion_for_decimal_prompt().as_deref(),
+        bare.magnitude_suggestion_for_decimal_prompt(&ty).as_deref(),
         Some("0.5")
     );
 }
@@ -357,9 +388,12 @@ fn ratio_prompt_basis_points_500() {
 
 #[test]
 fn measure_prompt_eur_per_hour_25() {
-    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let (default, default_ty) =
+        show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
     assert_eq!(
-        default.magnitude_suggestion_for_decimal_prompt().as_deref(),
+        default
+            .magnitude_suggestion_for_decimal_prompt(&default_ty)
+            .as_deref(),
         Some("25")
     );
 }
@@ -380,8 +414,9 @@ fn measure_api_kg_per_hour_12() {
 
 #[test]
 fn measure_show_default_includes_all_declared_units() {
-    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
-    let json = api_json_for_literal("labor_cost", &default);
+    let (default, default_ty) =
+        show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let json = api_json_for_literal("labor_cost", &default, &default_ty);
     let measure = json["measure"]
         .as_object()
         .expect("labor_cost default must include measure unit map");
@@ -395,7 +430,9 @@ fn measure_show_default_includes_all_declared_units() {
         .expect("inr_per_hour must have RuleResultValue");
     assert_ne!(inr, "25", "inr_per_hour must differ from eur magnitude");
     assert_eq!(
-        default.magnitude_in_unit("inr_per_hour").as_deref(),
+        default
+            .magnitude_in_unit(&default_ty, "inr_per_hour")
+            .as_deref(),
         Some(inr),
         "magnitude_in_unit must match API map"
     );
@@ -403,8 +440,8 @@ fn measure_show_default_includes_all_declared_units() {
 
 #[test]
 fn ratio_show_default_includes_all_declared_units() {
-    let default = show_default_literal(&policy_engine(), "policy", "bps");
-    let json = api_json_for_literal("bps", &default);
+    let (default, default_ty) = show_default_literal(&policy_engine(), "policy", "bps");
+    let json = api_json_for_literal("bps", &default, &default_ty);
     let ratio = json["ratio"]
         .as_object()
         .expect("bps default must include ratio unit map");
@@ -414,7 +451,9 @@ fn ratio_show_default_includes_all_declared_units() {
         "basis_points magnitude"
     );
     assert_eq!(
-        default.magnitude_in_unit("basis_points").as_deref(),
+        default
+            .magnitude_in_unit(&default_ty, "basis_points")
+            .as_deref(),
         Some("500"),
         "magnitude_in_unit must match API map"
     );
@@ -422,9 +461,10 @@ fn ratio_show_default_includes_all_declared_units() {
 
 #[test]
 fn measure_api_roundtrip_canonical() {
-    let original = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
-    let json = api_json_for_literal("labor_cost", &original);
-    let roundtrip = deserialize_api_literal(json, &original.lemma_type);
+    let (original, original_ty) =
+        show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let json = api_json_for_literal("labor_cost", &original, &original_ty);
+    let roundtrip = deserialize_api_literal(json, &original_ty);
     assert_eq!(roundtrip.value, original.value);
 }
 
@@ -444,7 +484,9 @@ fn measure_prompt_matches_api() {
         let suggestion = entry.suggestion.unwrap_or_else(|| panic!("{name} default"));
         let default = suggestion.clone().to_literal(&entry.lemma_type);
         assert_eq!(
-            default.magnitude_suggestion_for_decimal_prompt().as_deref(),
+            default
+                .magnitude_suggestion_for_decimal_prompt(&entry.lemma_type)
+                .as_deref(),
             Some(expected),
             "{name} prompt must match API"
         );
@@ -545,9 +587,9 @@ fn assert_cost_price_rule_not_vetoed(response: &lemma::Response, context: &str) 
 fn measure_show_default_inr_per_hour_convenience_input_evaluates() {
     let engine = cost_price_engine();
     let now = DateTimeValue::now();
-    let default = show_default_literal(&engine, "cost_price", "labor_cost");
+    let (default, default_ty) = show_default_literal(&engine, "cost_price", "labor_cost");
     let magnitude = default
-        .magnitude_in_unit("inr_per_hour")
+        .magnitude_in_unit(&default_ty, "inr_per_hour")
         .expect("section E guarantees inr_per_hour RuleResultValue");
     let input = format!("{magnitude} inr_per_hour");
     let response = run_cost_price_with_single_override(
@@ -576,9 +618,9 @@ fn measure_show_default_each_declared_unit_convenience_input_evaluates() {
         ("throughput", "kg_per_hour"),
     ];
     for (data_name, unit) in cases {
-        let default = show_default_literal(&engine, "cost_price", data_name);
+        let (default, default_ty) = show_default_literal(&engine, "cost_price", data_name);
         let magnitude = default
-            .magnitude_in_unit(unit)
+            .magnitude_in_unit(&default_ty, unit)
             .unwrap_or_else(|| panic!("{data_name} must have decimal for unit {unit}"));
         let input = format!("{magnitude} {unit}");
         let response = run_cost_price_with_single_override(
@@ -598,9 +640,10 @@ fn measure_show_default_each_declared_unit_convenience_input_evaluates() {
 
 #[test]
 fn measure_show_default_inr_per_hour_not_overprecision_string() {
-    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let (default, default_ty) =
+        show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
     let decimal_string = default
-        .magnitude_in_unit("inr_per_hour")
+        .magnitude_in_unit(&default_ty, "inr_per_hour")
         .expect("inr_per_hour must have RuleResultValue");
     let overprecision = "2717.3913043478260869565217391";
     assert_ne!(
@@ -613,9 +656,9 @@ fn measure_show_default_inr_per_hour_not_overprecision_string() {
 fn ratio_show_default_basis_points_convenience_input_evaluates() {
     let engine = policy_engine();
     let now = DateTimeValue::now();
-    let default = show_default_literal(&engine, "policy", "bps");
+    let (default, default_ty) = show_default_literal(&engine, "policy", "bps");
     let magnitude = default
-        .magnitude_in_unit("basis_points")
+        .magnitude_in_unit(&default_ty, "basis_points")
         .expect("section E guarantees basis_points RuleResultValue");
     assert_eq!(magnitude, "500");
     let mut data = HashMap::new();
@@ -664,7 +707,8 @@ fn measure_response_json_serializes() {
     let engine = cost_price_engine();
     let now = DateTimeValue::now();
     let response = run_cost_price(&engine, &now);
-    serde_json::to_string(&response).expect("response API JSON must serialize");
+    serde_json::to_string(&lemma::api::Response::from(&response))
+        .expect("response API JSON must serialize");
 }
 
 #[test]
@@ -697,10 +741,15 @@ fn ratio_show_suggestion_api_percent() {
 
 #[test]
 fn ratio_rule_result_bare_0_5_api() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
-    let json = api_json_for_literal("half", &bare);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
+    let json = api_json_for_literal(
+        "half",
+        &bare,
+        &LemmaType::primitive(TypeSpecification::ratio()),
+    );
     assert_eq!(json_ratio_unit_value(&json, "percent"), "50");
-    let roundtrip = deserialize_api_literal(json, &bare.lemma_type);
+    let roundtrip =
+        deserialize_api_literal(json, &LemmaType::primitive(TypeSpecification::ratio()));
     assert_ratio_exact(&roundtrip, "bare API roundtrip", "0.5", None);
 }
 
@@ -723,8 +772,8 @@ rule band: allowed_band
 #[test]
 fn ratio_range_api_percent_endpoints() {
     let engine = load_engine(RATIO_RANGE_PERCENT_SPEC, "ratio_range_pct.lemma");
-    let default = show_default_literal(&engine, "policy", "allowed_band");
-    let json = api_json_for_literal("allowed_band", &default);
+    let (default, default_ty) = show_default_literal(&engine, "policy", "allowed_band");
+    let json = api_json_for_literal("allowed_band", &default, &default_ty);
     assert_eq!(
         range_endpoint_unit_value(&json, "from", "ratio", "percent"),
         "10"
@@ -738,8 +787,8 @@ fn ratio_range_api_percent_endpoints() {
 #[test]
 fn ratio_range_api_basis_points_endpoints() {
     let engine = load_engine(RATIO_RANGE_BPS_SPEC, "ratio_range_bps.lemma");
-    let default = show_default_literal(&engine, "policy", "allowed_band");
-    let json = api_json_for_literal("allowed_band", &default);
+    let (default, default_ty) = show_default_literal(&engine, "policy", "allowed_band");
+    let json = api_json_for_literal("allowed_band", &default, &default_ty);
     assert_eq!(
         range_endpoint_unit_value(&json, "from", "ratio", "basis_points"),
         "200"
@@ -753,9 +802,9 @@ fn ratio_range_api_basis_points_endpoints() {
 #[test]
 fn ratio_range_api_roundtrip_canonical() {
     let engine = load_engine(RATIO_RANGE_PERCENT_SPEC, "ratio_range_pct.lemma");
-    let original = show_default_literal(&engine, "policy", "allowed_band");
-    let json = api_json_for_literal("allowed_band", &original);
-    let roundtrip = deserialize_api_literal(json, &original.lemma_type);
+    let (original, original_ty) = show_default_literal(&engine, "policy", "allowed_band");
+    let json = api_json_for_literal("allowed_band", &original, &original_ty);
+    let roundtrip = deserialize_api_literal(json, &original_ty);
     match (&original.value, &roundtrip.value) {
         (ValueKind::Range(l0, r0), ValueKind::Range(l1, r1)) => {
             assert_eq!(l0.value, l1.value);
@@ -808,7 +857,7 @@ fn show_suggestion_carries_per_unit_magnitude() {
     let engine = load_engine(NON_BASE_MEASURE_SPEC, "pricing.lemma");
     let show = plan_interface_show(&engine, "pricing");
     let entry = show.data.get("money").expect("money").clone();
-    let json = serde_json::to_value(&entry).expect("ShowData JSON");
+    let json = serde_json::to_value(lemma::api::ShowData::from(&entry)).expect("ShowData JSON");
     let suggestion = entry.suggestion.expect("suggestion");
     let measure = suggestion.measure.as_ref().expect("measure unit map");
     assert_eq!(measure.get("inr").map(String::as_str), Some("100.00"));
@@ -829,15 +878,15 @@ fn show_suggestion_carries_per_unit_magnitude() {
 }
 
 #[test]
-fn show_prefilled_carries_per_unit_magnitude() {
+fn show_fill_carries_per_unit_magnitude() {
     let engine = load_engine(PREFILLED_INR_SPEC, "priced.lemma");
     let show = plan_interface_show(&engine, "priced");
     let entry = show.data.get("base.money").expect("base.money").clone();
-    let json = serde_json::to_value(&entry).expect("ShowData JSON");
-    let prefilled = entry.prefilled.expect("prefilled");
-    let measure = prefilled.measure.as_ref().expect("measure unit map");
+    let json = serde_json::to_value(lemma::api::ShowData::from(&entry)).expect("ShowData JSON");
+    let fill = entry.fill.expect("fill");
+    let measure = fill.measure.as_ref().expect("measure unit map");
     assert_eq!(measure.get("inr").map(String::as_str), Some("100.00"));
-    assert_eq!(json["prefilled"]["measure"]["inr"].as_str(), Some("100.00"));
+    assert_eq!(json["fill"]["measure"]["inr"].as_str(), Some("100.00"));
 }
 
 #[test]
@@ -858,7 +907,7 @@ fn execution_plan_constant_keeps_canonical_magnitude() {
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Measure(canonical, _) => {
+        ValueKind::Measure(canonical) => {
             let canonical_mag = ValueKind::Number(canonical.clone())
                 .as_decimal_magnitude()
                 .expect("canonical");
@@ -875,8 +924,8 @@ fn execution_plan_constant_keeps_canonical_magnitude() {
 #[test]
 fn range_endpoints_carry_own_value_maps() {
     let engine = load_engine(RATIO_RANGE_PERCENT_SPEC, "ratio_range_pct.lemma");
-    let default = show_default_literal(&engine, "policy", "allowed_band");
-    let json = api_json_for_literal("allowed_band", &default);
+    let (default, default_ty) = show_default_literal(&engine, "policy", "allowed_band");
+    let json = api_json_for_literal("allowed_band", &default, &default_ty);
     for side in ["from", "to"] {
         let endpoint = &json["range"][side];
         assert!(
@@ -893,8 +942,8 @@ fn range_endpoints_carry_own_value_maps() {
 #[test]
 fn unit_scoped_measure_range_endpoint_keeps_unit() {
     let engine = load_engine(UNIT_SCOPED_RANGE_SPEC, "band.lemma");
-    let default = show_default_literal(&engine, "band", "window");
-    let json = api_json_for_literal("window", &default);
+    let (default, default_ty) = show_default_literal(&engine, "band", "window");
+    let json = api_json_for_literal("window", &default, &default_ty);
     let from_measure = json["range"]["from"]["measure"]
         .as_object()
         .expect("endpoint must expose measure unit map");
@@ -907,21 +956,34 @@ fn unit_scoped_measure_range_endpoint_keeps_unit() {
 
 #[test]
 fn ratio_without_unit_emits_json_null_not_empty_string() {
-    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
-    let json = serde_json::to_value(&bare.value).expect("ValueKind JSON");
-    let unit = &json["ratio"]["unit"];
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
+    let json =
+        serde_json::to_value(lemma::api::ValueKind::from(&bare.value)).expect("ValueKind JSON");
     assert!(
-        unit.is_null(),
-        "bare ratio unit must be JSON null, got {unit}"
+        json.get("ratio").is_some(),
+        "ratio payload must be present, got {json}"
+    );
+    assert!(
+        json["ratio"].get("unit").is_none(),
+        "ValueKind::Ratio no longer carries a unit field, got {json}"
     );
 }
 
 #[test]
 fn ratio_with_unit_emits_unit_string() {
-    let with_unit =
-        LiteralValue::ratio_from_decimal(decimal_lit("0.15"), Some("percent".to_string()));
-    let json = serde_json::to_value(&with_unit.value).expect("ValueKind JSON");
-    assert_eq!(json["ratio"]["unit"].as_str(), Some("percent"));
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.15"));
+    let ValueKind::Ratio(canonical) = &bare.value else {
+        panic!("expected ratio");
+    };
+    let with_unit = lemma::__test_support::TypedLiteral::ratio_with_bound_unit(
+        canonical.clone(),
+        "percent",
+        std::sync::Arc::new(LemmaType::primitive(TypeSpecification::ratio())),
+    );
+    assert_eq!(
+        with_unit.lemma_type.measure_binding_unit.as_deref(),
+        Some("percent")
+    );
 }
 
 #[test]
@@ -939,7 +1001,8 @@ rule r: money
     );
     let show = plan_interface_show(&engine, "t");
     let entry = show.data.get("money").expect("money");
-    let json = serde_json::to_value(&entry.lemma_type).expect("type JSON");
+    let json =
+        serde_json::to_value(lemma::api::LemmaType::from(&entry.lemma_type)).expect("type JSON");
     assert!(json["minimum"].is_object(), "got {}", json["minimum"]);
     assert_eq!(json["minimum"]["value"].as_str(), Some("10"));
     assert_eq!(json["minimum"]["unit"].as_str(), Some("eur"));
@@ -988,17 +1051,14 @@ rule out: x
 /// correctly by canonical magnitude alone.
 #[test]
 fn compound_signature_measure_converts_by_canonical_magnitude() {
-    let template = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
-    let ValueKind::Measure(canonical, _) = &template.value else {
+    let (template, template_ty) =
+        show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let ValueKind::Measure(canonical) = &template.value else {
         panic!("expected Measure, got {:?}", template.value);
     };
     let compound = LiteralValue {
-        value: ValueKind::Measure(
-            canonical.clone(),
-            vec![("eur".to_string(), 1), ("hour".to_string(), -1)],
-        ),
-        lemma_type: Arc::clone(&template.lemma_type),
+        value: ValueKind::Measure(canonical.clone()),
     };
-    let json = api_json_for_literal("moment", &compound);
+    let json = api_json_for_literal("moment", &compound, &template_ty);
     assert_eq!(json_measure_unit_value(&json, "eur_per_hour"), "25");
 }

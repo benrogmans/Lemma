@@ -482,13 +482,12 @@ impl Lexer {
                 span,
             ));
         }
-        // Store the full text including quotes for span accuracy,
-        // but content without quotes for the parser to use.
-        let full_text = format!("\"{}\"", content);
+        // Token text is the unquoted content. The span still covers the quotes so
+        // diagnostics point at the full literal; the parser must not strip again.
         Ok(Token {
             kind: TokenKind::StringLit,
             span,
-            text: full_text,
+            text: content,
         })
     }
 
@@ -646,50 +645,51 @@ impl Lexer {
 }
 
 fn keyword_from_identifier(text: &str) -> TokenKind {
-    match text.to_lowercase().as_str() {
-        "spec" => TokenKind::Spec,
-        "repo" => TokenKind::Repo,
-        "data" => TokenKind::Data,
-        "rule" => TokenKind::Rule,
-        "unless" => TokenKind::Unless,
-        "then" => TokenKind::Then,
-        "not" => TokenKind::Not,
-        "and" => TokenKind::And,
-        "in" => TokenKind::In,
-        "as" => TokenKind::As,
-        "uses" => TokenKind::Uses,
-        "with" => TokenKind::With,
-        "meta" => TokenKind::Meta,
-        "veto" => TokenKind::Veto,
-        "now" => TokenKind::Now,
-        "past" => TokenKind::Past,
-        "future" => TokenKind::Future,
-        "true" => TokenKind::True,
-        "false" => TokenKind::False,
-        "yes" => TokenKind::Yes,
-        "no" => TokenKind::No,
-        "measure" => TokenKind::MeasureKw,
-        "number" => TokenKind::NumberKw,
-        "text" => TokenKind::TextKw,
-        "date" => TokenKind::DateKw,
-        "time" => TokenKind::TimeKw,
-        "boolean" => TokenKind::BooleanKw,
-        "ratio" => TokenKind::RatioKw,
-        "sqrt" => TokenKind::Sqrt,
-        "sin" => TokenKind::Sin,
-        "cos" => TokenKind::Cos,
-        "tan" => TokenKind::Tan,
-        "asin" => TokenKind::Asin,
-        "acos" => TokenKind::Acos,
-        "atan" => TokenKind::Atan,
-        "log" => TokenKind::Log,
-        "exp" => TokenKind::Exp,
-        "abs" => TokenKind::Abs,
-        "floor" => TokenKind::Floor,
-        "ceil" => TokenKind::Ceil,
-        "round" => TokenKind::Round,
-        "is" => TokenKind::Is,
-        "permille" => TokenKind::Permille,
+    // ASCII fold without allocating a lowercased String on every identifier.
+    match text {
+        s if s.eq_ignore_ascii_case("spec") => TokenKind::Spec,
+        s if s.eq_ignore_ascii_case("repo") => TokenKind::Repo,
+        s if s.eq_ignore_ascii_case("data") => TokenKind::Data,
+        s if s.eq_ignore_ascii_case("rule") => TokenKind::Rule,
+        s if s.eq_ignore_ascii_case("unless") => TokenKind::Unless,
+        s if s.eq_ignore_ascii_case("then") => TokenKind::Then,
+        s if s.eq_ignore_ascii_case("not") => TokenKind::Not,
+        s if s.eq_ignore_ascii_case("and") => TokenKind::And,
+        s if s.eq_ignore_ascii_case("in") => TokenKind::In,
+        s if s.eq_ignore_ascii_case("as") => TokenKind::As,
+        s if s.eq_ignore_ascii_case("uses") => TokenKind::Uses,
+        s if s.eq_ignore_ascii_case("with") => TokenKind::With,
+        s if s.eq_ignore_ascii_case("meta") => TokenKind::Meta,
+        s if s.eq_ignore_ascii_case("veto") => TokenKind::Veto,
+        s if s.eq_ignore_ascii_case("now") => TokenKind::Now,
+        s if s.eq_ignore_ascii_case("past") => TokenKind::Past,
+        s if s.eq_ignore_ascii_case("future") => TokenKind::Future,
+        s if s.eq_ignore_ascii_case("true") => TokenKind::True,
+        s if s.eq_ignore_ascii_case("false") => TokenKind::False,
+        s if s.eq_ignore_ascii_case("yes") => TokenKind::Yes,
+        s if s.eq_ignore_ascii_case("no") => TokenKind::No,
+        s if s.eq_ignore_ascii_case("measure") => TokenKind::MeasureKw,
+        s if s.eq_ignore_ascii_case("number") => TokenKind::NumberKw,
+        s if s.eq_ignore_ascii_case("text") => TokenKind::TextKw,
+        s if s.eq_ignore_ascii_case("date") => TokenKind::DateKw,
+        s if s.eq_ignore_ascii_case("time") => TokenKind::TimeKw,
+        s if s.eq_ignore_ascii_case("boolean") => TokenKind::BooleanKw,
+        s if s.eq_ignore_ascii_case("ratio") => TokenKind::RatioKw,
+        s if s.eq_ignore_ascii_case("sqrt") => TokenKind::Sqrt,
+        s if s.eq_ignore_ascii_case("sin") => TokenKind::Sin,
+        s if s.eq_ignore_ascii_case("cos") => TokenKind::Cos,
+        s if s.eq_ignore_ascii_case("tan") => TokenKind::Tan,
+        s if s.eq_ignore_ascii_case("asin") => TokenKind::Asin,
+        s if s.eq_ignore_ascii_case("acos") => TokenKind::Acos,
+        s if s.eq_ignore_ascii_case("atan") => TokenKind::Atan,
+        s if s.eq_ignore_ascii_case("log") => TokenKind::Log,
+        s if s.eq_ignore_ascii_case("exp") => TokenKind::Exp,
+        s if s.eq_ignore_ascii_case("abs") => TokenKind::Abs,
+        s if s.eq_ignore_ascii_case("floor") => TokenKind::Floor,
+        s if s.eq_ignore_ascii_case("ceil") => TokenKind::Ceil,
+        s if s.eq_ignore_ascii_case("round") => TokenKind::Round,
+        s if s.eq_ignore_ascii_case("is") => TokenKind::Is,
+        s if s.eq_ignore_ascii_case("permille") => TokenKind::Permille,
         _ => TokenKind::Identifier,
     }
 }
@@ -940,7 +940,7 @@ mod tests {
     fn lex_string_literal() {
         let tokens = lex_all(r#""hello world""#).unwrap();
         assert_eq!(tokens[0].kind, TokenKind::StringLit);
-        assert_eq!(tokens[0].text, "\"hello world\"");
+        assert_eq!(tokens[0].text, "hello world");
     }
 
     #[test]

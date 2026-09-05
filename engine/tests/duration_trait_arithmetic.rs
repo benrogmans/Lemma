@@ -44,7 +44,22 @@ fn eval_literal(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> lemm
 }
 
 fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String {
-    eval_literal(code, spec_name, rule_name).to_string()
+    let code = code.as_ref();
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, spec_name, Some(&now), HashMap::new(), None, true)
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .display()
+        .expect("display")
+        .to_string()
 }
 
 fn eval_rule_measure_unit(

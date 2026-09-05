@@ -34,6 +34,41 @@ public record EngineError(
     @Nullable String limitName,
     @Nullable String limitValue,
     @Nullable String actualValue) {
+
+  /**
+   * Host-side request error with no related data binding.
+   *
+   * @param message error message
+   * @return request EngineError
+   */
+  public static EngineError request(String message) {
+    return request(message, null);
+  }
+
+  /**
+   * Host-side request error optionally tied to a data key.
+   *
+   * @param message error message
+   * @param relatedData related data key; null when none
+   * @return request EngineError
+   */
+  public static EngineError request(String message, @Nullable String relatedData) {
+    return new EngineError(
+        "request",
+        message,
+        relatedData,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "invalid_request",
+        null,
+        null,
+        null);
+  }
+
   /**
    * EngineErrorSource.
    * @param attribute attribute
@@ -89,7 +124,7 @@ public record EngineError(
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  public static EngineError read(JsonParser p) throws IOException {
+  static EngineError read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "EngineError");
     String kind = null;
     String message = null;

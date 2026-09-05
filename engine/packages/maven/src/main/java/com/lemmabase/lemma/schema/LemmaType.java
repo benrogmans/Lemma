@@ -1,4 +1,7 @@
-package com.lemmabase.lemma;
+package com.lemmabase.lemma.schema;
+
+import com.lemmabase.lemma.JsonReading;
+import com.lemmabase.lemma.LemmaBugError;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -48,7 +51,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static RationalFactor read(JsonParser p) throws IOException {
+    public static RationalFactor read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "RationalFactor");
       BigDecimal numer = null;
       BigDecimal denom = null;
@@ -84,7 +87,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static NamedBound read(JsonParser p) throws IOException {
+    public static NamedBound read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "NamedBound");
       BigDecimal value = null;
       String unit = null;
@@ -113,7 +116,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static @Nullable NamedBound readNullable(JsonParser p) throws IOException {
+    public static @Nullable NamedBound readNullable(JsonParser p) throws IOException {
       if (p.currentToken() == JsonToken.VALUE_NULL) {
         return null;
       }
@@ -153,7 +156,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static MeasureUnit read(JsonParser p) throws IOException {
+    public static MeasureUnit read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "MeasureUnit");
       String name = null;
       RationalFactor factor = null;
@@ -220,7 +223,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static RatioUnit read(JsonParser p) throws IOException {
+    public static RatioUnit read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "RatioUnit");
       String name = null;
       RationalFactor value = null;
@@ -291,7 +294,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static BooleanType read(JsonParser p) throws IOException {
+    public static BooleanType read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Boolean");
       String name = null;
       boolean nameSeen = false;
@@ -360,7 +363,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Measure read(JsonParser p) throws IOException {
+    public static Measure read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Measure");
       String name = null;
       boolean nameSeen = false;
@@ -473,7 +476,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static NumberType read(JsonParser p) throws IOException {
+    public static NumberType read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Number");
       String name = null;
       boolean nameSeen = false;
@@ -565,7 +568,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static NumberRange read(JsonParser p) throws IOException {
+    public static NumberRange read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.NumberRange");
       String name = null;
       boolean nameSeen = false;
@@ -666,7 +669,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Ratio read(JsonParser p) throws IOException {
+    public static Ratio read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Ratio");
       String name = null;
       boolean nameSeen = false;
@@ -765,7 +768,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static RatioRange read(JsonParser p) throws IOException {
+    public static RatioRange read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.RatioRange");
       String name = null;
       boolean nameSeen = false;
@@ -867,7 +870,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static Text read(JsonParser p) throws IOException {
+    public static Text read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Text");
       String name = null;
       boolean nameSeen = false;
@@ -942,7 +945,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static DateType read(JsonParser p) throws IOException {
+    public static DateType read(JsonParser p) throws IOException {
       return readStringBounds(p, "date", "LemmaType.Date");
     }
   }
@@ -975,7 +978,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static TimeType read(JsonParser p) throws IOException {
+    public static TimeType read(JsonParser p) throws IOException {
       var r = readStringBounds(p, "time", "LemmaType.Time");
       return new TimeType(r.name(), r.minimum(), r.maximum(), r.help(), r.extendsType());
     }
@@ -1064,7 +1067,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static DateRange read(JsonParser p) throws IOException {
+    public static DateRange read(JsonParser p) throws IOException {
       return readCalendarRange(p, "daterange", "LemmaType.DateRange");
     }
   }
@@ -1101,7 +1104,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static TimeRange read(JsonParser p) throws IOException {
+    public static TimeRange read(JsonParser p) throws IOException {
       var r = readCalendarRange(p, "timerange", "LemmaType.TimeRange");
       return new TimeRange(
           r.name(), r.lower(), r.upper(), r.minimum(), r.maximum(), r.help(), r.extendsType());
@@ -1213,7 +1216,7 @@ public sealed interface LemmaType {
      * @return parsed value
      * @throws IOException if JSON IO fails
      */
-    static MeasureRange read(JsonParser p) throws IOException {
+    public static MeasureRange read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.MeasureRange");
       String name = null;
       boolean nameSeen = false;
@@ -1307,7 +1310,7 @@ public sealed interface LemmaType {
    * @return parsed value
    * @throws IOException if JSON IO fails
    */
-  static LemmaType read(JsonParser p) throws IOException {
+  public static LemmaType read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "LemmaType");
     String json = JsonReading.bufferObjectAsString(p);
     String kind = JsonReading.findTag(json, "kind");

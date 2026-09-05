@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 final class EngineContractTest {
@@ -22,8 +24,6 @@ final class EngineContractTest {
           """);
       engine.update(
           null,
-          "pricing",
-          null,
           """
           spec pricing
           data quantity: 1
@@ -31,7 +31,7 @@ final class EngineContractTest {
           """,
           null);
       Response response = engine.run(RunRequest.of("pricing"));
-      assertEquals("20", response.results().get("total").number().toPlainString());
+      assertEquals("20", ((RuleResult.Number) response.results().get("total")).number().toPlainString());
     }
   }
 
@@ -99,7 +99,7 @@ final class EngineContractTest {
                   engine.run(
                       RunRequest.of("pricing").data(Map.of("amount", 1.5))));
       assertTrue(
-          thrown.getMessage().contains("decimal values must be passed as strings"),
+          thrown.getMessage().contains("decimal values must be passed as BigDecimal"),
           thrown.getMessage());
       assertFalse(thrown.errors().isEmpty());
       assertEquals("request", thrown.errors().get(0).kind());
@@ -133,8 +133,8 @@ final class EngineContractTest {
           """);
       Response response = engine.run(RunRequest.of("deny"));
       RuleResult outcome = response.results().get("outcome");
-      assertTrue(outcome.vetoed());
-      assertEquals("not allowed", outcome.vetoReason());
+      assertTrue(outcome instanceof RuleResult.Veto);
+      assertEquals("not allowed", ((RuleResult.Veto) outcome).vetoReason());
     }
   }
 
@@ -167,6 +167,17 @@ final class EngineContractTest {
   }
 
   @Test
+  void installEmptyRepositoryThrowsLemmaException() {
+    try (Engine engine = Engine.create()) {
+      LemmaException thrown = assertThrows(LemmaException.class, () -> engine.install("   "));
+      assertFalse(thrown.errors().isEmpty());
+      assertTrue(
+          thrown.errors().stream().anyMatch(err -> "registry".equals(err.kind())),
+          "expected registry error for empty id");
+    }
+  }
+
+  @Test
   void useAfterCloseThrowsLemmaBugError() {
     Engine engine = Engine.create();
     engine.close();
@@ -189,8 +200,8 @@ final class EngineContractTest {
                   .data(Map.of("weight", "12 kilogram"))
                   .rules(List.of("heavy")));
       RuleResult heavy = response.results().get("heavy");
-      assertFalse(heavy.vetoed());
-      assertEquals(Boolean.TRUE, heavy.booleanValue());
+      assertTrue(heavy instanceof RuleResult.BooleanValue);
+      assertEquals(true, ((RuleResult.BooleanValue) heavy).booleanValue());
     }
   }
 
@@ -204,6 +215,33 @@ final class EngineContractTest {
             """);
     assertTrue(formatted.contains("spec demo"));
     assertTrue(formatted.contains("rule x"));
+  }
+
+  @Test
+  void snapshotRoundTripRestoresListAndRun() {
+    try (Engine source = Engine.create()) {
+      source.load(
+          """
+          spec snap_demo
+          data x: number
+          rule y: x + 1
+          """);
+      byte[] bytes = source.snapshot();
+      assertTrue(bytes.length > 0);
+      try (Engine restored = Engine.fromSnapshot(bytes)) {
+        assertEquals(source.list(), restored.list());
+        Response runSource =
+            source.run(RunRequest.of("snap_demo").data(Map.of("x", "41")));
+        Response runRestored =
+            restored.run(RunRequest.of("snap_demo").data(Map.of("x", "41")));
+        assertEquals(runSource.results().keySet(), runRestored.results().keySet());
+        assertEquals(
+            ((RuleResult.Number) runSource.results().get("y")).number(),
+            ((RuleResult.Number) runRestored.results().get("y")).number());
+      }
+      bytes[0] = 0x58;
+      assertThrows(LemmaException.class, () -> Engine.fromSnapshot(bytes));
+    }
   }
 
   @Test
@@ -242,8 +280,8 @@ final class EngineContractTest {
               RunRequest.of("policy")
                   .effective("2024-06-01")
                   .data(Map.of("amount", "3")));
-      assertFalse(response.results().get("ok").vetoed());
-      assertEquals("3", response.results().get("ok").display());
+      assertTrue(response.results().get("ok") instanceof RuleResult.Number);
+      assertEquals("3", ((RuleResult.Number) response.results().get("ok")).display());
     }
   }
 
@@ -370,5 +408,140 @@ final class EngineContractTest {
               .toList();
       assertEquals(java.util.List.of("a", "c", "e"), related);
     }
+  }
+
+  @Test
+  void deepLinearChainTipOnlyEval() {
+    StringBuilder src = new StringBuilder();
+    src.append("spec bench_deep\n");
+    src.append("data x0: number\n");
+    src.append("rule r1: x0 + 1\n");
+    for (int i = 2; i <= 200; i++) {
+      src.append("rule r").append(i).append(": r").append(i - 1).append(" + 1\n");
+    }
+    try (Engine engine = Engine.create()) {
+      engine.load(src.toString());
+      Response response =
+          engine.run(
+              RunRequest.of("bench_deep")
+                  .data(Map.of("x0", java.math.BigDecimal.ZERO))
+                  .rules(List.of("r200")));
+      assertEquals(1, response.results().size());
+      assertEquals(
+          "200",
+          ((RuleResult.Number) response.results().get("r200")).number().toPlainString());
+    }
+  }
+
+  @Test
+  void deepLinearChainLoad2000() {
+    StringBuilder src = new StringBuilder();
+    src.append("spec bench_deep\n");
+    src.append("data x0: number\n");
+    src.append("rule r1: x0 + 1\n");
+    for (int i = 2; i <= 2000; i++) {
+      src.append("rule r").append(i).append(": r").append(i - 1).append(" + 1\n");
+    }
+    try (Engine engine = Engine.create()) {
+      engine.load(src.toString());
+    }
+  }
+
+  @Test
+  void resourceLimitsBuilderOverridesOneFieldKeepsEngineDefaults() {
+    try (Engine baseline = Engine.create();
+        Engine limited = Engine.create(ResourceLimits.builder().maxSources(7))) {
+      ResourceLimits defaults = baseline.limits();
+      ResourceLimits actual = limited.limits();
+      assertEquals(7, actual.maxSources());
+      assertEquals(defaults.maxSourceSizeBytes(), actual.maxSourceSizeBytes());
+      assertEquals(defaults.maxExpressionDepth(), actual.maxExpressionDepth());
+      assertEquals(defaults.maxExpressionCount(), actual.maxExpressionCount());
+      assertEquals(defaults.maxDataValueBytes(), actual.maxDataValueBytes());
+      assertEquals(defaults.maxLoadedBytes(), actual.maxLoadedBytes());
+      assertEquals(
+          defaults.maxNormalizedExpressionNodes(), actual.maxNormalizedExpressionNodes());
+      assertEquals(defaults.maxSpecDependencyDepth(), actual.maxSpecDependencyDepth());
+      assertEquals(defaults.maxDagSpecs(), actual.maxDagSpecs());
+      assertEquals(defaults.maxNormalFormDepth(), actual.maxNormalFormDepth());
+    }
+  }
+
+  @Test
+  void resourceLimitsBuilderMaxNormalFormDepthRoundTrips() {
+    try (Engine engine = Engine.create(ResourceLimits.builder().maxNormalFormDepth(99))) {
+      assertEquals(99, engine.limits().maxNormalFormDepth());
+    }
+  }
+
+  @Test
+  void resourceLimitsEmptyBuilderMatchesCreateDefaults() {
+    try (Engine baseline = Engine.create();
+        Engine fromBuilder = Engine.create(ResourceLimits.builder())) {
+      assertEquals(baseline.limits(), fromBuilder.limits());
+    }
+  }
+
+  @Test
+  void resourceLimitsNegativeOverrideThrowsLemmaException() {
+    assertThrows(
+        LemmaException.class,
+        () -> Engine.create(ResourceLimits.builder().maxSources(-1)));
+  }
+
+  @Test
+  void resourceLimitsSnapshotCreatePreservesValues() {
+    try (Engine source = Engine.create(ResourceLimits.builder().maxSources(12));
+        Engine copy = Engine.create(source.limits())) {
+      assertEquals(source.limits(), copy.limits());
+    }
+  }
+
+  @Test
+  void loadPathReadsUtf8File() throws Exception {
+    Path path = Files.createTempFile("lemma-load", ".lemma");
+    Files.writeString(
+        path,
+        """
+        spec from_path
+        rule value: 7
+        """);
+    try (Engine engine = Engine.create()) {
+      engine.load(path);
+      Response response = engine.run(RunRequest.of("from_path"));
+      assertEquals(
+          "7", ((RuleResult.Number) response.results().get("value")).number().toPlainString());
+    } finally {
+      Files.deleteIfExists(path);
+    }
+  }
+
+  @Test
+  void loadPathMissingFileThrowsLemmaException() {
+    assertThrows(
+        LemmaException.class,
+        () -> {
+          try (Engine engine = Engine.create()) {
+            engine.load(Path.of("/nonexistent/lemma/path/that/does/not/exist.lemma"));
+          }
+        });
+  }
+
+  @Test
+  void loadPathFailureWithQuoteInPathSurfacesTypedEngineError() {
+    Path weird = Path.of("/nonexistent/lemma/\"quoted\"/missing.lemma");
+    LemmaException thrown =
+        assertThrows(
+            LemmaException.class,
+            () -> {
+              try (Engine engine = Engine.create()) {
+                engine.load(weird);
+              }
+            });
+    assertFalse(thrown.errors().isEmpty());
+    assertTrue(
+        thrown.errors().get(0).message().contains("\"quoted\""),
+        thrown.errors().get(0).message());
+    assertEquals("request", thrown.errors().get(0).kind());
   }
 }

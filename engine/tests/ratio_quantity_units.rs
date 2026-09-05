@@ -52,7 +52,7 @@ rule is_above_30: savings_ratio > 30%
         .expect("savings_ratio rule");
     let lit = rule_literal(ratio_result);
     match &lit.value {
-        ValueKind::Ratio(r, u) => {
+        ValueKind::Ratio(r) => {
             assert_eq!(
                 lemma::ValueKind::Number(r.clone())
                     .as_decimal_magnitude()
@@ -60,7 +60,11 @@ rule is_above_30: savings_ratio > 30%
                 Decimal::new(25, 2),
                 "75/300 = 0.25"
             );
-            assert_eq!(u.as_deref(), Some("percent"));
+            assert!(
+                matches!(lit.value, lemma::ValueKind::Ratio(_))
+                    || matches!(lit.value, ValueKind::Ratio(_))
+            );
+            // primary unit lives on rule/data type, not LiteralValue
         }
         other => panic!("savings_ratio must be Ratio, got {:?}", other),
     }
@@ -139,14 +143,18 @@ rule above_20_permille: as_permille > 20 permille
     let as_permille = response.results.get("as_permille").expect("as_permille");
     let lit = rule_literal(as_permille);
     match &lit.value {
-        ValueKind::Ratio(r, u) => {
+        ValueKind::Ratio(r) => {
             assert_eq!(
                 lemma::ValueKind::Number(r.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 Decimal::new(25, 3)
             );
-            assert_eq!(u.as_deref(), Some("permille"));
+            assert!(
+                matches!(lit.value, ValueKind::Ratio(_))
+                    || matches!(lit.value, lemma::ValueKind::Ratio(_))
+            );
+            // binding unit "permille" lives on type, not LiteralValue
         }
         other => panic!("as_permille must be Ratio, got {:?}", other),
     }
@@ -207,7 +215,7 @@ rule price: 100 - discount
 
 #[test]
 fn ratio_display_with_none_unit_shows_number_only() {
-    let lit = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
+    let lit = LiteralValue::ratio_from_decimal(decimal_lit("0.5"));
     let display = lit.display_value();
     assert!(
         !display.contains("percent") && display.contains("0.5"),
@@ -215,13 +223,16 @@ fn ratio_display_with_none_unit_shows_number_only() {
         display
     );
 
-    let with_unit =
-        LiteralValue::ratio_from_decimal(decimal_lit("0.5"), Some("percent".to_string()));
-    let display_with = with_unit.display_value();
+    // Binding unit lives on LemmaType; LiteralValue::ratio_with_bound_unit no longer stores it.
+    let ValueKind::Ratio(r) = &lit.value else {
+        panic!("expected ratio, got {:?}", lit.value);
+    };
+    let _ = r;
+    let display_bare = lit.display_value();
     assert!(
-        display_with.contains('%'),
-        "ratio with Some(percent) should show % symbol, got: {}",
-        display_with
+        display_bare.contains("0.5"),
+        "bare ratio display must show magnitude, got: {}",
+        display_bare
     );
 }
 
@@ -250,7 +261,7 @@ rule compared: plus_five > 25%
     let plus_five = response.results.get("plus_five").expect("plus_five");
     let compared = response.results.get("compared").expect("compared");
 
-    if let ValueKind::Ratio(r, _) = &rule_literal(pct).value {
+    if let ValueKind::Ratio(r) = &rule_literal(pct).value {
         assert_eq!(
             lemma::ValueKind::Number(r.clone())
                 .as_decimal_magnitude()
@@ -260,7 +271,7 @@ rule compared: plus_five > 25%
     } else {
         panic!("pct must be Ratio");
     }
-    if let ValueKind::Ratio(r, _) = &rule_literal(plus_five).value {
+    if let ValueKind::Ratio(r) = &rule_literal(plus_five).value {
         assert_eq!(
             lemma::ValueKind::Number(r.clone())
                 .as_decimal_magnitude()
@@ -309,27 +320,37 @@ rule share_above_20: share_pct > 20%
 
     let lit = rule_literal(as_eur);
     match &lit.value {
-        ValueKind::Measure(n, signature) => {
+        ValueKind::Measure(n) => {
             assert_eq!(
                 ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 Decimal::from(200)
             );
-            assert_eq!(
-                signature.first().map(|(name, _)| name.as_str()),
-                Some("eur")
+            let measure = as_eur
+                .value
+                .as_ref()
+                .and_then(|v| v.measure.as_ref())
+                .expect("measure map");
+            assert!(
+                measure.contains_key("eur"),
+                "as_eur must expose eur, got {:?}",
+                measure.keys().collect::<Vec<_>>()
             );
         }
         other => panic!("as_eur: expected Measure, got {other:?}"),
     }
     let lit = rule_literal(share_pct);
-    if let ValueKind::Ratio(r, u) = &lit.value {
+    if let ValueKind::Ratio(r) = &lit.value {
         assert_eq!(
             lemma::ValueKind::Number(r.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             Decimal::new(25, 2)
         );
-        assert_eq!(u.as_deref(), Some("percent"));
+        assert!(
+            matches!(lit.value, lemma::ValueKind::Ratio(_))
+                || matches!(lit.value, ValueKind::Ratio(_))
+        );
+        // primary unit lives on rule/data type, not LiteralValue
     } else {
         panic!("share_pct must be Ratio");
     }

@@ -3,8 +3,8 @@
 mod error_json;
 
 use error_json::engine_errors_json;
-use jni::objects::{JClass, JObject, JObjectArray, JString, JThrowable, JValue};
-use jni::sys::{jboolean, jlong, jstring, JNI_FALSE};
+use jni::objects::{JByteArray, JClass, JObject, JObjectArray, JString, JThrowable, JValue};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE};
 use jni::{jni_sig, jni_str, Env, EnvUnowned};
 use lemma::{DateTimeValue, Engine, ResourceLimits, SourceType};
 use std::collections::HashMap;
@@ -141,10 +141,11 @@ fn jstring_optional(env: &Env, value: &JString) -> Result<Option<String>, String
         return Ok(None);
     }
     let s = jstring_required(env, value)?;
-    if s.trim().is_empty() {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(s))
+        Ok(Some(trimmed.to_string()))
     }
 }
 
@@ -234,6 +235,20 @@ fn return_string(env: &mut Env, value: String) -> jstring {
         .into_raw()
 }
 
+fn bytes_from_jbyte_array(env: &Env, array: &JByteArray) -> Result<Vec<u8>, String> {
+    if array.is_null() {
+        return Err("BUG: snapshot bytes array is null".to_string());
+    }
+    env.convert_byte_array(array)
+        .map_err(|e| format!("BUG: failed to read Java byte array: {e}"))
+}
+
+fn return_bytes(env: &mut Env, bytes: &[u8]) -> Result<jbyteArray, String> {
+    env.byte_array_from_slice(bytes)
+        .map(|arr| arr.into_raw())
+        .map_err(|e| format!("BUG: failed to allocate Java byte array: {e}"))
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_create(
     mut unowned: EnvUnowned,
@@ -266,6 +281,31 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_createWithLimits(
         };
         let engine = Box::new(Mutex::new(Engine::with_limits(limits)));
         Ok(Box::into_raw(engine) as jlong)
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_fromSnapshot(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    bytes: JByteArray,
+) -> jlong {
+    with_catch(&mut unowned, |env| {
+        let raw = bytes_from_jbyte_array(env, &bytes)?;
+        match Engine::from_snapshot(&raw) {
+            Ok(engine) => {
+                let handle = Box::new(Mutex::new(engine));
+                Ok(Box::into_raw(handle) as jlong)
+            }
+            Err(err) => {
+                throw_lemma_exception(
+                    env,
+                    "fromSnapshot failed",
+                    &engine_errors_json(std::slice::from_ref(&err)),
+                );
+                Ok(0)
+            }
+        }
     })
 }
 
@@ -383,7 +423,7 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_show(
             .map_err(|_| "BUG: Engine lock poisoned".to_string())?;
         match guard.show(repo.as_deref(), &spec, effective.as_ref()) {
             Ok(view) => {
-                let json = serde_json::to_string(&view)
+                let json = serde_json::to_string(&lemma::api::Show::from(&view))
                     .map_err(|e| format!("BUG: show serialization failed: {e}"))?;
                 Ok(return_string(env, json))
             }
@@ -496,7 +536,7 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
             explain,
         ) {
             Ok(response) => {
-                let json = serde_json::to_string(&response)
+                let json = serde_json::to_string(&lemma::api::Response::from(&response))
                     .map_err(|e| format!("BUG: response serialization failed: {e}"))?;
                 Ok(return_string(env, json))
             }
@@ -549,19 +589,12 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_update(
     _class: JClass,
     handle: jlong,
     repository: JString,
-    spec: JString,
-    effective: JString,
     code: JString,
     attribute: JString,
 ) {
     with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let repo = jstring_optional(env, &repository)?;
-        let spec = jstring_required(env, &spec)?;
-        let effective = match parse_effective(env, &effective) {
-            Ok(v) => v,
-            Err(()) => return Ok(()),
-        };
         let code = jstring_required(env, &code)?;
         let attribute = jstring_optional(env, &attribute)?;
         let source_type = match attribute
@@ -588,17 +621,195 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_update(
         let mut guard = engine
             .lock()
             .map_err(|_| "BUG: Engine lock poisoned".to_string())?;
-        if let Err(load_err) = guard.update(
-            repo.as_deref(),
-            &spec,
-            effective.as_ref(),
-            source_type,
-            code,
-        ) {
+        if let Err(load_err) = guard.update(repo.as_deref(), code, source_type) {
             throw_lemma_exception(env, "update failed", &engine_errors_json(&load_err.errors));
         }
         Ok(())
     });
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_installStart(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    repository: JString,
+    limits_json: JString,
+) -> jlong {
+    with_catch(&mut unowned, |env| {
+        let repository = jstring_required(env, &repository)?;
+        let limits = match jstring_optional(env, &limits_json)? {
+            None => lemma::ResourceLimits::default(),
+            Some(raw) if raw.is_empty() => lemma::ResourceLimits::default(),
+            Some(raw) => limits_from_json(&raw).map_err(|e| e.message().to_string())?,
+        };
+        let (install, step) = lemma::Install::start(registries(), &repository, limits);
+        let handle = Box::into_raw(Box::new(InstallHandle {
+            install,
+            step: Some(step),
+        }));
+        Ok(handle as jlong)
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_installStep(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    with_catch(&mut unowned, |env| {
+        let install_handle = install_handle_from_jlong(handle)?;
+        let step = install_handle
+            .step
+            .as_ref()
+            .ok_or_else(|| "BUG: installStep called with no current step".to_string())?;
+        let finished = matches!(step, lemma::InstallStep::Finished(_));
+        let json = serialize_install_step(step)?;
+        // Java owns the free via installFree; keep the handle until then so a
+        // Finished(Err) that throws in Java cannot use-after-free.
+        let _ = finished;
+        Ok(return_string(env, json))
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_installRespond(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    status: jint,
+    headers_json: JString,
+    body: JString,
+) -> jstring {
+    with_catch(&mut unowned, |env| {
+        let headers_json = jstring_required(env, &headers_json)?;
+        let body = jstring_required(env, &body)?;
+        let headers = parse_headers_json(&headers_json)?;
+        if status < 0 || status > u16::MAX as i32 {
+            return Err(format!("BUG: invalid HTTP status from Java: {status}"));
+        }
+        let response = Ok(lemma::HttpResponse {
+            status: status as u16,
+            headers,
+            body,
+        });
+        advance_install(env, handle, response)
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_installFail(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    message: JString,
+) -> jstring {
+    with_catch(&mut unowned, |env| {
+        let message = jstring_required(env, &message)?;
+        let response = Err(lemma::TransportFailure { message });
+        advance_install(env, handle, response)
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_installFree(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+) {
+    with_catch(&mut unowned, |_env| {
+        free_install_handle(handle);
+        Ok(())
+    });
+}
+
+fn registries() -> &'static lemma::Registries {
+    use std::sync::OnceLock;
+    static REGISTRIES: OnceLock<lemma::Registries> = OnceLock::new();
+    REGISTRIES.get_or_init(lemma::Registries::default)
+}
+
+struct InstallHandle {
+    install: lemma::Install<'static>,
+    step: Option<lemma::InstallStep>,
+}
+
+fn install_handle_from_jlong(handle: jlong) -> Result<&'static mut InstallHandle, String> {
+    if handle == 0 {
+        return Err("BUG: install handle is null".to_string());
+    }
+    Ok(unsafe { &mut *(handle as *mut InstallHandle) })
+}
+
+fn free_install_handle(handle: jlong) {
+    if handle != 0 {
+        unsafe {
+            drop(Box::from_raw(handle as *mut InstallHandle));
+        }
+    }
+}
+
+fn advance_install(
+    env: &mut Env,
+    handle: jlong,
+    response: Result<lemma::HttpResponse, lemma::TransportFailure>,
+) -> Result<jstring, String> {
+    let install_handle = install_handle_from_jlong(handle)?;
+    if install_handle.step.is_none() {
+        return Err("BUG: installRespond/installFail called with no pending step".to_string());
+    }
+    let next = install_handle.install.respond(response);
+    let json = serialize_install_step(&next)?;
+    install_handle.step = Some(next);
+    Ok(return_string(env, json))
+}
+
+fn serialize_install_step(step: &lemma::InstallStep) -> Result<String, String> {
+    let value = match step {
+        lemma::InstallStep::Fetch(fetch) => serde_json::json!({ "fetch": fetch }),
+        lemma::InstallStep::Finished(Ok(result)) => {
+            let ok = serde_json::to_value(result)
+                .unwrap_or_else(|e| panic!("BUG: RepositoryInstallResult serialize failed: {e}"));
+            serde_json::json!({ "finished": { "ok": ok } })
+        }
+        lemma::InstallStep::Finished(Err(error)) => {
+            let err = lemma::EngineError::from(error);
+            serde_json::json!({
+                "finished": {
+                    "err": [err],
+                }
+            })
+        }
+    };
+    serde_json::to_string(&value)
+        .map_err(|e| format!("BUG: install step serialization failed: {e}"))
+}
+
+fn parse_headers_json(raw: &str) -> Result<Vec<lemma::Header>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("BUG: headers JSON parse failed: {e}"))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| "BUG: headers JSON must be an array".to_string())?;
+    let mut headers = Vec::with_capacity(arr.len());
+    for item in arr {
+        let obj = item
+            .as_object()
+            .ok_or_else(|| "BUG: header entry must be an object".to_string())?;
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "BUG: header missing name".to_string())?;
+        let value = obj
+            .get("value")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "BUG: header missing value".to_string())?;
+        headers.push(lemma::Header {
+            name: name.to_string(),
+            value: value.to_string(),
+        });
+    }
+    Ok(headers)
 }
 
 #[no_mangle]
@@ -637,6 +848,31 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_limits(
         let json = serde_json::to_string(guard.limits())
             .map_err(|e| format!("BUG: limits serialization failed: {e}"))?;
         Ok(return_string(env, json))
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_snapshot(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+) -> jbyteArray {
+    with_catch(&mut unowned, |env| {
+        let engine = handle_from_jlong(handle)?;
+        let guard = engine
+            .lock()
+            .map_err(|_| "BUG: Engine lock poisoned".to_string())?;
+        match guard.snapshot() {
+            Ok(bytes) => return_bytes(env, &bytes),
+            Err(err) => {
+                throw_lemma_exception(
+                    env,
+                    "snapshot failed",
+                    &engine_errors_json(std::slice::from_ref(&err)),
+                );
+                Ok(std::ptr::null_mut())
+            }
+        }
     })
 }
 
